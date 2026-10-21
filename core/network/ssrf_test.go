@@ -1257,3 +1257,27 @@ func TestStrictGuardedProxyRefusesUnresolvedNames(t *testing.T) {
 		t.Fatalf("proxy saw %q, want the name it was deferred", got)
 	}
 }
+
+// TestGuardedHTTPClientIdleConnectionsExpire pins a bounded idle lifetime on every
+// transport a guarded client builds. Callers such as the OpenAPI spec preview build
+// one client per fetch and never close it, so a keep-alive connection with no idle
+// expiry would stay open, with its transport goroutines, for the life of the process.
+func TestGuardedHTTPClientIdleConnectionsExpire(t *testing.T) {
+	noDNS := &fakeResolver{err: errors.New("no dns")}
+	direct := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, nil, noDNS, false)
+	proxied := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, fixedProxy(t, "http://proxy.internal:3128"), noDNS, false)
+
+	directTransport, ok := direct.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("direct guarded client transport = %T, want *http.Transport", direct.Transport)
+	}
+	proxyAware, ok := proxied.Transport.(*ProxyAwareTransport)
+	if !ok {
+		t.Fatalf("proxied guarded client transport = %T, want *ProxyAwareTransport", proxied.Transport)
+	}
+	for name, transport := range map[string]*http.Transport{"direct": directTransport, "proxy-aware direct": proxyAware.Direct, "proxy-aware via proxy": proxyAware.ViaProxy} {
+		if transport.IdleConnTimeout <= 0 {
+			t.Errorf("%s transport IdleConnTimeout = %v, want a bounded idle lifetime", name, transport.IdleConnTimeout)
+		}
+	}
+}

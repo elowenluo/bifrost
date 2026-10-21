@@ -639,6 +639,12 @@ var neverAllowlistedPrefixes = []netip.Prefix{
 // server from using a long chain to probe many internal addresses per request.
 const maxRedirectHops = 5
 
+// guardedIdleConnTimeout bounds how long a guarded client keeps an idle keep-alive
+// connection, as http.DefaultTransport does. Several callers build a client per
+// fetch and drop it without closing it, so an unbounded idle connection would stay
+// open, with its transport goroutines, for the life of the process.
+const guardedIdleConnTimeout = 90 * time.Second
+
 // guardedRedirectDNSTimeout bounds the resolver call made while vetting a
 // redirect target. The dial that follows re-resolves under the request
 // context; this is only the early check.
@@ -717,6 +723,7 @@ func newGuardedHTTPClientWith(timeout time.Duration, dial func(ctx context.Conte
 			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: time.Second,
+			IdleConnTimeout:       guardedIdleConnTimeout,
 			ForceAttemptHTTP2:     true,
 		}
 	}
