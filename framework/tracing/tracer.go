@@ -4,6 +4,7 @@ package tracing
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -77,6 +78,11 @@ type Tracer struct {
 	flushWG           sync.WaitGroup
 	// Trace IDs whose completion the HTTP side must skip because a worker still owns them.
 	deferredCompletions sync.Map
+	// pendingRootErrors holds, per trace ID, the error attributes the root span
+	// gets if the latest LLM attempt is the request's outcome. Applied when the
+	// trace ends: a fallback reuses the trace, and a span cannot drop an
+	// attribute once it is set.
+	pendingRootErrors sync.Map
 }
 
 // NewTracer creates a new Tracer wrapping the given TraceStore.
@@ -310,6 +316,7 @@ func (t *Tracer) EndTrace(traceID string) *schemas.Trace {
 	if trace == nil {
 		return nil
 	}
+	t.applyPendingRootErrors(trace)
 	// Note: Caller is responsible for releasing the trace after plugin processing
 	// by calling ReleaseTrace on the store or letting GC handle it
 	return trace
@@ -318,6 +325,9 @@ func (t *Tracer) EndTrace(traceID string) *schemas.Trace {
 // ReleaseTrace returns the trace to the pool for reuse.
 // Should be called after EndTrace when the trace data is no longer needed.
 func (t *Tracer) ReleaseTrace(trace *schemas.Trace) {
+	if trace != nil {
+		t.pendingRootErrors.Delete(trace.TraceID)
+	}
 	t.store.ReleaseTrace(trace)
 }
 
@@ -574,6 +584,9 @@ func (t *Tracer) PopulateLLMResponseAttributes(ctx *schemas.BifrostContext, hand
 	var respAttrs map[string]any
 	if t.Demand().Any {
 		respAttrs = llm.ResponseAttributes()
+		// Batch and file responses have no typed mapping; their attributes come
+		// from the generic population, as they did before the typed record.
+		maps.Copy(respAttrs, coldPathResponseAttributes(resp))
 	}
 	// A cancelled stream arrives here with an accumulated response whose usage
 	// is missing the final chunk, so its aggregate token counts read zero. When
@@ -737,7 +750,30 @@ func (t *Tracer) PopulateLLMResponseAttributes(ctx *schemas.BifrostContext, hand
 			rootSpan.SetAttribute(schemas.AttrFinishReasons, v)
 		}
 		// Only an HTTP status here cannot tell a model refusal from a provider outage.
-		rootSpan.SetAttributes(schemas.RootSpanErrorAttributes(err, errorType))
+		// Held until the trace ends rather than stamped now: a fallback runs in
+		// this same trace, so a failed attempt is the request's outcome only if
+		// no later attempt succeeds.
+		if rootErrors := schemas.RootSpanErrorAttributes(err, errorType); rootErrors != nil {
+			t.pendingRootErrors.Store(h.traceID, rootErrors)
+		} else {
+			t.pendingRootErrors.Delete(h.traceID)
+		}
+	}
+}
+
+// applyPendingRootErrors stamps the final attempt's error on the root span. A
+// key the root already carries is kept: the transport records the status the
+// client actually received there.
+func (t *Tracer) applyPendingRootErrors(trace *schemas.Trace) {
+	pending, ok := t.pendingRootErrors.LoadAndDelete(trace.TraceID)
+	if !ok || trace.RootSpan == nil {
+		return
+	}
+	attrs, _ := pending.(map[string]any)
+	for key, value := range attrs {
+		if _, present := trace.RootSpan.GetAttribute(key); !present {
+			trace.RootSpan.SetAttribute(key, value)
+		}
 	}
 }
 
@@ -1344,6 +1380,7 @@ func (t *Tracer) FlushExpiredTrace(trace *schemas.Trace) {
 		return
 	}
 	t.deferredCompletions.Delete(trace.TraceID)
+	t.applyPendingRootErrors(trace)
 	// Spans left open would export with a zero EndTime, so close them as timed out.
 	now := time.Now()
 	if trace.EndTime.IsZero() {

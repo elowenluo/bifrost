@@ -1,6 +1,8 @@
 package tracing
 
 import (
+	"maps"
+
 	"github.com/capsohq/bifrost/core/schemas"
 )
 
@@ -128,7 +130,42 @@ func buildRequestSide(d *schemas.LLMSpanData, req *schemas.BifrostRequest, opts 
 			return
 		}
 		d.Transcription = r.Params
+
+	case schemas.BatchCreateRequest, schemas.BatchListRequest, schemas.BatchRetrieveRequest,
+		schemas.BatchCancelRequest, schemas.BatchResultsRequest,
+		schemas.FileUploadRequest, schemas.FileListRequest, schemas.FileRetrieveRequest,
+		schemas.FileDeleteRequest, schemas.FileContentRequest:
+		// Batch and file families are not typed (see LLMSpanData); their batch
+		// and file ids, statuses and paging fields go to Extra, which is how the
+		// record carries cold-path families. Dropped, a batch span exported with
+		// nothing that identified the batch.
+		attrs := PopulateRequestAttributes(req)
+		for _, key := range [...]string{schemas.AttrProviderName, schemas.AttrBifrostProviderName, schemas.AttrRequestModel, schemas.AttrOperationName} {
+			delete(attrs, key)
+		}
+		if len(attrs) > 0 {
+			if d.Extra == nil {
+				d.Extra = make(map[string]any, len(attrs))
+			}
+			maps.Copy(d.Extra, attrs)
+		}
 	}
+}
+
+// coldPathResponseAttributes renders a batch or file response's attributes,
+// which the typed record does not model. Nil for every other family.
+func coldPathResponseAttributes(resp *schemas.BifrostResponse) map[string]any {
+	if resp == nil {
+		return nil
+	}
+	switch {
+	case resp.BatchCreateResponse != nil, resp.BatchListResponse != nil, resp.BatchRetrieveResponse != nil,
+		resp.BatchCancelResponse != nil, resp.BatchResultsResponse != nil,
+		resp.FileUploadResponse != nil, resp.FileListResponse != nil, resp.FileRetrieveResponse != nil,
+		resp.FileDeleteResponse != nil, resp.FileContentResponse != nil:
+		return PopulateResponseAttributes(resp)
+	}
+	return nil
 }
 
 // toMessageSummaries adapts the Responses-shaped summaries onto the unified type.

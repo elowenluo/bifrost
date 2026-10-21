@@ -1365,6 +1365,10 @@ func TestTracer_PopulateLLMResponseAttributesPropagatesErrorToRootSpan(t *testin
 	if root.SpanID == tracer.SpanFromHandle(llmHandle).SpanID {
 		t.Fatal("root and llm.call resolved to the same span, so this would pass without any propagation")
 	}
+	// The root carries the request's outcome, known once the trace ends: a
+	// fallback could still have succeeded after this attempt.
+	llmType, _ := tracer.SpanFromHandle(llmHandle).GetAttribute(schemas.AttrBifrostErrorType)
+	require.NotNil(t, tracer.EndTrace(traceID))
 	for key, want := range map[string]any{
 		schemas.AttrError:         "upstream connect error",
 		schemas.AttrErrorTypeSpec: "connection_error",
@@ -1378,7 +1382,6 @@ func TestTracer_PopulateLLMResponseAttributesPropagatesErrorToRootSpan(t *testin
 		t.Errorf("root span %s = %v, want %q", schemas.AttrBifrostErrorType, got, schemas.ErrorTypeProviderOverloaded)
 	}
 	// Same failure, same classification on both spans.
-	llmType, _ := tracer.SpanFromHandle(llmHandle).GetAttribute(schemas.AttrBifrostErrorType)
 	rootType, _ := root.GetAttribute(schemas.AttrBifrostErrorType)
 	if llmType != rootType {
 		t.Errorf("llm.call and root disagree on %s: %v vs %v", schemas.AttrBifrostErrorType, llmType, rootType)
@@ -1401,6 +1404,7 @@ func TestTracer_PopulateLLMResponseAttributesLeavesRootSpanCleanOnSuccess(t *tes
 	tracer.PopulateLLMResponseAttributes(ctx, llmHandle, nil, nil)
 
 	root := tracer.SpanFromHandle(rootHandle)
+	require.NotNil(t, tracer.EndTrace(traceID))
 	for _, key := range []string{schemas.AttrError, schemas.AttrErrorTypeSpec, schemas.AttrBifrostErrorType} {
 		if got, ok := root.GetAttribute(key); ok {
 			t.Errorf("root span carries %s = %v on a successful response", key, got)
@@ -1454,5 +1458,87 @@ func TestTracer_StampsTimeToFirstTokenFromRequestReceipt(t *testing.T) {
 	tracer.AddStreamingChunk(traceID, &schemas.BifrostResponse{})
 	if after, _ := root.GetAttribute(schemas.AttrBifrostTimeToFirstTokenMs); after != before {
 		t.Errorf("%s moved from %v to %v on a later chunk", schemas.AttrBifrostTimeToFirstTokenMs, before, after)
+	}
+}
+
+// A fallback shares its primary attempt's trace. The primary's 503 was stamped
+// on the request root, and the successful fallback after it left that there,
+// so a request that succeeded exported as a failure. The root carries the
+// final attempt's outcome.
+func TestTracer_SuccessfulFallbackClearsTheRootSpanError(t *testing.T) {
+	store := NewTraceStore(5*time.Minute, nil)
+	t.Cleanup(store.Stop)
+	tracer := NewTracer(store, nil, nil)
+	t.Cleanup(tracer.Stop)
+
+	traceID := tracer.CreateTrace("")
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	ctx.SetValue(schemas.BifrostContextKeyTraceID, traceID)
+	_, rootHandle := tracer.StartSpan(ctx, "/v1/chat/completions", schemas.SpanKindHTTPRequest)
+	_, primary := tracer.StartSpan(ctx, "chat gpt-4o", schemas.SpanKindLLMCall)
+	tracer.SpanFromHandle(primary).SetAttribute(schemas.AttrLegacyRequestType, string(schemas.ChatCompletionRequest))
+	status := 503
+	tracer.PopulateLLMResponseAttributes(ctx, primary, nil, &schemas.BifrostError{
+		StatusCode: &status,
+		Error:      &schemas.ErrorField{Message: "upstream connect error", Type: schemas.Ptr("connection_error")},
+	})
+	_, fallback := tracer.StartSpan(ctx, "chat claude-sonnet", schemas.SpanKindLLMCall)
+	tracer.PopulateLLMResponseAttributes(ctx, fallback, &schemas.BifrostResponse{ChatResponse: &schemas.BifrostChatResponse{Model: "claude-sonnet"}}, nil)
+
+	root := tracer.SpanFromHandle(rootHandle)
+	completed := tracer.EndTrace(traceID)
+	require.NotNil(t, completed)
+	for _, key := range []string{schemas.AttrError, schemas.AttrErrorTypeSpec, schemas.AttrBifrostErrorType, schemas.AttrHTTPResponseStatusCode} {
+		if got, ok := root.GetAttribute(key); ok {
+			t.Errorf("root span carries %s = %v after the fallback succeeded", key, got)
+		}
+	}
+	if got, ok := tracer.SpanFromHandle(primary).GetAttribute(schemas.AttrError); !ok || got != "upstream connect error" {
+		t.Errorf("the failed attempt's own span keeps its error, got %v", got)
+	}
+}
+
+// Batch and file requests have no typed mapping, and switching the tracer to
+// the typed record dropped everything family-specific: a batch retrieval
+// exported without its batch id or status, a file retrieval without its file
+// id. They keep the attributes the generic population gave them.
+func TestTracer_BatchAndFileSpansKeepTheirOperationAttributes(t *testing.T) {
+	store := NewTraceStore(5*time.Minute, nil)
+	t.Cleanup(store.Stop)
+	tracer := NewTracer(store, nil, nil)
+	t.Cleanup(tracer.Stop)
+
+	for name, tc := range map[string]struct {
+		req  *schemas.BifrostRequest
+		resp *schemas.BifrostResponse
+		want map[string]any
+	}{
+		"batch retrieve": {
+			req: &schemas.BifrostRequest{RequestType: schemas.BatchRetrieveRequest, BatchRetrieveRequest: &schemas.BifrostBatchRetrieveRequest{Provider: schemas.OpenAI, BatchID: "batch_123"}},
+			resp: &schemas.BifrostResponse{BatchRetrieveResponse: &schemas.BifrostBatchRetrieveResponse{
+				ID: "batch_123", Status: schemas.BatchStatusInProgress, InputFileID: "file_in",
+			}},
+			want: map[string]any{schemas.AttrBatchID: "batch_123", schemas.AttrBatchStatus: string(schemas.BatchStatusInProgress), schemas.AttrBatchInputFileID: "file_in"},
+		},
+		"file retrieve": {
+			req:  &schemas.BifrostRequest{RequestType: schemas.FileRetrieveRequest, FileRetrieveRequest: &schemas.BifrostFileRetrieveRequest{Provider: schemas.OpenAI, FileID: "file_abc"}},
+			resp: &schemas.BifrostResponse{FileRetrieveResponse: &schemas.BifrostFileRetrieveResponse{ID: "file_abc", Filename: "train.jsonl", Bytes: 2048}},
+			want: map[string]any{schemas.AttrFileID: "file_abc", schemas.AttrFileFilename: "train.jsonl", schemas.AttrFileBytes: int64(2048)},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			traceID := tracer.CreateTrace("")
+			ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+			ctx.SetValue(schemas.BifrostContextKeyTraceID, traceID)
+			_, handle := tracer.StartSpan(ctx, "llm.call", schemas.SpanKindLLMCall)
+			tracer.PopulateLLMRequestAttributes(handle, tc.req)
+			tracer.PopulateLLMResponseAttributes(ctx, handle, tc.resp, nil)
+			span := tracer.SpanFromHandle(handle)
+			for key, want := range tc.want {
+				got, ok := span.GetAttribute(key)
+				require.True(t, ok, "%s is missing", key)
+				require.Equal(t, want, got, key)
+			}
+		})
 	}
 }
