@@ -65,10 +65,10 @@ func CreateTypesafeRouteConfigs(pathPrefix string) []RouteConfig {
 			// Custom providers report their own name, so match on the base
 			// provider type that served the attempt.
 			if schemas.ResolveBaseProvider(ctx, resp.ExtraFields.Provider) == schemas.Typesafe {
-				if resp.ExtraFields.RawResponse != nil {
+				if resp.ExtraFields.RawResponse != nil && typesafeRawAnswersCurrent(resp) {
 					return resp.ExtraFields.RawResponse, nil
 				}
-				if len(resp.NativeResponse) > 0 && typesafeNativeAnswersCurrent(resp) {
+				if len(resp.NativeResponse) > 0 && typesafeNativeAnswersCurrent(resp, resp.NativeResponse) {
 					return resp.NativeResponse, nil
 				}
 			}
@@ -113,14 +113,35 @@ func CreateTypesafeRouteConfigs(pathPrefix string) []RouteConfig {
 	return routes
 }
 
-// typesafeNativeAnswersCurrent reports whether the retained native body still carries
+// typesafeRawAnswersCurrent applies typesafeNativeAnswersCurrent to the raw
+// provider response kept for send-back-raw-response, whatever form it was kept in.
+func typesafeRawAnswersCurrent(resp *schemas.BifrostDecisionResponse) bool {
+	var body []byte
+	switch raw := resp.ExtraFields.RawResponse.(type) {
+	case json.RawMessage:
+		body = raw
+	case []byte:
+		body = raw
+	case string:
+		body = []byte(raw)
+	default:
+		marshaled, err := json.Marshal(raw)
+		if err != nil {
+			return false
+		}
+		body = marshaled
+	}
+	return typesafeNativeAnswersCurrent(resp, body)
+}
+
+// typesafeNativeAnswersCurrent reports whether a retained native body still carries
 // the answers the processed response does. An LLM post-hook can change a normalized
 // answer after the provider kept the body; relaying the body then would discard that
 // change, so the route renders the processed answers instead. Fields the native body
 // has beyond the normalized model do not take part in the comparison.
-func typesafeNativeAnswersCurrent(resp *schemas.BifrostDecisionResponse) bool {
+func typesafeNativeAnswersCurrent(resp *schemas.BifrostDecisionResponse, body []byte) bool {
 	var native typesafe.TypesafeDecisionResponse
-	if err := json.Unmarshal(resp.NativeResponse, &native); err != nil {
+	if err := json.Unmarshal(body, &native); err != nil {
 		return false
 	}
 	retained, err := json.Marshal(native.Answers)

@@ -158,6 +158,55 @@ func TestTypesafeSystemOneRouteRendersPostHookAnswerChanges(t *testing.T) {
 	}
 }
 
+// TestTypesafeSystemOneRouteRawResponseKeepsPostHookAnswerChanges pins the same for
+// the raw provider body kept by send-back-raw-response: it is relayed only while
+// its answers are the processed ones.
+func TestTypesafeSystemOneRouteRawResponseKeepsPostHookAnswerChanges(t *testing.T) {
+	var route *RouteConfig
+	for _, r := range CreateTypesafeRouteConfigs("/typesafe") {
+		if r.Path == "/typesafe/v1/systemone" {
+			rc := r
+			route = &rc
+		}
+	}
+	if route == nil {
+		t.Fatal("systemone route not registered")
+	}
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	raw := `{"model":"jev-1.13.0","answers":{"q":{"type":"noul","noul":0.99}},"usage":{"input_tokens":3,"output_tokens":0}}`
+	var rawMap map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &rawMap); err != nil {
+		t.Fatal(err)
+	}
+	for name, kept := range map[string]interface{}{"raw message": json.RawMessage(raw), "decoded map": rawMap} {
+		resp := &schemas.BifrostDecisionResponse{
+			Model:   "jev-1.13.0",
+			Answers: []schemas.DecisionAnswer{{Type: schemas.DecisionTypePredicate, Name: schemas.Ptr("q"), Probability: schemas.Ptr(0.01)}},
+		}
+		resp.ExtraFields.Provider = schemas.Typesafe
+		resp.ExtraFields.RawResponse = kept
+
+		out, err := route.DecisionResponseConverter(ctx, resp)
+		if err != nil {
+			t.Fatalf("%s: convert: %v", name, err)
+		}
+		rendered, ok := out.(*typesafe.TypesafeDecisionResponse)
+		if !ok {
+			t.Fatalf("%s: a post-hook's answer change was overridden by the raw body (%T)", name, out)
+		}
+		if answer := rendered.Answers["q"]; answer.Noul == nil || *answer.Noul != 0.01 {
+			t.Errorf("%s: rendered answer = %+v, want the post-hook's 0.01", name, answer)
+		}
+
+		resp.Answers[0].Probability = schemas.Ptr(0.99)
+		if out, _ := route.DecisionResponseConverter(ctx, resp); out == nil {
+			t.Fatalf("%s: no output for unchanged answers", name)
+		} else if _, ok := out.(*typesafe.TypesafeDecisionResponse); ok {
+			t.Errorf("%s: unchanged answers should relay the raw body", name)
+		}
+	}
+}
+
 // systemOneMultipart builds a multipart systemone body from parts in order: each
 // part is a name, an optional filename (a file part), an optional content type,
 // and its data.
