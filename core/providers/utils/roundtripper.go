@@ -97,6 +97,43 @@ func NewContextTransport() fasthttp.RoundTripper {
 
 type contextTransport struct{}
 
+// acquireBeforeFirstTokenDeadline is acquire (HostClient.AcquireConn) for a stream
+// attempt with a first-token deadline: DNS, dialing and a proxy handshake all happen
+// inside it, before the cancel watcher has a socket to close, so a stalled one would
+// hold the attempt past the deadline that should move it to its fallback. Waiting on
+// the deadline and the request context alongside it ends the attempt on time; a
+// connection that arrives afterwards is closed. Without a deadline it is acquire.
+func acquireBeforeFirstTokenDeadline[C any](ctx context.Context, abort *AttemptAbort, acquire func(time.Duration, bool) (C, error), reqTimeout time.Duration, connectionClose bool, discard func(C)) (C, error) {
+	if abort == nil {
+		return acquire(reqTimeout, connectionClose)
+	}
+	type acquired struct {
+		cc  C
+		err error
+	}
+	result := make(chan acquired, 1)
+	go func() {
+		cc, err := acquire(reqTimeout, connectionClose)
+		result <- acquired{cc, err}
+	}()
+	discardLate := func() {
+		if late := <-result; late.err == nil {
+			discard(late.cc)
+		}
+	}
+	var zero C
+	select {
+	case r := <-result:
+		return r.cc, r.err
+	case <-abort.Done():
+		go discardLate()
+		return zero, ErrStreamFirstTokenTimeout
+	case <-ctx.Done():
+		go discardLate()
+		return zero, ctx.Err()
+	}
+}
+
 // maxInterimResponses mirrors fasthttp's unexported cap on 1xx responses parsed
 // before the final status line.
 const maxInterimResponses = 10
@@ -138,7 +175,7 @@ func (t *contextTransport) RoundTrip(hc *fasthttp.HostClient, req *fasthttp.Requ
 		reqDeadline = time.Now().Add(reqTimeout)
 	}
 
-	cc, err := hc.AcquireConn(reqTimeout, req.ConnectionClose())
+	cc, err := acquireBeforeFirstTokenDeadline(ctx, abort, hc.AcquireConn, reqTimeout, req.ConnectionClose(), hc.CloseConn)
 	if err != nil {
 		return false, err
 	}
