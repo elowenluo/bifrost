@@ -861,6 +861,49 @@ func TestClickHouseLateRetryLosesToTakeover(t *testing.T) {
 	assert.True(t, held, "the new holder's claim was overwritten")
 }
 
+// TestClickHousePurgedAckFencesLateRetry pauses a Retry between reading a live
+// lease and writing, until the lease has expired, another instance has claimed
+// and acknowledged the delivery, and the janitor has run. The late write is
+// versioned under the acknowledgement, so it may only land on top of the
+// tombstone: with the tombstone purged while the message is still retained, it
+// was the delivery's only row and the delivery ran again.
+func TestClickHousePurgedAckFencesLateRetry(t *testing.T) {
+	env := setupClickHouse(t)
+	locker := NewProcessLocker()
+	a, b := env.store(t, locker), env.store(t, locker)
+	ctx := context.Background()
+	mustGroup(t, a, "purged-ack", "g", StartFromLatest)
+	mustAppend(t, a, newMsg("purged-ack", "", "x"))
+	const lease = 500 * time.Millisecond
+	old := mustClaim(t, a, "purged-ack", "g", 1, lease)
+	require.Len(t, old, 1)
+
+	hook, paused, release := pauseAt("INSERT INTO queue_deliveries")
+	defer release()
+	retried := make(chan error, 1)
+	go func() {
+		_, err := a.Retry(withCHHook(ctx, hook), old[0], 0, "slow handler")
+		retried <- err
+	}()
+	<-paused
+	time.Sleep(lease + 200*time.Millisecond)
+	cs := mustClaim(t, b, "purged-ack", "g", 1, longLease)
+	require.Len(t, cs, 1)
+	held, err := ackOne(ctx, b, cs[0])
+	require.NoError(t, err)
+	require.True(t, held)
+	// The message is still retained for groups that start from the earliest.
+	_, err = b.Purge(ctx, PurgePolicy{DeadRetention: time.Hour, AckedRetention: time.Hour}, 100)
+	require.NoError(t, err)
+	release()
+	require.NoError(t, <-retried)
+
+	assert.Empty(t, mustClaim(t, b, "purged-ack", "g", 10, longLease), "an acknowledged delivery ran again")
+	st, err := b.Stats(ctx, "purged-ack", "g")
+	require.NoError(t, err)
+	assert.Equal(t, Stats{}, st)
+}
+
 // TestClickHouseLateAckLosesToTakeover pauses an acknowledgement between
 // reading a live lease and writing, until another instance has claimed the
 // delivery. The acknowledgement and the claim cannot both succeed.

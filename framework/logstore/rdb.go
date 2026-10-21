@@ -5249,14 +5249,19 @@ func (s *RDBLogStore) applyMCPFilters(baseQuery *gorm.DB, filters MCPToolLogSear
 	if len(filters.UserIDs) > 0 {
 		baseQuery = baseQuery.Where("user_id IN ?", filters.UserIDs)
 	}
+	// Team, customer and business unit match the scalar id or the stored array,
+	// as applyFilters does for LLM logs.
 	if len(filters.TeamIDs) > 0 {
-		baseQuery = baseQuery.Where("team_id IN ?", filters.TeamIDs)
+		sql, args := dimensionMembershipFilterSQL(s.db.Dialector.Name(), "team_id", "team_ids", filters.TeamIDs)
+		baseQuery = baseQuery.Where(sql, args...)
 	}
 	if len(filters.CustomerIDs) > 0 {
-		baseQuery = baseQuery.Where("customer_id IN ?", filters.CustomerIDs)
+		sql, args := dimensionMembershipFilterSQL(s.db.Dialector.Name(), "customer_id", "customer_ids", filters.CustomerIDs)
+		baseQuery = baseQuery.Where(sql, args...)
 	}
 	if len(filters.BusinessUnitIDs) > 0 {
-		baseQuery = baseQuery.Where("business_unit_id IN ?", filters.BusinessUnitIDs)
+		sql, args := dimensionMembershipFilterSQL(s.db.Dialector.Name(), "business_unit_id", "business_unit_ids", filters.BusinessUnitIDs)
+		baseQuery = baseQuery.Where(sql, args...)
 	}
 	if len(filters.ProjectIDs) > 0 {
 		baseQuery = baseQuery.Where("project_id IN ?", filters.ProjectIDs)

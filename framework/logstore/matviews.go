@@ -983,8 +983,10 @@ func refreshMatViews(ctx context.Context, db *gorm.DB, minGap time.Duration) err
 	// the record cannot be read every view is refreshed and nothing is recorded.
 	fresh, recordOK := recentlyRefreshedMatViews(ctx, conn, minGap)
 	var refreshErrs []error
+	skippedFresh := false
 	for _, view := range matViewRefreshOrder() {
 		if fresh[view] {
+			skippedFresh = true
 			continue
 		}
 		if recordOK {
@@ -1004,6 +1006,13 @@ func refreshMatViews(ctx context.Context, db *gorm.DB, minGap time.Duration) err
 	}
 	if len(refreshErrs) > 0 {
 		return errors.Join(refreshErrs...)
+	}
+	// A view skipped as fresh may have been refreshed before the writes this
+	// pass's counter includes. Recording the counter would gate those writes out
+	// until the safety interval if traffic stopped now, so the baseline stays put
+	// and the next tick looks again; it skips the view until the gap has passed.
+	if skippedFresh {
+		return nil
 	}
 	refreshGate.markRefreshed(activityAtStart, activityOK)
 	return nil

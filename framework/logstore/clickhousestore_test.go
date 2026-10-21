@@ -1442,6 +1442,60 @@ func TestClickHouseAsyncJobs(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// An async job is written as pending, processing and completed versions of one
+// id. Until ClickHouse merges them, a delete that matches only the version
+// carrying expires_at (or status='processing') must not hand the older versions
+// back to FINAL reads: the expired job would come back as processing, and the
+// stale one as pending, which no sweep ever removes.
+func TestClickHouseAsyncJobCleanupDeletesEveryVersion(t *testing.T) {
+	store := trySetupClickHouseStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// See TestClickHouseFinalAfterLightweightDelete: merges are stopped while
+	// the versions are written and counted, and restarted before the deletes.
+	require.NoError(t, store.db.Exec("SYSTEM STOP MERGES async_jobs").Error)
+	startMerges := sync.OnceFunc(func() {
+		require.NoError(t, store.db.Exec("SYSTEM START MERGES async_jobs").Error)
+	})
+	t.Cleanup(startMerges)
+
+	expiredAt := now.Add(-time.Hour)
+	require.NoError(t, store.CreateAsyncJob(ctx, &AsyncJob{
+		ID: "ch-job-versions-expired", Status: schemas.AsyncJobStatusPending,
+		RequestType: schemas.ChatCompletionRequest, CreatedAt: now.Add(-2 * time.Hour),
+	}))
+	require.NoError(t, store.UpdateAsyncJob(ctx, "ch-job-versions-expired", map[string]interface{}{
+		"status": string(schemas.AsyncJobStatusProcessing),
+	}))
+	require.NoError(t, store.UpdateAsyncJob(ctx, "ch-job-versions-expired", map[string]interface{}{
+		"status": string(schemas.AsyncJobStatusCompleted), "completed_at": expiredAt, "expires_at": expiredAt,
+	}))
+	require.NoError(t, store.CreateAsyncJob(ctx, &AsyncJob{
+		ID: "ch-job-versions-stale", Status: schemas.AsyncJobStatusPending,
+		RequestType: schemas.ChatCompletionRequest, CreatedAt: now.Add(-48 * time.Hour),
+	}))
+	require.NoError(t, store.UpdateAsyncJob(ctx, "ch-job-versions-stale", map[string]interface{}{
+		"status": string(schemas.AsyncJobStatusProcessing),
+	}))
+	require.EqualValues(t, 3, chCountIDsNoFinal(t, store, "async_jobs", []string{"ch-job-versions-expired"}),
+		"expected every lifecycle version on disk, or the resurrection case is not exercised")
+	require.EqualValues(t, 2, chCountIDsNoFinal(t, store, "async_jobs", []string{"ch-job-versions-stale"}))
+	startMerges()
+
+	deleted, err := store.DeleteExpiredAsyncJobs(ctx)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, deleted)
+	found, err := store.FindAsyncJobByID(ctx, "ch-job-versions-expired")
+	require.Error(t, err, "expired job came back as %+v", found)
+
+	deleted, err = store.DeleteStaleAsyncJobs(ctx, now.Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, deleted)
+	found, err = store.FindAsyncJobByID(ctx, "ch-job-versions-stale")
+	require.Error(t, err, "stale job came back as %+v", found)
+}
+
 func TestClickHouseHistograms(t *testing.T) {
 	store := trySetupClickHouseStore(t)
 	ctx := context.Background()

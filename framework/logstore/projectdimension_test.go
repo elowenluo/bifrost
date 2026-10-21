@@ -360,3 +360,33 @@ func TestHourlyMatView_FiltersByProject(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 3, stats.TotalRequests, "several projects union; the unattributed request stays out")
 }
+
+// MCP tool logs carry team, customer and business-unit attribution in JSON arrays
+// beside the scalar ids, as LLM logs do, so their filters must match either: a row
+// attributed to team-a and team-b is team-b's too.
+func TestMCPOwnershipFiltersMatchMultiValuedAttribution(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&MCPToolLog{}))
+	store := &RDBLogStore{db: db, logger: bifrost.NewDefaultLogger(schemas.LogLevelInfo)}
+
+	teamA, customerA, buA := "team-a", "cust-a", "bu-a"
+	teams, customers, bus := `["team-a","team-b"]`, `["cust-a","cust-b"]`, `["bu-a","bu-b"]`
+	require.NoError(t, db.Create(&MCPToolLog{
+		ID: "mcp-multi", ToolName: "tool", Timestamp: time.Now().UTC(),
+		TeamID: &teamA, TeamIDs: &teams, CustomerID: &customerA, CustomerIDs: &customers,
+		BusinessUnitID: &buA, BusinessUnitIDs: &bus,
+	}).Error)
+	require.NoError(t, db.Create(&MCPToolLog{ID: "mcp-scalar", ToolName: "tool", Timestamp: time.Now().UTC(), TeamID: &teamA}).Error)
+
+	ids := func(filters MCPToolLogSearchFilters) []string {
+		t.Helper()
+		var out []string
+		require.NoError(t, store.applyMCPFilters(db.Model(&MCPToolLog{}), filters).Order("id").Pluck("id", &out).Error)
+		return out
+	}
+	assert.Equal(t, []string{"mcp-multi"}, ids(MCPToolLogSearchFilters{TeamIDs: []string{"team-b"}}))
+	assert.Equal(t, []string{"mcp-multi"}, ids(MCPToolLogSearchFilters{CustomerIDs: []string{"cust-b"}}))
+	assert.Equal(t, []string{"mcp-multi"}, ids(MCPToolLogSearchFilters{BusinessUnitIDs: []string{"bu-b"}}))
+	assert.Equal(t, []string{"mcp-multi", "mcp-scalar"}, ids(MCPToolLogSearchFilters{TeamIDs: []string{"team-a"}}))
+}
