@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1279,5 +1280,124 @@ func TestGuardedHTTPClientIdleConnectionsExpire(t *testing.T) {
 		if transport.IdleConnTimeout <= 0 {
 			t.Errorf("%s transport IdleConnTimeout = %v, want a bounded idle lifetime", name, transport.IdleConnTimeout)
 		}
+	}
+}
+
+// tunnelProxy is a CONNECT proxy that keeps each tunnel open, so a client may pool
+// and reuse it. It counts the tunnels it opened.
+func tunnelProxy(t *testing.T) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var tunnels atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect {
+			http.Error(w, "CONNECT required", http.StatusMethodNotAllowed)
+			return
+		}
+		tunnels.Add(1)
+		upstream, err := net.Dial("tcp", r.Host)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		downstream, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			upstream.Close()
+			return
+		}
+		_, _ = downstream.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+		go func() { _, _ = copyAndClose(upstream, downstream) }()
+		_, _ = copyAndClose(downstream, upstream)
+	}))
+	t.Cleanup(func() {
+		proxy.CloseClientConnections()
+		proxy.Close()
+	})
+	return proxy, &tunnels
+}
+
+func copyAndClose(dst, src net.Conn) (int64, error) {
+	defer dst.Close()
+	buf := make([]byte, 32*1024)
+	var n int64
+	for {
+		r, err := src.Read(buf)
+		if r > 0 {
+			w, werr := dst.Write(buf[:r])
+			n += int64(w)
+			if werr != nil {
+				return n, werr
+			}
+		}
+		if err != nil {
+			return n, err
+		}
+	}
+}
+
+// TestProxyAwareTransportNeverReusesATunnelAcrossProxies: after the proxy changes
+// from A to B, the next request goes through B, not over a tunnel through A that the
+// pool still holds for the same destination.
+func TestProxyAwareTransportNeverReusesATunnelAcrossProxies(t *testing.T) {
+	dest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer dest.Close()
+	proxyA, tunnelsA := tunnelProxy(t)
+	proxyB, tunnelsB := tunnelProxy(t)
+	urlA, _ := url.Parse(proxyA.URL)
+	urlB, _ := url.Parse(proxyB.URL)
+	var current atomic.Pointer[url.URL]
+	current.Store(urlA)
+	allow := func(net.IP, string) error { return nil }
+	transport := &ProxyAwareTransport{
+		Proxy:    func(*http.Request) (*url.URL, error) { return current.Load(), nil },
+		Direct:   &http.Transport{},
+		ViaProxy: &http.Transport{DialContext: PinnedProxyDialContext(allow, net.DefaultResolver)},
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+
+	get := func() {
+		t.Helper()
+		resp, err := client.Get(dest.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+	}
+	get()
+	get()
+	if a := tunnelsA.Load(); a != 1 {
+		t.Fatalf("proxy A tunnels = %d, want one pooled tunnel", a)
+	}
+	current.Store(urlB)
+	get()
+	if b := tunnelsB.Load(); b != 1 {
+		t.Fatalf("after switching to proxy B it saw %d tunnels (A saw %d): the request reused A's tunnel", b, tunnelsA.Load())
+	}
+}
+
+// TestPinnedProxyDialHonoursGlobalProxySkipTLSVerify: a guarded client tunnelling
+// through the global https proxy applies its skip_tls_verify, as the factory's own
+// clients do, instead of failing verification against a proxy the operator exempted.
+func TestPinnedProxyDialHonoursGlobalProxySkipTLSVerify(t *testing.T) {
+	proxy := proxytest.NewHTTPSRecorder(t, "https-proxy")
+	proxyURL := "https://127.0.0.1:" + proxy.Port()
+	previous := DefaultHTTPClientFactory()
+	SetDefaultHTTPClientFactory(NewHTTPClientFactory(&GlobalProxyConfig{
+		Enabled: true, Type: GlobalProxyTypeHTTP, URL: proxyURL, SkipTLSVerify: true, EnableForAPI: true,
+	}, nil))
+	t.Cleanup(func() { SetDefaultHTTPClientFactory(previous) })
+
+	resolver := &fakeResolver{ips: []net.IP{net.ParseIP("93.184.216.34")}}
+	client := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, DefaultProxyFunc(ClientPurposeAPI), resolver)
+	resp, err := client.Get("http://public.example/")
+	if err != nil {
+		t.Fatalf("tunnel through the exempted https proxy failed: %v", err)
+	}
+	resp.Body.Close()
+	if seen := proxy.Seen(); len(seen) != 1 || seen[0].Target != "93.184.216.34:80" {
+		t.Fatalf("proxy saw %+v, want one CONNECT to the checked address", seen)
 	}
 }

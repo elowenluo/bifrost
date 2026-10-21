@@ -949,7 +949,7 @@ func PinnedProxyDialContext(checkIP func(ip net.IP, host string) error, resolver
 		}
 		var lastErr error
 		for _, target := range targets {
-			conn, err := DialViaProxy(ctx, proxyURL, target)
+			conn, err := DialViaProxyTLS(ctx, proxyURL, target, ProxyTLSFor(proxyURL))
 			if err == nil {
 				return conn, nil
 			}
@@ -968,6 +968,11 @@ func PinnedProxyDialContext(checkIP func(ip net.IP, host string) error, resolver
 // are proxies" for a later direct request to match by coincidence, and
 // http.Transport hands DialContext the proxy address on exactly the transport
 // whose dialer expects it.
+//
+// ViaProxy is a template: each distinct proxy, credentials included, gets its own
+// clone of it, because its pooled connections are tunnels through one proxy and are
+// keyed only by destination. A proxy changed from A to B therefore never reuses a
+// tunnel through A.
 type ProxyAwareTransport struct {
 	// Proxy decides the route: nil means direct. It is the operator's proxy
 	// configuration (http.ProxyFromEnvironment), and may wrap it with a
@@ -975,6 +980,33 @@ type ProxyAwareTransport struct {
 	Proxy    func(*http.Request) (*url.URL, error)
 	Direct   *http.Transport
 	ViaProxy *http.Transport
+
+	mu         sync.Mutex
+	viaProxies map[string]*http.Transport
+}
+
+// maxProxyTransports bounds the per-proxy transports kept; past it the idle ones are
+// closed and the set starts over. Proxies are operator configuration, so it is only
+// reached by repeated reconfiguration.
+const maxProxyTransports = 16
+
+// viaProxyFor returns the transport whose pool holds tunnels through proxyURL.
+func (t *ProxyAwareTransport) viaProxyFor(proxyURL *url.URL) *http.Transport {
+	key := proxyURL.String()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if tr, ok := t.viaProxies[key]; ok {
+		return tr
+	}
+	if t.viaProxies == nil || len(t.viaProxies) >= maxProxyTransports {
+		for _, tr := range t.viaProxies {
+			tr.CloseIdleConnections()
+		}
+		t.viaProxies = make(map[string]*http.Transport)
+	}
+	tr := t.ViaProxy.Clone()
+	t.viaProxies[key] = tr
+	return tr
 }
 
 // RoundTrip implements http.RoundTripper.
@@ -989,7 +1021,7 @@ func (t *ProxyAwareTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		}
 		if proxyURL != nil {
 			// A pinned ViaProxy dialer (PinnedProxyDialContext) reads the proxy from here.
-			return t.ViaProxy.RoundTrip(req.WithContext(context.WithValue(req.Context(), pinnedProxyURLKey{}, proxyURL)))
+			return t.viaProxyFor(proxyURL).RoundTrip(req.WithContext(context.WithValue(req.Context(), pinnedProxyURLKey{}, proxyURL)))
 		}
 	}
 	return t.Direct.RoundTrip(req)
@@ -999,4 +1031,9 @@ func (t *ProxyAwareTransport) RoundTrip(req *http.Request) (*http.Response, erro
 func (t *ProxyAwareTransport) CloseIdleConnections() {
 	t.Direct.CloseIdleConnections()
 	t.ViaProxy.CloseIdleConnections()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, tr := range t.viaProxies {
+		tr.CloseIdleConnections()
+	}
 }
