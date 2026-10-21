@@ -217,14 +217,9 @@ func newFetchClient(proxyConfig *schemas.ProxyConfig) *http.Client {
 	proxied := false
 	// Dial address -> request scheme, so the environment proxy is chosen by the
 	// request's scheme rather than guessed from its port (an https URL on 8443 uses
-	// HTTPS_PROXY). Pinned dials record it under the address they dial.
-	schemes := &sync.Map{}
-	schemeFor := func(addr string) string {
-		if scheme, ok := schemes.Load(addr); ok {
-			return scheme.(string)
-		}
-		return ""
-	}
+	// HTTPS_PROXY). Pinned dials hold it under the address they dial.
+	schemes := newDialSchemes()
+	schemeFor := schemes.lookup
 	if namesProxy(proxyConfig) {
 		client = configureProxy(client, proxyConfig, getLogger(), schemeFor)
 		if proxyDial := client.Dial; proxyDial != nil {
@@ -248,10 +243,9 @@ func newFetchClient(proxyConfig *schemas.ProxyConfig) *http.Client {
 				var lastErr error
 				for _, ip := range ips {
 					pinned := net.JoinHostPort(ip.String(), port)
-					if scheme != "" {
-						schemes.Store(pinned, scheme)
-					}
+					release := schemes.hold(pinned, scheme)
 					conn, err := proxyDial(pinned)
+					release()
 					if errors.Is(err, errBypassProxy) {
 						// no_proxy names the address (a CIDR entry): connect directly,
 						// still through the SSRF dialer.

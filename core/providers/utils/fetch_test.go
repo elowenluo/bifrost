@@ -442,4 +442,15 @@ func TestFetchAndEncodeURL_EnvironmentProxyFollowsTheRequestScheme(t *testing.T)
 	if seen := secure.Seen(); len(seen) != 1 || seen[0].Target != "203.0.113.10:8443" {
 		t.Fatalf("HTTPS_PROXY saw %+v, want one CONNECT to 203.0.113.10:8443", seen)
 	}
+	// Fetch targets come from requests, so nothing about them outlives the fetch.
+	client, err := fetchClientFor(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := client.Transport.(*fasthttpRoundTripper)
+	rt.schemes.mu.Lock()
+	defer rt.schemes.mu.Unlock()
+	if n := len(rt.schemes.entries); n != 0 {
+		t.Fatalf("the fetch client still holds %d scheme entries after the fetch", n)
+	}
 }
