@@ -1100,19 +1100,11 @@ func (m *MCPManager) VerifyPerUserOAuthConnection(ctx context.Context, config *s
 		maps.Copy(finalHeaders, preReq.Headers)
 		finalHeaders["Authorization"] = fmt.Sprintf("Bearer %s", accessToken)
 
-		verifyOpts := []transport.StreamableHTTPCOption{transport.WithHTTPHeaders(finalHeaders)}
-		verifyHTTPClient, tlsErr := m.buildTLSHTTPClient(config)
-		if tlsErr != nil {
-			return nil, fmt.Errorf("failed to build TLS HTTP client for verification: %w", tlsErr)
+		verifyTransport, tErr := m.newVerificationTransport(config, finalURL, finalHeaders)
+		if tErr != nil {
+			return nil, tErr
 		}
-		if verifyHTTPClient != nil {
-			verifyOpts = append(verifyOpts, transport.WithHTTPBasicClient(verifyHTTPClient))
-		}
-		httpTransport, hErr := transport.NewStreamableHTTP(finalURL, verifyOpts...)
-		if hErr != nil {
-			return nil, fmt.Errorf("failed to create HTTP transport for verification: %w", hErr)
-		}
-		tempClient = client.NewClient(httpTransport)
+		tempClient = client.NewClient(verifyTransport)
 		if startErr := tempClient.Start(verifyCtx); startErr != nil {
 			return nil, fmt.Errorf("failed to start MCP connection for verification: %w", startErr)
 		}
@@ -1276,19 +1268,11 @@ func (m *MCPManager) VerifyHeadersConnection(ctx context.Context, config *schema
 			finalHeaders[k] = v
 		}
 
-		headersVerifyOpts := []transport.StreamableHTTPCOption{transport.WithHTTPHeaders(finalHeaders)}
-		headersVerifyTLSClient, tlsErr := m.buildTLSHTTPClient(config)
-		if tlsErr != nil {
-			return nil, fmt.Errorf("failed to build TLS HTTP client for verification: %w", tlsErr)
+		verifyTransport, tErr := m.newVerificationTransport(config, finalURL, finalHeaders)
+		if tErr != nil {
+			return nil, tErr
 		}
-		if headersVerifyTLSClient != nil {
-			headersVerifyOpts = append(headersVerifyOpts, transport.WithHTTPBasicClient(headersVerifyTLSClient))
-		}
-		httpTransport, hErr := transport.NewStreamableHTTP(finalURL, headersVerifyOpts...)
-		if hErr != nil {
-			return nil, fmt.Errorf("failed to create HTTP transport for verification: %w", hErr)
-		}
-		tempClient = client.NewClient(httpTransport)
+		tempClient = client.NewClient(verifyTransport)
 		if startErr := tempClient.Start(verifyCtx); startErr != nil {
 			return nil, fmt.Errorf("failed to start MCP connection for verification: %w", startErr)
 		}
@@ -1349,6 +1333,36 @@ func (m *MCPManager) VerifyHeadersConnection(ctx context.Context, config *schema
 
 	m.logger.Info("%s Per-user headers verification succeeded for '%s': discovered %d tools", MCPLogPrefix, config.Name, len(tools))
 	return tools, toolNameMapping, serverInstructions, nil
+}
+
+// newVerificationTransport builds the one-shot transport a verification handshake
+// runs over: SSE for an SSE client, Streamable HTTP otherwise, so the probe speaks
+// the protocol the server actually serves.
+func (m *MCPManager) newVerificationTransport(config *schemas.MCPClientConfig, url string, headers map[string]string) (transport.Interface, error) {
+	tlsClient, err := m.buildTLSHTTPClient(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build TLS HTTP client for verification: %w", err)
+	}
+	if config.ConnectionType == schemas.MCPConnectionTypeSSE {
+		sseOpts := []transport.ClientOption{transport.WithHeaders(headers)}
+		if tlsClient != nil {
+			sseOpts = append(sseOpts, transport.WithHTTPClient(tlsClient))
+		}
+		sseTransport, sseErr := transport.NewSSE(url, sseOpts...)
+		if sseErr != nil {
+			return nil, fmt.Errorf("failed to create SSE transport for verification: %w", sseErr)
+		}
+		return sseTransport, nil
+	}
+	httpOpts := []transport.StreamableHTTPCOption{transport.WithHTTPHeaders(headers)}
+	if tlsClient != nil {
+		httpOpts = append(httpOpts, transport.WithHTTPBasicClient(tlsClient))
+	}
+	httpTransport, httpErr := transport.NewStreamableHTTP(url, httpOpts...)
+	if httpErr != nil {
+		return nil, fmt.Errorf("failed to create HTTP transport for verification: %w", httpErr)
+	}
+	return httpTransport, nil
 }
 
 // performAdminToolDiscovery resolves the credential for a per-call client

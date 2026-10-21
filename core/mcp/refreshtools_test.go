@@ -457,3 +457,35 @@ func TestRefreshClientTools_EditedVerifiedClient_StillRefreshes(t *testing.T) {
 	require.Equal(t, []string{"edited-echo", "edited-ping"}, refreshToolMapKeys(m, config.ID),
 		"and the refresh picks up what changed upstream")
 }
+
+// TestVerifyHeadersConnection_SSEClientHandshakesOverSSE pins that a verification
+// handshake for an SSE client uses SSE: an operator edit re-reads the server's
+// instructions through it, and a Streamable HTTP probe against an SSE-only server
+// failed silently and kept the stale text.
+func TestVerifyHeadersConnection_SSEClientHandshakesOverSSE(t *testing.T) {
+	s := server.NewMCPServer("sse-verify", "1.0.0", server.WithToolCapabilities(true), server.WithInstructions("use the echo tool"))
+	s.AddTool(mcpgo.NewTool("echo", mcpgo.WithDescription("Echo tool")), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return mcpgo.NewToolResultText("ok"), nil
+	})
+	ts := server.NewTestServer(s)
+	t.Cleanup(func() {
+		ts.CloseClientConnections()
+		ts.Close()
+	})
+
+	m := NewMCPManager(context.Background(), schemas.MCPConfig{}, nil, &MockLogger{}, nil)
+	t.Cleanup(func() { _ = m.Cleanup() })
+
+	config := &schemas.MCPClientConfig{
+		ID:               "sse-verify",
+		Name:             "sseverify",
+		ConnectionType:   schemas.MCPConnectionTypeSSE,
+		AuthType:         schemas.MCPAuthTypeNone,
+		ConnectionString: schemas.NewSecretVar(ts.URL + "/sse"),
+		ToolsToExecute:   []string{"*"},
+	}
+	tools, _, instructions, err := m.VerifyHeadersConnection(context.Background(), config, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "use the echo tool", instructions)
+	assert.Len(t, tools, 1)
+}
