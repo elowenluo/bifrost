@@ -27,27 +27,38 @@ Apply changes to the Bifrost Helm chart, keep it in sync with `config.schema.jso
 
 ### Step 1: Gather Current State
 
-Read the current helm chart version and identify the last helm release commit:
+Read the current helm chart version, then find the last version **this repository** published. The chart is published from this repository's own `gh-pages` branch (`helm-charts/index.yaml`, pushed by `.github/workflows/helm-release.yml`), with each tarball attached to this repository's `helm-chart-v<VERSION>` GitHub release. That index is the only record of what was released here. Do not read the upstream project's Pages index, and do not infer the last release from `docs/changelogs/helm-v*.mdx`: upstream merges bring in changelog pages for versions this repository never published.
 
 ```bash
 # Current helm chart version
-cat helm-charts/bifrost/Chart.yaml | grep '^version:'
+grep '^version:' helm-charts/bifrost/Chart.yaml
 
-# Latest docs helm changelog (= last released version)
-ls -1t docs/changelogs/helm-v*.mdx | head -1
+# This repository, from its origin remote. Never rely on gh's default repo
+# resolution here: with an `upstream` remote configured, gh resolves to upstream.
+ORIGIN_REPO=$(git remote get-url origin | sed -E 's#\.git$##; s#^.*[:/]([^/]+/[^/]+)$#\1#')
 
-# Find the commit that added the latest helm changelog
-LAST_HELM_MDX=$(ls -1t docs/changelogs/helm-v*.mdx | head -1)
-git log --oneline -- "$LAST_HELM_MDX" | head -1
+# The index this repository publishes (read-only)
+git fetch --no-tags origin refs/heads/gh-pages
+git show FETCH_HEAD:helm-charts/index.yaml
+
+# Releases cut from this repository
+gh release list --repo "$ORIGIN_REPO" --limit 200 | grep 'helm-chart-v'
 ```
 
-Save the last-release commit SHA — you'll need it to scope the config.schema.json diff.
+Select the highest chart `version` under `entries.bifrost` using semantic version ordering (not `appVersion`, not array order). Then confirm the release exists in this repository and resolve its source commit from the tag **as origin has it**. The shared local tag namespace is not evidence: it can hold a same-named upstream tag, and a fork tag may not have been fetched yet. Fetch the exact tag from `origin` into an isolated ref and resolve that:
+
+```bash
+gh release view --repo "$ORIGIN_REPO" "helm-chart-v<VERSION>" --json tagName,targetCommitish
+git fetch --no-tags origin "+refs/tags/helm-chart-v<VERSION>:refs/helm-release/helm-chart-v<VERSION>"
+LAST_COMMIT=$(git rev-parse "refs/helm-release/helm-chart-v<VERSION>^{commit}")
+```
+
+Save that commit SHA — you'll need it to scope the config.schema.json diff. If the index cannot be fetched or parsed, if the `gh-pages` branch does not exist, if `gh release view` finds no `helm-chart-v<VERSION>` release in `$ORIGIN_REPO` (the entry was inherited from upstream rather than released here), or if the tag cannot be fetched from `origin`, report that and stop version selection. Do not guess from local files or local tags.
 
 ### Step 2: Check config.schema.json Changes Since Last Helm Release
 
 ```bash
-LAST_COMMIT=$(git log --oneline -- "$(ls -1t docs/changelogs/helm-v*.mdx | head -1)" | awk '{print $1}')
-
+# LAST_COMMIT is the published source commit from Step 1.
 # What changed in config.schema.json since then?
 git diff ${LAST_COMMIT}..HEAD -- transports/config.schema.json
 ```

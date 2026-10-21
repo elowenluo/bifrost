@@ -63,3 +63,37 @@ jobs:
       - name: Check every image publication re-checks the registry on each attempt
         if: ${{ !cancelled() }}
         run: python3 .github/workflows/scripts/test-docker-publish-gates.py
+
+  helm-publish-index:
+    name: Helm index publication keeps fork history
+    runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            get.helm.sh:443
+            github.com:443
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Same helm the release job pins, so the index behaviour under test is the
+      # one that will run.
+      - name: Install Helm
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5.0.0
+        with:
+          version: v4.0.0
+
+      # Local fixtures only: packaged charts, a bare git repo standing in for
+      # origin, release assets that are plain files. No Pages push, no releases.
+      - name: Check Helm index publication
+        run: ./.github/workflows/scripts/helm-publish-index.test.sh
+
+      # The registry is a helm shim on PATH: nothing is pushed anywhere.
+      - name: Check Helm OCI publication
+        if: ${{ !cancelled() }}
+        run: ./.github/workflows/scripts/helm-publish-oci.test.sh
