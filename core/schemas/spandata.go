@@ -233,11 +233,50 @@ func (d *LLMSpanData) redact(input, output map[string]string) {
 	if len(input) > 0 {
 		d.RawRequest = ApplyLiteralReplacements(d.RawRequest, input)
 		redactMessageSummaries(d.InputMessages, input)
+		d.redactRequestInputs(input)
 	}
 	if len(output) > 0 {
 		d.RawResponse = ApplyLiteralReplacements(d.RawResponse, output)
 		redactMessageSummaries(d.OutputMessages, output)
 		d.ReasoningText = ApplyLiteralReplacements(d.ReasoningText, output)
+	}
+}
+
+// redactRequestInputs redacts the text, embedding and speech inputs. They alias the
+// caller's request, so each is replaced with a redacted copy rather than edited.
+func (d *LLMSpanData) redactRequestInputs(replacements map[string]string) {
+	if d.TextPrompt != nil {
+		prompt := &TextCompletionInput{}
+		if d.TextPrompt.PromptStr != nil {
+			prompt.PromptStr = Ptr(ApplyLiteralReplacements(*d.TextPrompt.PromptStr, replacements))
+		}
+		if d.TextPrompt.PromptArray != nil {
+			prompt.PromptArray = make([]string, len(d.TextPrompt.PromptArray))
+			for i, text := range d.TextPrompt.PromptArray {
+				prompt.PromptArray[i] = ApplyLiteralReplacements(text, replacements)
+			}
+		}
+		d.TextPrompt = prompt
+	}
+	if d.SpeechInput != nil {
+		d.SpeechInput = &SpeechInput{Input: ApplyLiteralReplacements(d.SpeechInput.Input, replacements)}
+	}
+	if d.EmbeddingInput != nil {
+		items := make(EmbeddingInput, len(d.EmbeddingInput))
+		for i, item := range d.EmbeddingInput {
+			items[i] = item
+			if item.Content == nil {
+				continue
+			}
+			items[i].Content = make(EmbeddingContent, len(item.Content))
+			for j, part := range item.Content {
+				if part.Text != nil {
+					part.Text = Ptr(ApplyLiteralReplacements(*part.Text, replacements))
+				}
+				items[i].Content[j] = part
+			}
+		}
+		d.EmbeddingInput = items
 	}
 }
 

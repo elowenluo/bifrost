@@ -619,3 +619,30 @@ func TestStripTraceAttributesClearsRawPayloads(t *testing.T) {
 		})
 	}
 }
+
+// TestTraceRedactionCoversTypedRequestInputs pins that the typed text, embedding
+// and speech inputs a connector reads off the span are redacted like the flat
+// attributes, and that redaction copies them rather than editing the request they
+// alias.
+func TestTraceRedactionCoversTypedRequestInputs(t *testing.T) {
+	prompt := &TextCompletionInput{PromptStr: Ptr("call alex@example.com"), PromptArray: []string{"a alex@example.com"}}
+	speech := &SpeechInput{Input: "say alex@example.com"}
+	embedding := EmbeddingInput{{Content: EmbeddingContent{{Type: EmbeddingContentPartTypeText, Text: Ptr("embed alex@example.com")}}}}
+	trace := &Trace{}
+	span := &Span{LLM: &LLMSpanData{TextPrompt: prompt, SpeechInput: speech, EmbeddingInput: embedding}}
+	trace.RootSpan = span
+	trace.Spans = []*Span{span}
+
+	trace.SetRedactionReplacements(RedactionPhaseInput, map[string]string{"alex@example.com": "[EMAIL-1]"})
+	trace.ApplyRedactionReplacements()
+
+	assert.Equal(t, "call [EMAIL-1]", *span.LLM.TextPrompt.PromptStr)
+	assert.Equal(t, []string{"a [EMAIL-1]"}, span.LLM.TextPrompt.PromptArray)
+	assert.Equal(t, "say [EMAIL-1]", span.LLM.SpeechInput.Input)
+	assert.Equal(t, "embed [EMAIL-1]", *span.LLM.EmbeddingInput[0].Content[0].Text)
+
+	assert.Equal(t, "call alex@example.com", *prompt.PromptStr, "the request's prompt was edited")
+	assert.Equal(t, "a alex@example.com", prompt.PromptArray[0])
+	assert.Equal(t, "say alex@example.com", speech.Input)
+	assert.Equal(t, "embed alex@example.com", *embedding[0].Content[0].Text)
+}
