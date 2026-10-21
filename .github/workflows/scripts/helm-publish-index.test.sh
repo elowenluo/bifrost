@@ -576,6 +576,24 @@ check "workflow carries no runtime override for the removed deploy action" \
   not grep -q 'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24' "$WORKFLOW"
 
 # ---------------------------------------------------------------------------
+echo "# the repository's real chart, maintainers and all"
+# helm sorts keys, so a maintainer's nested `name:` precedes the top-level
+# `name:` in `helm show chart`; the fixtures above carry no maintainers.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+REAL_VERSION="$(awk '/^version:/ { print $2; exit }' "$REPO_ROOT/helm-charts/bifrost/Chart.yaml")"
+mkdir -p "$ROOT/pkg/real"
+helm package "$REPO_ROOT/helm-charts/bifrost" -d "$ROOT/pkg/real" >/dev/null 2>&1
+REAL="$ROOT/pkg/real/bifrost-$REAL_VERSION.tgz"
+check "fixture sanity: the real chart packages and names a maintainer" \
+  grep -q '^  name: ' <(helm show chart "$REAL" 2>/dev/null)
+ORIGIN=$(make_origin real absent) || exit 1
+run_case real "$ORIGIN" "$REAL_VERSION" "$REAL" "$REAL"
+check "the real chart is accepted as the version it is" [ "$RC" -eq 0 ]
+check "its entry is filed under the chart name, not a maintainer" grep -q '^  bifrost:$' "$OUT"
+check "its entry carries the release asset's digest" \
+  [ "$(index_field "$OUT" "$REAL_VERSION" digest)" = "$(sha256_of "$REAL")" ]
+
+# ---------------------------------------------------------------------------
 echo "# publication stays with the repository owner"
 check "script carries no upstream or previous-owner identity" \
   not grep -qE 'maximhq|capsohq' "$TARGET"
