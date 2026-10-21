@@ -150,9 +150,11 @@ func rejectInsecureRedirect(req *http.Request, via []*http.Request) error {
 	if !strings.EqualFold(previous.Hostname(), req.URL.Hostname()) {
 		return fmt.Errorf("refusing to follow redirect to a different host: %s", req.URL)
 	}
-	// Another port on the same host is another service. A scheme change is
-	// judged by the rule below, since HTTP and HTTPS cannot share a port.
-	if previous.Scheme == req.URL.Scheme && effectivePort(previous) != effectivePort(req.URL) {
+	// Another port on the same host is another service, whatever the scheme.
+	// HTTP and HTTPS cannot share a port, so the one scheme change kept is
+	// between their default ports: an upgrade, or the loopback-dev downgrade
+	// judged below.
+	if effectivePort(previous) != effectivePort(req.URL) && !(previous.Port() == "" && req.URL.Port() == "" && previous.Scheme != req.URL.Scheme) {
 		return fmt.Errorf("refusing to follow redirect to a different port: %s", req.URL)
 	}
 	if previous.Scheme == "https" && req.URL.Scheme != "https" && !isLoopbackHost(req.URL.Hostname()) {

@@ -725,3 +725,41 @@ func TestClientConcurrentAgentRefresh(t *testing.T) {
 		}
 	}
 }
+
+// TestClientRejectsSchemeChangingCrossPortRedirect: another port on the same host
+// is another service whatever the scheme, so an HTTPS loopback gateway redirecting
+// to plain HTTP on another local port does not get the credentials. The only scheme
+// change kept is between the two default ports (an upgrade, or the loopback-dev
+// downgrade).
+func TestClientRejectsSchemeChangingCrossPortRedirect(t *testing.T) {
+	cases := []struct {
+		base, location string
+		follow         bool
+	}{
+		{"https://localhost:8443", "http://localhost:8081/api/providers", false},
+		{"http://localhost:8080", "https://localhost:9443/api/providers", false},
+		{"https://localhost", "http://localhost/api/providers", true},
+		{"http://localhost", "https://localhost/api/providers", true},
+	}
+	for _, tc := range cases {
+		api := New(tc.base, Credentials{VirtualKey: "sk-bf-test"}, time.Second)
+		requestCount := 0
+		api.HTTPClient.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			requestCount++
+			if requestCount == 1 {
+				return &http.Response{
+					StatusCode: http.StatusFound, Header: http.Header{"Location": {tc.location}},
+					Body: io.NopCloser(strings.NewReader("")), Request: request,
+				}, nil
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: request}, nil
+		})
+		_, err := api.Do(context.Background(), Request{Path: "/api/providers"})
+		if tc.follow && (err != nil || requestCount != 2) {
+			t.Fatalf("%s -> %s: err = %v, requests = %d; want it followed", tc.base, tc.location, err, requestCount)
+		}
+		if !tc.follow && (err == nil || requestCount != 1) {
+			t.Fatalf("%s -> %s: err = %v, requests = %d; want rejection before a second request", tc.base, tc.location, err, requestCount)
+		}
+	}
+}
