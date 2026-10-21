@@ -895,6 +895,7 @@ append_dynamic_mcp_clients_insert() {
     append_v210_fixtures "$db_type" "$faker_sql" "$now"
     append_v220_fixtures "$db_type" "$faker_sql"
     append_v230_fixtures "$db_type" "$faker_sql" "$now"
+    append_v231_fixtures "$db_type" "$faker_sql" "$now"
   else
     now="datetime('now')"
     future="datetime('now', '+1 hour')"
@@ -921,6 +922,7 @@ append_dynamic_mcp_clients_insert() {
     append_v210_fixtures "$db_type" "$faker_sql" "$now" "$config_db" "$logs_db"
     append_v220_fixtures "$db_type" "$faker_sql" "$config_db" "$logs_db"
     append_v230_fixtures "$db_type" "$faker_sql" "$now" "$config_db" "$logs_db"
+    append_v231_fixtures "$db_type" "$faker_sql" "$now" "$config_db" "$logs_db"
   fi
 }
 
@@ -1271,6 +1273,58 @@ mcp_tool_logs|business_unit_names|'["Migration Test BU"]'|id = 'mcp-log-migratio
 mcp_tool_logs|budget_ids|'["budget-migration-test-1"]'|id = 'mcp-log-migration-001'
 mcp_tool_logs|rate_limit_ids|'["ratelimit-migration-test-1"]'|id = 'mcp-log-migration-001'
 V220_COLUMNS
+}
+
+# v2.3.1 introduced these columns plus the rss_feeds and matview_refresh_state
+# tables. Same probing scheme as append_v200_fixtures so the fixture set still runs
+# against older releases; reuses the v200_* helpers, which read these locals
+# dynamically.
+# - config_keys columns stay NULL (config sync rewrites config_keys on startup)
+# - governance_virtual_keys.metadata gets a non-default value so its preservation
+#   is checked by the snapshot comparison
+# - the RSS feed is a disabled custom feed: builtin seeding only upserts builtin slugs
+# - the matview refresh record names no real view, so no refresh pass rewrites it
+append_v231_fixtures() {
+  local fixture_db_type="$1" fixture_output="$2" now="$3"
+  local fixture_config_db="${4:-}" fixture_logs_db="${5:-}"
+  local table column value predicate
+  while IFS='|' read -r table column value predicate; do
+    if v200_column_exists "$table" "$column"; then
+      echo "UPDATE $table SET $column = $value WHERE $predicate;" >> "$fixture_output"
+    fi
+  done <<'V231_COLUMNS'
+config_agent_registrations|credential_origins|NULL|name = 'migration-test-agent'
+config_agent_registrations|require_public_target|false|name = 'migration-test-agent'
+config_client|skills_external_client_url|NULL|id = 1
+config_client|a2a_private_allowlist_json|NULL|id = 1
+config_keys|vertex_use_session_routing|NULL|name = 'migration-test-key-anthropic'
+config_mcp_clients|openapi_spec|''|client_id = 'mcp-migration-test-001'
+config_mcp_clients|openapi_config_json|NULL|client_id = 'mcp-migration-test-001'
+governance_virtual_keys|metadata|'{"cost_center":"migration-test"}'|id = 'vk-migration-test-1'
+logs|is_passthrough|false|id = 'log-migration-test-001'
+V231_COLUMNS
+
+  v200_insert rss_feeds slug <<V231_ROW
+slug|'migration-test-feed'
+name|'Migration Test Feed'
+url|'https://feeds.example.com/migration-test.xml'
+icon|''
+icon_url|NULL
+source|'custom'
+enabled|false
+created_at|$now
+updated_at|$now
+V231_ROW
+
+  v200_insert matview_refresh_state view_name <<V231_ROW
+view_name|'migration_test_view'
+last_started_at|$now
+last_success_at|$now
+last_status|'success'
+last_error|NULL
+last_duration_ms|12
+last_node|'migration-test-node'
+V231_ROW
 }
 
 # v2.3.0 introduced these columns plus the Agent Gateway, provider object
@@ -6031,7 +6085,9 @@ compare_postgres_snapshots() {
   # Tables to skip entirely (system/tracking tables that change during migration)
   # governance_model_pricing, governance_model_parameters: synced from remote model catalog URL
   # during startup (see framework/modelcatalog/sync.go) - row count grows from seed-only to full catalog
-  local skip_tables="gorp_migrations schema_migrations migrations governance_config governance_model_pricing governance_model_parameters"
+  # matview_refresh_state: refresh bookkeeping that every running binary rewrites for each
+  # materialized view on its first refresh pass (framework/logstore/matviewrefreshstate.go)
+  local skip_tables="gorp_migrations schema_migrations migrations governance_config governance_model_pricing governance_model_parameters matview_refresh_state"
 
   # Tables whose row count is allowed to GROW during migration (rows added by design) but
   # whose pre-existing seeded rows must still be value-compared. Unlike skip_tables (which
