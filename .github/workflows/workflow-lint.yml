@@ -49,3 +49,9 @@ jobs:
 
       - name: Check version-format guard
         run: ./.github/workflows/scripts/version-format.test.sh
+
+      # Fake curl only: no registry request leaves the runner. Runs even when an earlier
+      # guard failed, so its own result is always reported.
+      - name: Check GHCR tag probe fails closed
+        if: ${{ !cancelled() }}
+        run: ./.github/workflows/scripts/ghcr-tag-probe.test.sh

@@ -98,6 +98,12 @@ jobs:
     runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
     # Skip if first line of commit message contains --skip-ci
     if: needs.check-skip.outputs.should-skip != 'true'
+    # packages: read lets the job token query the private ghcr.io/<owner>/bifrost package.
+    # detect-all-changes.sh only reports a Docker tag absent on a definite registry answer
+    # and fails the job on anything else, so without it every release stops here.
+    permissions:
+      contents: read
+      packages: read
     outputs:
       core-needs-release: ${{ steps.detect.outputs.core-needs-release }}
       framework-needs-release: ${{ steps.detect.outputs.framework-needs-release }}
@@ -147,6 +153,8 @@ jobs:
 
       - name: Detect what needs release
         id: detect
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./.github/workflows/scripts/detect-all-changes.sh "auto"
 
       - name: Validate Helm templates
