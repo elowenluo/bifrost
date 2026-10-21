@@ -23,7 +23,13 @@ func ResolveBaseURL(doc *Document, override *string, specURL string) (base strin
 		return strings.TrimSuffix(base, "/"), true, nil
 	}
 	if doc != nil {
-		for _, srv := range doc.Servers {
+		servers := doc.Servers
+		if len(servers) == 0 && strings.HasPrefix(doc.OpenAPIVersion, "3") {
+			// OpenAPI 3: with servers absent or empty, the default is a server at "/",
+			// which resolves against where the document was found.
+			servers = []string{"/"}
+		}
+		for _, srv := range servers {
 			if isAbsoluteHTTPURL(srv) {
 				return strings.TrimSuffix(srv, "/"), false, nil
 			}

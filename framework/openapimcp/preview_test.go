@@ -37,6 +37,13 @@ func TestResolveBaseURL(t *testing.T) {
 	require.ErrorContains(t, err, "set openapi_config.base_url")
 	_, _, err = ResolveBaseURL(nil, nil, "")
 	require.Error(t, err)
+
+	// OpenAPI 3 without servers defaults to "/", resolved against the spec's URL.
+	base, _, err = ResolveBaseURL(&Document{OpenAPIVersion: "3.0.3"}, nil, "https://host.example.com/docs/openapi.json")
+	require.NoError(t, err)
+	assert.Equal(t, "https://host.example.com", base)
+	_, _, err = ResolveBaseURL(&Document{OpenAPIVersion: "3.1.0"}, nil, "")
+	require.ErrorContains(t, err, "set openapi_config.base_url", "nothing to resolve the default against")
 }
 
 func TestPreview(t *testing.T) {
