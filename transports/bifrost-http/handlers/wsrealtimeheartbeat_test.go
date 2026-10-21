@@ -356,3 +356,31 @@ func TestRunRealtimeRelaysEndsSessionWhenARelayPanics(t *testing.T) {
 		t.Fatalf("expected both connections to be closed once, closeBoth ran %d times", closes)
 	}
 }
+
+// TestMergeRealtimeMiddlewareValuesSurvivesRecycledRequestCtx: the transcription
+// upgrade reads the request ctx before the hijack callback runs, because fasthttp
+// may recycle it once the handler returns. The merged values must keep the
+// transport values from that snapshot and take the pre-request hook values from
+// the Bifrost context, as the ctx-based snapshot does on a live ctx.
+func TestMergeRealtimeMiddlewareValuesSurvivesRecycledRequestCtx(t *testing.T) {
+	t.Parallel()
+
+	ctx := &fasthttp.RequestCtx{}
+	ctx.SetUserValue(schemas.BifrostContextKeyGovernanceVirtualKeyID, "transport-virtual-key-id")
+	bifrostCtx := schemas.NewBifrostContext(t.Context(), schemas.NoDeadline)
+	bifrostCtx.SetValue(schemas.BifrostContextKeySelectedKeyID, "hook-selected-key")
+
+	transportValues := snapshotRealtimeMiddlewareValues(ctx)
+	ctx.ResetUserValues() // fasthttp recycling the ctx after the handler returned
+
+	values := mergeRealtimeMiddlewareValues(transportValues, bifrostCtx)
+	if got := values[schemas.BifrostContextKeyGovernanceVirtualKeyID]; got != "transport-virtual-key-id" {
+		t.Fatalf("governance virtual key ID = %v, want transport-virtual-key-id", got)
+	}
+	if got := values[schemas.BifrostContextKeySelectedKeyID]; got != "hook-selected-key" {
+		t.Fatalf("selected key ID = %v, want hook-selected-key", got)
+	}
+	if lost := snapshotRealtimeMiddlewareValuesWithContext(ctx, bifrostCtx)[schemas.BifrostContextKeyGovernanceVirtualKeyID]; lost != nil {
+		t.Fatalf("a recycled ctx unexpectedly still carried %v", lost)
+	}
+}
