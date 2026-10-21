@@ -455,11 +455,11 @@ func runInjectedChatLoop(
 				withoutInjectedCalls(resp, 0, client)
 			}
 			stripInjectedCallsFromOtherChoices(resp, set)
-			resp.Usage = schemas.MergeBifrostLLMUsage(usage, resp.Usage)
+			resp.Usage = schemas.AddBillingTurn(usage, resp.Usage)
 			prependChatText(resp, priorText)
 			return resp, nil
 		}
-		usage = schemas.MergeBifrostLLMUsage(usage, resp.Usage)
+		usage = schemas.AddBillingTurn(usage, resp.Usage)
 		if text := chatMessageText(msg); text != "" {
 			priorText = append(priorText, text)
 		}
@@ -513,10 +513,10 @@ func runInjectedResponsesLoop(
 				}
 			}
 			resp.Output = output
-			resp.Usage = schemas.MergeBifrostLLMUsage(usage, resp.Usage.ToBifrostLLMUsage()).ToResponsesResponseUsage()
+			resp.Usage = schemas.AddBillingTurn(usage, resp.Usage.ToBifrostLLMUsage()).ToResponsesResponseUsage()
 			return resp, nil
 		}
-		usage = schemas.MergeBifrostLLMUsage(usage, resp.Usage.ToBifrostLLMUsage())
+		usage = schemas.AddBillingTurn(usage, resp.Usage.ToBifrostLLMUsage())
 
 		results := executeInjectedCalls(injected, exec)
 		next := *turn
@@ -692,7 +692,7 @@ func billEarlierTurns(bifrostErr *schemas.BifrostError, earlier *schemas.Bifrost
 	if bifrostErr == nil || earlier == nil {
 		return
 	}
-	bifrostErr.ExtraFields.BilledUsage = schemas.MergeBifrostLLMUsage(earlier, bifrostErr.ExtraFields.BilledUsage)
+	bifrostErr.ExtraFields.BilledUsage = schemas.AddBillingTurn(earlier, bifrostErr.ExtraFields.BilledUsage)
 }
 
 func chatMessageText(msg *schemas.ChatMessage) string {

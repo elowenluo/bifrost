@@ -125,7 +125,7 @@ func (s *injectedChatStream) onChunk(resp *schemas.BifrostChatResponse, final bo
 	}
 	if len(injected) > 0 && s.depth < s.set.maxDepth {
 		s.more = true
-		s.usage = schemas.MergeBifrostLLMUsage(s.usage, s.turnUsage)
+		s.usage = schemas.AddBillingTurn(s.usage, s.turnUsage)
 		s.turnUsage = nil
 		return emits
 	}
@@ -137,7 +137,7 @@ func (s *injectedChatStream) onChunk(resp *schemas.BifrostChatResponse, final bo
 		finish = new(string(schemas.BifrostFinishReasonStop))
 	}
 	terminal := s.clientChunk(resp, &schemas.ChatStreamResponseChoiceDelta{ToolCalls: client}, finish)
-	terminal.Usage = schemas.MergeBifrostLLMUsage(s.usage, s.turnUsage)
+	terminal.Usage = schemas.AddBillingTurn(s.usage, s.turnUsage)
 	return append(emits, streamEmit{resp: terminal, terminal: true})
 }
 
@@ -742,7 +742,7 @@ func (s *injectedResponsesStream) onEvent(ev *schemas.BifrostResponsesStreamResp
 		if failed.Response != nil {
 			// The client stream ends here: bill the turns that finished before it too.
 			response := *failed.Response
-			response.Usage = schemas.MergeBifrostLLMUsage(s.usage, response.Usage.ToBifrostLLMUsage()).ToResponsesResponseUsage()
+			response.Usage = schemas.AddBillingTurn(s.usage, response.Usage.ToBifrostLLMUsage()).ToResponsesResponseUsage()
 			failed.Response = &response
 		}
 		return []responsesEmit{{event: failed, terminal: true}}
@@ -902,7 +902,7 @@ func (s *injectedResponsesStream) onTurnEnd(ev *schemas.BifrostResponsesStreamRe
 	if ev.Response != nil {
 		turnUsage = ev.Response.Usage.ToBifrostLLMUsage()
 	}
-	s.usage = schemas.MergeBifrostLLMUsage(s.usage, turnUsage)
+	s.usage = schemas.AddBillingTurn(s.usage, turnUsage)
 	if len(s.injected) > 0 && s.depth < s.set.maxDepth && !s.sentCall {
 		s.more = true
 		return nil

@@ -118,6 +118,7 @@ func TestInjectedChatStream_TextThenInjectedCallThenAnswer(t *testing.T) {
 	assert.True(t, last.terminal)
 	assert.Equal(t, "stop", *last.resp.Choices[0].FinishReason)
 	assert.Equal(t, 30, last.resp.Usage.PromptTokens, "the terminal chunk carries usage for every turn")
+	assertBillingTurns(t, last.resp.Usage, 10, 20)
 	assert.False(t, s.continues())
 
 	all := append(turn1, turn2...)
@@ -407,6 +408,7 @@ func TestInjectedResponsesStream_TwoTurnsBecomeOneResponse(t *testing.T) {
 	assert.Equal(t, "resp_1", *last.event.Response.ID)
 	require.Len(t, last.event.Response.Output, 2)
 	assert.Equal(t, 30, last.event.Response.Usage.InputTokens)
+	assertBillingTurns(t, last.event.Response.Usage.ToBifrostLLMUsage(), 10, 20)
 }
 
 func TestInjectedResponsesStream_ClientCallIsReleasedAtTurnEnd(t *testing.T) {

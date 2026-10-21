@@ -1359,6 +1359,10 @@ type ResponsesResponseUsage struct {
 	CostInUsdTicks             *int64                               `json:"cost_in_usd_ticks,omitempty"`
 	ServerSideToolUsageDetails *ResponsesServerSideToolUsageDetails `json:"server_side_tool_usage_details,omitempty"`
 	ContextDetails             *ResponsesContextDetails             `json:"context_details,omitempty"`
+
+	// BillingTurns mirrors BifrostLLMUsage.BillingTurns through the Responses
+	// conversions. Not serialized.
+	BillingTurns []BifrostLLMUsage `json:"-"`
 }
 
 // NormalizeProviderCost mirrors BifrostLLMUsage.NormalizeProviderCost for the responses path.

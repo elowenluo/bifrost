@@ -1979,6 +1979,40 @@ type BifrostLLMUsage struct {
 	// (CalculateCostForUsage) never sees RoutingInfo, so without it a fallback-served
 	// turn is priced at the requested model's rates.
 	ServerSideFallbackModel *string `json:"-"`
+	// BillingTurns lists the independently billable provider calls this usage
+	// sums (an injected-tool loop's turns), set only by AddBillingTurn. Pricing
+	// then prices each turn on its own, so context-length thresholds apply per
+	// call rather than to the sum. Not serialized.
+	BillingTurns []BifrostLLMUsage `json:"-"`
+}
+
+// AddBillingTurn returns the sum of total and turn, recording each separate
+// provider call it sums in BillingTurns. Use it only to add up distinct calls,
+// never the partial usage of one call, which must stay one priced unit.
+func AddBillingTurn(total, turn *BifrostLLMUsage) *BifrostLLMUsage {
+	if turn == nil {
+		return total
+	}
+	if total == nil {
+		single := *turn
+		return &single
+	}
+	turns := billingTurnsOf(total)
+	turns = append(turns[:len(turns):len(turns)], billingTurnsOf(turn)...)
+	merged := MergeBifrostLLMUsage(total, turn)
+	merged.BillingTurns = turns
+	return merged
+}
+
+// billingTurnsOf returns the separate calls usage sums: its BillingTurns, or
+// usage itself when it is one call.
+func billingTurnsOf(usage *BifrostLLMUsage) []BifrostLLMUsage {
+	if len(usage.BillingTurns) > 0 {
+		return usage.BillingTurns
+	}
+	single := *usage
+	single.BillingTurns = nil
+	return []BifrostLLMUsage{single}
 }
 
 // NormalizeReasoningTokens folds a top-level reasoning_tokens into CompletionTokensDetails, keeping a nested value if set.

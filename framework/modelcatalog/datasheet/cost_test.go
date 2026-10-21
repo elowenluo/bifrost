@@ -6916,3 +6916,44 @@ func TestCalculateCostBreakdown_BillingSegmentsKeepPerResponseBoundaries(t *test
 	assert.InDelta(t, breakdown.TotalCost, breakdown.InputCost+breakdown.OutputCost+breakdown.AdditionalCost, 1e-12)
 	assert.InDelta(t, want, s.CalculateCost(resp, nil), 1e-12)
 }
+
+// TestCalculateCost_BillingTurnsKeepPerCallThresholds: usage that sums several
+// independently billable calls (an injected-tool loop's turns) is priced call by
+// call, on the success path and on the bare-usage error path. Two 150k-input
+// turns stay under the 272k threshold each; summed they would cross it.
+func TestCalculateCost_BillingTurnsKeepPerCallThresholds(t *testing.T) {
+	p := gpt56SolPricing()
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey(p.Model, p.Provider, p.Mode): p,
+	})
+	turn := schemas.BifrostLLMUsage{PromptTokens: 150000, CompletionTokens: 1000, TotalTokens: 151000}
+	usage := schemas.AddBillingTurn(&turn, &turn)
+	require.Len(t, usage.BillingTurns, 2)
+	require.Equal(t, 300000, usage.PromptTokens, "the usage still reports the totals")
+
+	want := 2 * computeTextCostTotal(&p, &turn, serviceTier{})
+	merged := computeTextCostTotal(&p, &schemas.BifrostLLMUsage{PromptTokens: 300000, CompletionTokens: 2000, TotalTokens: 302000}, serviceTier{})
+	require.NotEqual(t, want, merged, "fixture must make merged pricing differ")
+
+	resp := &schemas.BifrostResponse{ChatResponse: &schemas.BifrostChatResponse{
+		Usage: usage,
+		ExtraFields: schemas.BifrostResponseExtraFields{
+			RequestType: schemas.ChatCompletionRequest,
+			RoutingInfo: routingInfoFor(schemas.ModelProvider(p.Provider), p.Model),
+		},
+	}}
+	assert.InDelta(t, want, s.CalculateCost(resp, nil), 1e-12)
+	assert.InDelta(t, want, s.CalculateCostForUsage(usage, schemas.ModelProvider(p.Provider), p.Model, schemas.ChatCompletionRequest, nil), 1e-12)
+
+	// The Responses conversions carry the turns, and a Responses result prices them too.
+	viaResponses := usage.ToResponsesResponseUsage().ToBifrostLLMUsage()
+	assert.InDelta(t, want, s.CalculateCostForUsage(viaResponses, schemas.ModelProvider(p.Provider), p.Model, schemas.ResponsesRequest, nil), 1e-12)
+	responsesResult := &schemas.BifrostResponse{ResponsesResponse: &schemas.BifrostResponsesResponse{
+		Usage: usage.ToResponsesResponseUsage(),
+		ExtraFields: schemas.BifrostResponseExtraFields{
+			RequestType: schemas.ResponsesRequest,
+			RoutingInfo: routingInfoFor(schemas.ModelProvider(p.Provider), p.Model),
+		},
+	}}
+	assert.InDelta(t, want, s.CalculateCost(responsesResult, nil), 1e-12)
+}

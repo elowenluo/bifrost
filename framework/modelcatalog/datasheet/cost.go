@@ -690,6 +690,19 @@ func (s *Store) calculateAzureModelRouterCost(result *schemas.BifrostResponse, i
 // function. Shared by calculateBaseCost (response-driven) and
 // CalculateCostForUsage (bare-usage-driven, for failed/cancelled requests).
 func (s *Store) computeCostFromInput(input costInput, routingInfo schemas.RoutingInfo, requestType schemas.RequestType, scopes LookupScopes) *schemas.BifrostCost {
+	// Usage summed over separate provider calls (an injected-tool loop) is priced
+	// call by call, so context-length thresholds and per-request fees apply to
+	// each call rather than to the sum.
+	if input.usage != nil && len(input.usage.BillingTurns) > 1 {
+		var total *schemas.BifrostCost
+		for _, turn := range input.usage.BillingTurns {
+			perTurn := input
+			perTurn.usage = &turn
+			perTurn.audioSeconds = turn.AudioSeconds
+			total = addCostBreakdown(total, s.computeCostFromInput(perTurn, routingInfo, requestType, scopes))
+		}
+		return total
+	}
 	// When a pricing model override is set (e.g. container creates always look
 	// up "container"), it replaces the lookup hierarchy entirely. Build a
 	// synthetic RoutingInfo that reuses Provider but pins the model fields to
@@ -940,6 +953,7 @@ func responsesUsageToBifrostUsage(u *schemas.ResponsesResponseUsage) *schemas.Bi
 		}
 	}
 	usage.ToolUsage = u.ToolUsage
+	usage.BillingTurns = u.BillingTurns
 	return usage
 }
 

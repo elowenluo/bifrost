@@ -551,7 +551,20 @@ func TestRunInjectedChatLoop_ExecutesInjectedCallsAndReturnsFinalAnswer(t *testi
 	assert.Equal(t, "stop", *resp.Choices[0].FinishReason)
 	assert.Equal(t, 30, resp.Usage.PromptTokens, "usage covers every model turn")
 	assert.Equal(t, 32, resp.Usage.TotalTokens)
+	assertBillingTurns(t, resp.Usage, 10, 20)
 	assert.Len(t, original.Input, 1, "the caller's request is never appended to")
+}
+
+// assertBillingTurns checks that usage summed over an injected-tool loop keeps
+// each provider call as its own billing turn, so pricing applies per-call
+// thresholds rather than pricing the sum as one call.
+func assertBillingTurns(t *testing.T, usage *schemas.BifrostLLMUsage, prompts ...int) {
+	t.Helper()
+	require.NotNil(t, usage)
+	require.Len(t, usage.BillingTurns, len(prompts), "each model turn must stay a separate billing turn")
+	for i, prompt := range prompts {
+		assert.Equal(t, prompt, usage.BillingTurns[i].PromptTokens, "billing turn %d", i)
+	}
 }
 
 func TestRunInjectedChatLoop_MixedTurnDropsClientCallAndReasks(t *testing.T) {
@@ -694,6 +707,7 @@ func TestRunInjectedResponsesLoop_ExecutesInjectedCalls(t *testing.T) {
 	assert.Equal(t, "Sunny.", *resp.Output[1].Content.ContentStr)
 	assert.Equal(t, 30, resp.Usage.InputTokens)
 	assert.Equal(t, 33, resp.Usage.TotalTokens)
+	assertBillingTurns(t, resp.Usage.ToBifrostLLMUsage(), 10, 20)
 }
 
 // A client that forces web search gets the choice remapped to the injected tool. Kept on
