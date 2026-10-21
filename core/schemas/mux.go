@@ -1872,6 +1872,7 @@ func AcquireChatToResponsesStreamState() *ChatToResponsesStreamState {
 	state.TextItemHasContent = false
 	state.TextBuffer = strings.Builder{}
 	state.TextOutputIndex = 0
+	clear(state.closedTextItems) // drop the text a pooled state would otherwise keep reachable
 	state.closedTextItems = state.closedTextItems[:0]
 	state.pendingText = ""
 	state.ReasoningItemAdded = false
@@ -1916,6 +1917,7 @@ func ReleaseChatToResponsesStreamState(state *ChatToResponsesStreamState) {
 		state.TextItemHasContent = false
 		state.TextBuffer = strings.Builder{}
 		state.TextOutputIndex = 0
+		clear(state.closedTextItems) // drop the text a pooled state would otherwise keep reachable
 		state.closedTextItems = state.closedTextItems[:0]
 		state.pendingText = ""
 		state.ReasoningItemAdded = false

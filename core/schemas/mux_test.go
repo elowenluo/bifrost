@@ -2436,3 +2436,18 @@ func TestToChatMessages_DropsConfigurationUpdateItem(t *testing.T) {
 		t.Fatalf("expected the surviving message to be the user turn, got role %q", got[0].Role)
 	}
 }
+
+// TestChatToResponsesStreamStateReleaseDropsClosedText: the stream state is pooled,
+// so releasing it must not keep a finished stream's text reachable through the
+// backing array of its closed-item list.
+func TestChatToResponsesStreamStateReleaseDropsClosedText(t *testing.T) {
+	state := AcquireChatToResponsesStreamState()
+	state.closedTextItems = append(state.closedTextItems, closedChatTextItem{itemID: "msg_1", text: "a previous user's answer"})
+	backing := state.closedTextItems[:cap(state.closedTextItems)]
+	ReleaseChatToResponsesStreamState(state)
+	for i, item := range backing {
+		if item.text != "" || item.itemID != "" {
+			t.Fatalf("pooled state still references closed item %d: %+v", i, item)
+		}
+	}
+}
