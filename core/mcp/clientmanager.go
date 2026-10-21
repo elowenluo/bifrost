@@ -3368,24 +3368,29 @@ func (m *MCPManager) buildTLSHTTPClientWithProxyAndResolver(config *schemas.MCPC
 	// pod behind an explicit HTTP_PROXY/HTTPS_PROXY) can only reach a public
 	// MCP server through that proxy. Proxying does change what the dial-time
 	// guard sees, though: http.Transport hands DialContext the proxy's
-	// address, not the MCP destination. The destination policy for a proxied
-	// request therefore runs in the selector wrapper (see mcpProxySelector),
-	// and on the direct path (no proxy configured, or a NO_PROXY match) the
-	// dialer sees the real target.
-	if !config.RequirePublicTarget {
-		return &http.Client{Transport: newTransport(mcpProxySelector(proxy, false, resolver), network.PrivateNetworkDialContext(mcpDialTimeout))}, nil
+	// address, not the MCP destination. So which path a request takes is
+	// decided per request, on two separate transports. mcpProxySelector vets
+	// a proxied destination when the request is routed, and the proxied
+	// transport's dialer (network.PinnedProxyDialContext) resolves and checks
+	// the destination again itself and tunnels to the checked address, plain
+	// http included, so the proxy never resolves a name whose answer could have
+	// changed since. On
+	// the direct path (no proxy configured, or a NO_PROXY match) the dialer
+	// sees the real target. The proxy itself is operator configuration and
+	// routinely sits on a private or loopback address, so it is dialed under
+	// the private-network policy whichever policy the destination gets, and a
+	// direct request can never inherit that policy because its destination
+	// happens to be an address a proxied request used before.
+	strict := config.RequirePublicTarget
+	policy := network.ProxiedDestinationPolicy(strict)
+	direct := network.PrivateNetworkDialContext(mcpDialTimeout)
+	if strict {
+		direct = network.SSRFSafeDialContext(mcpDialTimeout)
 	}
-	// A RequirePublicTarget client needs two dial policies: the strict one for
-	// its destinations and the private-network one for the proxy itself, which
-	// is operator configuration and routinely sits on a private or loopback
-	// address. Which policy applies is decided per request by whether a proxy
-	// is selected for it, on two separate transports, so a direct request can
-	// never inherit the proxy policy because its destination happens to be an
-	// address a proxied request used before.
 	return &http.Client{Transport: &network.ProxyAwareTransport{
-		Proxy:    proxy,
-		Direct:   newTransport(nil, network.SSRFSafeDialContext(mcpDialTimeout)),
-		ViaProxy: newTransport(mcpProxySelector(proxy, true, resolver), network.PrivateNetworkDialContext(mcpDialTimeout)),
+		Proxy:    mcpProxySelector(proxy, strict, resolver),
+		Direct:   newTransport(nil, direct),
+		ViaProxy: newTransport(nil, network.PinnedProxyDialContext(policy, resolver, !strict)),
 	}}, nil
 }
 
