@@ -4668,6 +4668,37 @@ func TestMigrationAddIgnoreProviderCostColumn_NonRollbackable(t *testing.T) {
 }
 
 // Directly owned virtual key limits move onto the key's model config tiers.
+// TestMigrationMoveConfigJSONVKLimitsKeepsUnmovedRateLimitReferences pins that when two
+// provider configs of one key and provider hold different rate limits, the tier takes
+// one and only that reference is cleared: the other stays on its provider config
+// instead of being orphaned.
+func TestMigrationMoveConfigJSONVKLimitsKeepsUnmovedRateLimitReferences(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.AutoMigrate(&tables.TableVirtualKey{}, &tables.TableVirtualKeyProviderConfig{},
+		&tables.TableBudget{}, &tables.TableRateLimit{}, &tables.TableModelConfig{}))
+	tokenMax, tokenDur := int64(100), "1d"
+	for _, id := range []string{"rl-a", "rl-b"} {
+		require.NoError(t, db.Create(&tables.TableRateLimit{ID: id, TokenMaxLimit: &tokenMax, TokenResetDuration: &tokenDur}).Error)
+	}
+	require.NoError(t, db.Create(&tables.TableVirtualKey{ID: "vk-dup", Name: "vk-dup", Value: *schemas.NewSecretVar("sk-bf-dup")}).Error)
+	for _, rl := range []string{"rl-a", "rl-b"} {
+		require.NoError(t, db.Create(&tables.TableVirtualKeyProviderConfig{VirtualKeyID: "vk-dup", Provider: "openai", RateLimitID: schemas.Ptr(rl)}).Error)
+	}
+
+	require.NoError(t, migrationMoveConfigJSONVKLimitsToModelConfigs(ctx, db, testMigrationLogger))
+
+	var tier tables.TableModelConfig
+	require.NoError(t, db.Where("scope = ? AND scope_id = ? AND model_name = ? AND provider = ?",
+		tables.ModelConfigScopeVirtualKey, "vk-dup", tables.ModelConfigAllModels, "openai").First(&tier).Error)
+	require.NotNil(t, tier.RateLimitID)
+	var remaining []string
+	require.NoError(t, db.Table("governance_virtual_key_provider_configs").Where("virtual_key_id = ? AND rate_limit_id IS NOT NULL", "vk-dup").
+		Pluck("rate_limit_id", &remaining).Error)
+	require.Len(t, remaining, 1, "the rate limit the tier did not take must keep its owner")
+	assert.NotEqual(t, *tier.RateLimitID, remaining[0])
+}
+
 func TestMigrationMoveConfigJSONVKLimitsToModelConfigs(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()

@@ -14824,7 +14824,9 @@ func moveVKTierRateLimit(tx *gorm.DB, vkID string, provider *string, mcID string
 	// Only when the tier took it: dropping a reference this migration did not relocate would leave
 	// the operator's row owned by nobody.
 	if res.RowsAffected > 0 {
-		if err := tx.Table(ownerTable).Where(ownerWhere, ownerArgs...).
+		// Only the reference that moved: another provider config of the same key and provider
+		// may hold a different rate limit, which stays with it.
+		if err := tx.Table(ownerTable).Where(ownerWhere, ownerArgs...).Where("rate_limit_id = ?", rateLimitIDs[0]).
 			Update("rate_limit_id", nil).Error; err != nil {
 			return 0, fmt.Errorf("failed to clear rate limit reference of virtual key %s: %w", vkID, err)
 		}
