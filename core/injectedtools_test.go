@@ -623,6 +623,45 @@ func responsesText(text string) schemas.ResponsesMessage {
 	}
 }
 
+func responsesCustomToolCall(callID, name string) schemas.ResponsesMessage {
+	return schemas.ResponsesMessage{
+		ID:   schemas.Ptr("ctc_" + callID),
+		Type: schemas.Ptr(schemas.ResponsesMessageTypeCustomToolCall),
+		ResponsesToolMessage: &schemas.ResponsesToolMessage{
+			CallID: schemas.Ptr(callID), Name: schemas.Ptr(name),
+			ResponsesCustomToolCall: &schemas.ResponsesCustomToolCall{Input: "print(1)"},
+		},
+	}
+}
+
+// A client custom tool call is client-executed like a client function call: in a
+// turn that also calls an injected tool it is never answered, so it must not be
+// replayed into the next turn (which would lack its output) or reach the client.
+func TestRunInjectedResponsesLoop_DropsClientCustomCallInInjectedTurn(t *testing.T) {
+	set := testInjectedSet(t)
+	var sent []*schemas.BifrostResponsesRequest
+	scripted := []*schemas.BifrostResponsesResponse{
+		{Output: []schemas.ResponsesMessage{responsesCustomToolCall("c0", "code_exec"), responsesFunctionCall("c1", "web_search")}},
+		{Output: []schemas.ResponsesMessage{responsesText("Done.")}},
+	}
+	dispatch := func(req *schemas.BifrostResponsesRequest) (*schemas.BifrostResponsesResponse, *schemas.BifrostError) {
+		sent = append(sent, req)
+		resp := scripted[0]
+		scripted = scripted[1:]
+		return resp, nil
+	}
+
+	resp, err := runInjectedResponsesLoop(&schemas.BifrostResponsesRequest{Model: "m"}, set, dispatch, searchResult)
+
+	require.Nil(t, err)
+	require.Len(t, sent, 2)
+	for _, item := range sent[1].Input {
+		assert.NotEqual(t, schemas.ResponsesMessageTypeCustomToolCall, *item.Type, "an unanswered client custom call must not be replayed")
+	}
+	require.Len(t, resp.Output, 1)
+	assert.Equal(t, "Done.", *resp.Output[0].Content.ContentStr)
+}
+
 func TestRunInjectedResponsesLoop_ExecutesInjectedCalls(t *testing.T) {
 	set := testInjectedSet(t)
 	var sent []*schemas.BifrostResponsesRequest

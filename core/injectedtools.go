@@ -525,7 +525,7 @@ func runInjectedResponsesLoop(
 		next.Input = append(next.Input, turn.Input...)
 		for _, item := range resp.Output {
 			_, isInjected := injectedResponsesCall(item, set)
-			if isFunctionCall(item) && !isInjected {
+			if isToolCallItem(item) && !isInjected {
 				continue
 			}
 			next.Input = append(next.Input, item)
@@ -568,6 +568,14 @@ func executeInjectedCalls(calls []schemas.ChatAssistantMessageToolCall, exec fun
 
 func isFunctionCall(item schemas.ResponsesMessage) bool {
 	return item.Type != nil && *item.Type == schemas.ResponsesMessageTypeFunctionCall && item.ResponsesToolMessage != nil
+}
+
+// isToolCallItem reports whether the item asks for a tool result: a function call or
+// a custom tool call. Injected tools are always functions, so any other such call is
+// client-executed and needs the client's output before it can be replayed.
+func isToolCallItem(item schemas.ResponsesMessage) bool {
+	return isFunctionCall(item) ||
+		(item.Type != nil && *item.Type == schemas.ResponsesMessageTypeCustomToolCall && item.ResponsesToolMessage != nil)
 }
 
 // injectedResponsesCall returns the item as a chat tool call when it calls an injected tool.
