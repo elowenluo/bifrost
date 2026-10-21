@@ -9,10 +9,6 @@ on:
       - ".github/workflows/helm-release.yml"
   workflow_dispatch:
 
-env:
-  # Temporary exception tracked in .github/action-runtime-exceptions.json.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 permissions:
   contents: write
 
@@ -200,11 +196,15 @@ jobs:
 
       # Publishes under the owner this workflow runs in, never a hardcoded
       # organisation. The registry is asked on every attempt for this version's
-      # manifest (job token, fail-closed): a missing version is pushed from the
-      # canonical asset and read back, an identical one is left alone, a
-      # different one, an unfetchable one or any registry error fails the job.
-      # This does not depend on whether the GitHub release pre-existed, so a
-      # re-run after a failed publication still publishes the artifact.
+      # manifest (job token, fail-closed): a version absent from a repository
+      # the token can see is pushed from the canonical asset and read back, an
+      # identical one is left alone, a different one, an unfetchable one or any
+      # registry error fails the job. A package the token cannot see, which is
+      # also what a package that does not exist yet looks like, fails visibly:
+      # the first publication is bootstrapped deliberately by an operator (see
+      # the script header), never guessed here. This does not depend on
+      # whether the GitHub release pre-existed, so a re-run after a failed
+      # publication still publishes the artifact.
       - name: Push Helm chart as OCI artifact to GHCR
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

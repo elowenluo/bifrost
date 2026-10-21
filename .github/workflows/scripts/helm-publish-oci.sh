@@ -13,21 +13,27 @@ set -euo pipefail
 #     never a reason to push. Absence is decided here only, not from a failed
 #     download: `helm pull` both resolves and downloads, and a missing blob
 #     under an existing manifest must not be pushed over.
-#   - 404 MANIFEST_UNKNOWN or NAME_UNKNOWN: absent. The canonical release
-#     asset is pushed, then pulled back and compared. A repository the
-#     registry does not know is the chart's first publication; it is not
-#     fail-closed as it is for image tags because the same token cannot push
-#     to a package it cannot read, so a misread of "not visible" as "absent"
-#     fails at the push instead of overwriting anything.
+#   - 404 MANIFEST_UNKNOWN or NAME_UNKNOWN: absent only if the repository's
+#     authenticated tag listing answers 200 for this very repository. GHCR
+#     answers a manifest lookup the same way for a version that is absent and
+#     for a repository the token cannot see (measured in TXE-4819), so without
+#     that confirmation nothing is pushed. Then the canonical release asset is
+#     pushed, pulled back and compared.
+#   - a tag listing of 404 NAME_UNKNOWN: the repository is invisible to the
+#     token or does not exist yet. Both fail, visibly. A package that does not
+#     exist yet is bootstrapped deliberately, not by this script: an operator
+#     with write:packages pushes the asset once with `helm push`, links the
+#     package to this repository with read and write access, and re-runs.
 #   - anything else (refused token, 401/403, 5xx, network, a 404 without a
-#     registry error code): failure. An unanswered lookup is never absence.
+#     registry error code, a listing for another name): failure. An
+#     unanswered lookup is never absence.
 # `helm push` overwrites an existing tag, which is why the lookup comes first
 # and a confirmed-present version is never pushed.
 #
 # Why not ghcr_tag_states from ghcr-tags.sh directly: it accepts only
-# owner/name repositories, while a chart lives at owner/<path>/<chart>, and it
-# fails closed on an unknown repository. Its request, retry, JSON and error
-# helpers are reused; only the lookup itself is restated here.
+# owner/name repositories, while a chart lives at owner/<path>/<chart>. Its
+# request, retry, JSON and error helpers are reused and its decision rule is
+# kept; only the lookup itself is restated here for the nested name.
 #
 # Usage:
 #   helm-publish-oci.sh --chart-name bifrost --chart-version 2.1.45 \
@@ -104,8 +110,9 @@ chart_meta() {
 
 # ghcr_chart_manifest_state <owner/path/name> <tag>: prints "present" or
 # "absent" when the registry answered definitively; otherwise explains on
-# stderr and returns 1. Runs in a subshell so its temporary directory is
-# removed however it returns.
+# stderr and returns 1. "absent" requires the repository's own tag listing to
+# answer 200 under the same token. Runs in a subshell so its temporary
+# directory is removed however it returns.
 ghcr_chart_manifest_state() (
   repository="$1"
   tag="$2"
@@ -145,7 +152,8 @@ ghcr_chart_manifest_state() (
     return 1
   fi
 
-  ghcr_request "manifest lookup" "header = \"Authorization: Bearer ${bearer}\"" "$tmp/manifest" \
+  auth="header = \"Authorization: Bearer ${bearer}\""
+  ghcr_request "manifest lookup" "$auth" "$tmp/manifest" \
     "https://ghcr.io/v2/${repository}/manifests/${tag}" -H "Accept: ${GHCR_ACCEPT}"
   case "$GHCR_STATUS" in
     200)
@@ -153,16 +161,38 @@ ghcr_chart_manifest_state() (
         echo "::error::GHCR manifest lookup for ${repository}:${tag} answered HTTP 200 without a manifest body; refusing to guess." >&2
         return 1
       fi
-      echo present ;;
+      echo present
+      return 0 ;;
     404)
-      if ghcr_json_is "$tmp/manifest" '.errors[0].code == "MANIFEST_UNKNOWN" or .errors[0].code == "NAME_UNKNOWN"'; then
-        echo absent
-      else
+      if ! ghcr_json_is "$tmp/manifest" '.errors[0].code == "MANIFEST_UNKNOWN" or .errors[0].code == "NAME_UNKNOWN"'; then
         ghcr_fail "manifest lookup for ${repository}:${tag}" "$tmp/manifest"
         return 1
       fi ;;
     *)
       ghcr_fail "manifest lookup for ${repository}:${tag}" "$tmp/manifest"
+      return 1 ;;
+  esac
+
+  # The manifest is not there, or the whole repository is invisible to this
+  # token: only its tag listing tells those apart.
+  ghcr_request "tag listing" "$auth" "$tmp/tags" "https://ghcr.io/v2/${repository}/tags/list?n=1"
+  case "$GHCR_STATUS" in
+    200)
+      # shellcheck disable=SC2016 # $repo is a jq variable, bound with --arg
+      if ! ghcr_json_is "$tmp/tags" '.name == $repo' --arg repo "$repository"; then
+        echo "::error::GHCR tag listing for ${repository} answered HTTP 200 for a different or malformed repository name; refusing to read the manifest 404 as absence." >&2
+        return 1
+      fi
+      echo absent ;;
+    404)
+      if ghcr_json_is "$tmp/tags" '.errors[0].code == "NAME_UNKNOWN"'; then
+        echo "::error::ghcr.io/${repository} is not visible to the job token (tag listing: HTTP 404 NAME_UNKNOWN), so the manifest 404 for ${tag} cannot be read as absence. If the package exists, grant this repository read and write access to it. If it does not exist yet, bootstrap it deliberately: an operator with write:packages runs 'helm push <release asset> oci://ghcr.io/${repository%/*}' once, links the package to this repository with read and write access, then re-runs this job." >&2
+        return 1
+      fi
+      ghcr_fail "tag listing for ${repository}" "$tmp/tags"
+      return 1 ;;
+    *)
+      ghcr_fail "tag listing for ${repository}" "$tmp/tags"
       return 1 ;;
   esac
 )
