@@ -114,3 +114,27 @@ func TestNormalizeBase64TextSources_UnmatchedPayloadNotCopied(t *testing.T) {
 		t.Fatalf("normalization allocated %d bytes for a %d-byte body with no eligible documents", allocated, len(body))
 	}
 }
+
+// TestNormalizeBase64TextSources_NormalizedTextNotCopied: a text document already in
+// Anthropic's text source shape next to large media is not eligible either, so the
+// request is returned without copying its blocks.
+func TestNormalizeBase64TextSources_NormalizedTextNotCopied(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xff}, 1<<20))
+	body := []byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":[` +
+		`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + payload + `"}},` +
+		`{"type":"document","source":{"type":"text","media_type":"text/plain","data":"notes"}},` +
+		`{"type":"text","text":"describe"}]}]}`)
+	var out []byte
+	allocated := memtest.AllocBytesPerOp(func() {
+		var err error
+		if out, err = normalizeBase64TextSources(body); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if &out[0] != &body[0] {
+		t.Fatalf("unchanged body must be returned as-is")
+	}
+	if allocated > int64(len(body))/8 {
+		t.Fatalf("normalization allocated %d bytes for a %d-byte body with no eligible documents", allocated, len(body))
+	}
+}
