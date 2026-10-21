@@ -218,6 +218,13 @@ func (h *WSRealtimeHandler) handleUpgrade(ctx *fasthttp.RequestCtx) {
 	if routedModel != "" {
 		model = routedModel
 	}
+	// Capture governance/routing values for the session: those the transport middleware set
+	// (TransportInterceptorMiddleware copies BifrostContext user values to individual fasthttp
+	// UserValue slots after HTTPTransportPreHook runs), merged with what the pre-request hooks
+	// added on preReqCtx (key selectors, routing attribution). They are snapshotted now because
+	// the fasthttp RequestCtx is recycled after the handler returns — the WebSocket session
+	// outlives it.
+	middlewareContextValues := snapshotRealtimeMiddlewareValuesWithContext(ctx, preReqCtx)
 	preReqCancel()
 
 	provider := h.client.GetProviderByKey(providerKey)
@@ -235,13 +242,6 @@ func (h *WSRealtimeHandler) handleUpgrade(ctx *fasthttp.RequestCtx) {
 		}
 		return
 	}
-
-	// Capture governance/routing values set by the transport middleware.
-	// TransportInterceptorMiddleware copies BifrostContext user values to individual
-	// fasthttp UserValue slots after HTTPTransportPreHook runs. We snapshot them now
-	// because the fasthttp RequestCtx is recycled after the handler returns — the
-	// WebSocket session outlives it.
-	middlewareContextValues := snapshotRealtimeMiddlewareValues(ctx)
 
 	upgrader := h.websocketUpgrader(rtProvider.RealtimeWebSocketSubprotocol())
 	err = upgrader.Upgrade(ctx, func(conn *ws.Conn) {

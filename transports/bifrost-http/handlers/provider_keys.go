@@ -501,6 +501,14 @@ func decodeKeyUpdate(body []byte, oldRawKey schemas.Key) (schemas.Key, error) {
 	if err := sonic.Unmarshal(body, &updateKey); err != nil {
 		return schemas.Key{}, err
 	}
+	// The decoder matches field names ASCII case-insensitively ("Enabled"
+	// sets enabled), so presence is judged the same way: an exact-name check
+	// would replace a decoded case-variant field with the stored value.
+	present := make(map[string]bool)
+	gjson.ParseBytes(body).ForEach(func(key, _ gjson.Result) bool {
+		present[asciiLower(key.String())] = true
+		return true
+	})
 	for field, keep := range map[string]func(){
 		"value":                     func() { updateKey.Value = oldRawKey.Value },
 		"models":                    func() { updateKey.Models = oldRawKey.Models },
@@ -525,11 +533,23 @@ func decodeKeyUpdate(body []byte, oldRawKey schemas.Key) (schemas.Key, error) {
 		"use_openai_endpoints":      func() { updateKey.UseOpenAIEndpoints = oldRawKey.UseOpenAIEndpoints },
 		"description":               func() { updateKey.Description = oldRawKey.Description },
 	} {
-		if !gjson.GetBytes(body, field).Exists() {
+		if !present[field] {
 			keep()
 		}
 	}
 	return updateKey, nil
+}
+
+// asciiLower lowercases ASCII letters only, matching the decoder's field-name
+// folding: a non-ASCII rune that Unicode would fold to a letter does not match.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
 }
 
 // mergeUpdatedKey merges an updated key with the old raw version, preserving

@@ -453,7 +453,7 @@ func (m *liveMeter) closeLaneLocked(lane *liveLane) {
 			postCtx.SetValue(schemas.BifrostContextKeyLiveDelegationStartMs, lane.delegatedMs)
 		}
 		lane.usage, lane.outputs, lane.responseID, lane.delegation, lane.delegatedMs = nil, nil, "", "", 0
-		lane.status, lane.responseErr = nil, nil
+		lane.status, lane.responseErr, lane.serviceTier = nil, nil, nil
 	} else {
 		seconds := lane.seconds
 		resp.Usage = &schemas.ResponsesResponseUsage{AudioSeconds: &seconds}

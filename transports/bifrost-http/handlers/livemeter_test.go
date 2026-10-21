@@ -275,6 +275,33 @@ func TestLiveMeterBillsEachBackendResponseOnce(t *testing.T) {
 	assert.Len(t, posts, 1)
 }
 
+// TestLiveMeterDoesNotCarryServiceTierToTheNextResponse pins that a settled
+// response's service tier does not price the next one: a response that reports
+// no tier bills at the default rates, not the previous response's priority.
+func TestLiveMeterDoesNotCarryServiceTierToTheNextResponse(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeLiveRunner{}
+	meter := newTestLiveMeter(runner)
+	require.Nil(t, meter.admit("gpt-live-1", "gpt-5.6-luna"))
+
+	priority := schemas.BifrostServiceTierPriority
+	require.Nil(t, meter.onBackendResponse(&schemas.BifrostResponsesResponse{
+		ID: new("resp_1"), Model: "gpt-5.6-luna", ServiceTier: &priority,
+		Usage: &schemas.ResponsesResponseUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12},
+	}, "", 0))
+	require.Nil(t, meter.onBackendResponse(&schemas.BifrostResponsesResponse{
+		ID: new("resp_2"), Model: "gpt-5.6-luna",
+		Usage: &schemas.ResponsesResponseUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12},
+	}, "", 0))
+
+	_, posts, _ := runner.snapshot()
+	require.Len(t, posts, 2)
+	require.NotNil(t, posts[0].resp.ServiceTier)
+	assert.Equal(t, schemas.BifrostServiceTierPriority, *posts[0].resp.ServiceTier)
+	assert.Nil(t, posts[1].resp.ServiceTier, "a response without a tier must not inherit the previous one's")
+}
+
 func TestLiveMeterSumsBackendUsageWhileRefused(t *testing.T) {
 	t.Parallel()
 

@@ -118,6 +118,46 @@ func TestSDKFidelityTypesafeSystemOneRouteRelaysNativeBodies(t *testing.T) {
 	}
 }
 
+// TestTypesafeSystemOneRouteRendersPostHookAnswerChanges pins that a retained native
+// body is relayed only while it still says what the processed response says: an
+// LLM post-hook that changes a normalized answer must reach the client, so the
+// route renders the processed answers instead of the stale native body.
+func TestTypesafeSystemOneRouteRendersPostHookAnswerChanges(t *testing.T) {
+	var route *RouteConfig
+	for _, r := range CreateTypesafeRouteConfigs("/typesafe") {
+		if r.Path == "/typesafe/v1/systemone" {
+			rc := r
+			route = &rc
+		}
+	}
+	if route == nil {
+		t.Fatal("systemone route not registered")
+	}
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	native := `{"model":"jev-1.13.0","answers":{"q":{"type":"noul","noul":0.99}},"usage":{"input_tokens":3,"output_tokens":0}}`
+	resp := &schemas.BifrostDecisionResponse{
+		Model:          "jev-1.13.0",
+		Answers:        []schemas.DecisionAnswer{{Type: schemas.DecisionTypePredicate, Name: schemas.Ptr("q"), Probability: schemas.Ptr(0.01)}},
+		NativeResponse: json.RawMessage(native),
+	}
+	resp.ExtraFields.Provider = schemas.Typesafe
+
+	out, err := route.DecisionResponseConverter(ctx, resp)
+	if err != nil {
+		t.Fatalf("convert: %v", err)
+	}
+	if got, ok := out.(json.RawMessage); ok {
+		t.Fatalf("a post-hook's answer change was overridden by the retained native body: %s", got)
+	}
+	rendered, ok := out.(*typesafe.TypesafeDecisionResponse)
+	if !ok {
+		t.Fatalf("expected a rendered native response, got %T", out)
+	}
+	if answer := rendered.Answers["q"]; answer.Noul == nil || *answer.Noul != 0.01 {
+		t.Errorf("rendered answer = %+v, want the post-hook's 0.01", answer)
+	}
+}
+
 // systemOneMultipart builds a multipart systemone body from parts in order: each
 // part is a name, an optional filename (a file part), an optional content type,
 // and its data.

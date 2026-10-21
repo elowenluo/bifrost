@@ -306,6 +306,24 @@ func TestDecodeKeyUpdate_PartialBody(t *testing.T) {
 			t.Fatalf("sgl_key_config: got %+v, want nil", merged.SGLKeyConfig)
 		}
 	})
+
+	// The decoder matches field names case-insensitively, so presence must too:
+	// a field it decoded must not then be replaced by the stored value.
+	t.Run("case-variant field names apply", func(t *testing.T) {
+		merged := update(t, `{"Value":"sk-rotated-value-0123456789","Enabled":true,"WEIGHT":3}`)
+		if merged.Value.GetValue() != "sk-rotated-value-0123456789" {
+			t.Fatalf("value: got %q, want the rotated value", merged.Value.GetValue())
+		}
+		if merged.Enabled == nil || !*merged.Enabled {
+			t.Fatalf("enabled: got %v, want true", merged.Enabled)
+		}
+		if merged.Weight != 3 {
+			t.Fatalf("weight: got %v, want 3", merged.Weight)
+		}
+		if merged.Description != "primary" {
+			t.Fatalf("description: got %q, want the stored value", merged.Description)
+		}
+	})
 }
 
 func TestMergeUpdatedKey_ProviderConfigMaskedPreviews(t *testing.T) {

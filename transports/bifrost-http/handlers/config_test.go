@@ -978,6 +978,45 @@ func TestUpdateConfig_RejectsFileURLsOverAPI(t *testing.T) {
 	}
 }
 
+// TestUpdateConfig_KeepsUnchangedProvisionedFileURLs pins that the file:// rule
+// applies to URLs a request introduces, not to ones config.json provisioned: the
+// dashboard resubmits every catalog URL on an unrelated settings save, and an
+// unchanged stored file URL must not fail that save.
+func TestUpdateConfig_KeepsUnchangedProvisionedFileURLs(t *testing.T) {
+	SetLogger(&mockLogger{})
+	store := newRealOAuth2Store(t)
+	cfg := newTestOAuth2Config(store, configtables.MCPServerAuthModeHeaders, false)
+	h := &ConfigHandler{store: cfg, configManager: stubConfigManager{}}
+	const pricingURL = "file:///opt/bifrost/pricing.json"
+	const parametersURL = "file:///opt/bifrost/model-parameters.json"
+	const libraryURL = "file:///opt/bifrost/mcp-library.json"
+	require.NoError(t, store.UpdateFrameworkConfig(bgCtx(), &configtables.TableFrameworkConfig{
+		PricingURL:             bifrost.Ptr(pricingURL),
+		PricingSyncInterval:    bifrost.Ptr(int64(3600)),
+		ModelParametersURL:     bifrost.Ptr(parametersURL),
+		MCPLibraryURL:          bifrost.Ptr(libraryURL),
+		MCPLibrarySyncInterval: bifrost.Ptr(int64(3600)),
+	}))
+
+	ctx := putConfigCtx(`{"client_config":{"log_retention_days":7},"framework_config":{"pricing_url":"` + pricingURL +
+		`","model_parameters_url":"` + parametersURL + `","mcp_library_url":"` + libraryURL + `","pricing_sync_interval":7200}}`)
+	h.updateConfig(ctx)
+	require.Equal(t, fasthttp.StatusOK, ctx.Response.StatusCode(), string(ctx.Response.Body()))
+
+	persisted, err := store.GetFrameworkConfig(bgCtx())
+	require.NoError(t, err)
+	require.NotNil(t, persisted)
+	assert.Equal(t, pricingURL, *persisted.PricingURL)
+	assert.Equal(t, parametersURL, *persisted.ModelParametersURL)
+	assert.Equal(t, libraryURL, *persisted.MCPLibraryURL)
+	assert.Equal(t, int64(7200), *persisted.PricingSyncInterval, "the unrelated change is saved")
+
+	// A different file URL is still a new one, and still refused.
+	ctx = putConfigCtx(`{"client_config":{"log_retention_days":7},"framework_config":{"pricing_url":"file:///etc/hostname"}}`)
+	h.updateConfig(ctx)
+	require.Equal(t, fasthttp.StatusBadRequest, ctx.Response.StatusCode(), string(ctx.Response.Body()))
+}
+
 // TestUpdateProxyConfig_RejectsLinkLocalURL pins that the global proxy URL is held to the
 // same destination rule as a provider base URL. Every proxied request carries its provider
 // credentials to this host, so an address that can never be a legitimate egress proxy

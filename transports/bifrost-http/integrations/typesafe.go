@@ -1,7 +1,9 @@
 package integrations
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -66,7 +68,7 @@ func CreateTypesafeRouteConfigs(pathPrefix string) []RouteConfig {
 				if resp.ExtraFields.RawResponse != nil {
 					return resp.ExtraFields.RawResponse, nil
 				}
-				if len(resp.NativeResponse) > 0 {
+				if len(resp.NativeResponse) > 0 && typesafeNativeAnswersCurrent(resp) {
 					return resp.NativeResponse, nil
 				}
 			}
@@ -109,6 +111,27 @@ func CreateTypesafeRouteConfigs(pathPrefix string) []RouteConfig {
 	})
 
 	return routes
+}
+
+// typesafeNativeAnswersCurrent reports whether the retained native body still carries
+// the answers the processed response does. An LLM post-hook can change a normalized
+// answer after the provider kept the body; relaying the body then would discard that
+// change, so the route renders the processed answers instead. Fields the native body
+// has beyond the normalized model do not take part in the comparison.
+func typesafeNativeAnswersCurrent(resp *schemas.BifrostDecisionResponse) bool {
+	var native typesafe.TypesafeDecisionResponse
+	if err := json.Unmarshal(resp.NativeResponse, &native); err != nil {
+		return false
+	}
+	retained, err := json.Marshal(native.Answers)
+	if err != nil {
+		return false
+	}
+	processed, err := json.Marshal(typesafe.ToTypesafeAnswers(resp.Answers))
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(retained, processed)
 }
 
 // parseTypesafeSystemOneRequest reads a systemone body: JSON, or multipart with the
