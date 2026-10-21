@@ -326,13 +326,16 @@ if git rev-parse --verify "$TRANSPORT_TAG" >/dev/null 2>&1; then
   GIT_TAG_EXISTS="true"
 fi
 
-# Check if Docker tag exists on GHCR
+# Check which Docker destinations already exist on GHCR
 #
-# docker-needs-release=true is what lets this pipeline push v<version> to ghcr.io, and
-# pushing a tag that already exists replaces a published image with a rebuild. So
-# "absent" has to be a definite answer from the registry, never what is left over when a
-# lookup fails. ghcr.io/txehq/bifrost is private: an anonymous token request for it is
-# refused with 401, which an unauthenticated probe used to read as "absent" on every run.
+# One release publishes six immutable tags: v<version> and v<version>-ubi9 (multi-arch
+# manifests) and the four architecture images under them. A run can fail part-way, after
+# some are pushed and before the rest, so each is checked on its own and only an absent
+# one is published - pushing a tag that already exists replaces a published image with a
+# rebuild. "Absent" therefore has to be a definite answer from the registry, never what is
+# left over when a lookup fails. ghcr.io/txehq/bifrost is private: an anonymous token
+# request for it is refused with 401, which an unauthenticated probe used to read as
+# "absent" on every run (release run 34764966937 rebuilt and re-pushed all of v2.1.1).
 #
 # Measured against ghcr.io (2026-10-22, TXE-4819) with an authorized token: an existing
 # tag answers 200 and a missing one 404 MANIFEST_UNKNOWN - but so does any tag in a
@@ -367,16 +370,32 @@ ghcr_request() {
   done
 }
 
-# The registry error code from a response body (e.g. MANIFEST_UNKNOWN), or nothing.
-ghcr_error_code() {
-  jq -r '.errors[0].code // empty' "$1" 2>/dev/null | tr -cd 'A-Z_' | cut -c1-40 || true
+# ghcr_json_is <file> <jq condition> [jq args...]: succeeds only when the file holds exactly
+# one JSON document and the condition is true of it. Safety decisions compare the raw
+# values inside jq; nothing is cleaned up in the shell first, and a parse failure anywhere
+# in the body - trailing bytes, a second document - is a failure, not a partial answer.
+ghcr_json_is() {
+  local file="$1" condition="$2"
+  shift 2
+  jq -e -s "$@" "length == 1 and (.[0] | (${condition}))" "$file" >/dev/null 2>&1
+}
+
+# ghcr_json_string <file> <jq path>: prints the string at the path when the file holds
+# exactly one JSON document and the value there is a string; fails otherwise.
+ghcr_json_string() {
+  jq -e -r -s "if length == 1 and (.[0] | ${2} | type) == \"string\" then .[0] | ${2} else error(\"no\") end" "$1" 2>/dev/null
+}
+
+# For log messages only: a registry error code reduced to [A-Z_], never used in a decision.
+ghcr_error_code_for_log() {
+  { ghcr_json_string "$1" '.errors[0].code' || true; } | tr -cd 'A-Z_' | cut -c1-40
 }
 
 # ghcr_fail <what> <body file>: explain an answer that is not definitive. The response
 # body is never printed - only its registry error code - so nothing secret reaches the log.
 ghcr_fail() {
   local what="$1" code
-  code=$(ghcr_error_code "$2")
+  code=$(ghcr_error_code_for_log "$2")
   local detail="HTTP ${GHCR_STATUS}${code:+ ${code}}"
   case "$GHCR_STATUS" in
     000)
@@ -393,18 +412,19 @@ ghcr_fail() {
   return 1
 }
 
-# ghcr_tag_state <owner/name> <tag>: prints "present" or "absent" and returns 0 only on a
-# definitive registry answer; otherwise explains on stderr and returns 1. The body runs in
-# a subshell so its temporary directory is removed however it returns.
-ghcr_tag_state() (
+# ghcr_tag_states <owner/name> <tag>...: prints "<tag> present" or "<tag> absent" for every
+# tag and returns 0 only when the registry answered each one definitively; otherwise
+# explains on stderr and returns 1. The body runs in a subshell so its temporary
+# directory is removed however it returns.
+ghcr_tag_states() (
   repository="$1"
-  tag="$2"
+  shift
   if [[ ! "$repository" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
     echo "::error::refusing malformed GHCR repository name: '${repository}'" >&2
     return 1
   fi
   if [ -z "${GITHUB_TOKEN:-}" ]; then
-    echo "::error::GITHUB_TOKEN is not set, so ghcr.io/${repository} cannot be queried and the state of tag ${tag} is unknown. The release pipeline passes the job token; for a local run, export a token with read:packages as GITHUB_TOKEN." >&2
+    echo "::error::GITHUB_TOKEN is not set, so ghcr.io/${repository} cannot be queried and the state of its tags is unknown. The release pipeline passes the job token; for a local run, export a token with read:packages as GITHUB_TOKEN." >&2
     return 1
   fi
   # A GitHub token is [A-Za-z0-9_]; anything else could break out of the curl config line.
@@ -422,7 +442,7 @@ ghcr_tag_state() (
     ghcr_fail "token exchange for ${repository}" "$tmp/token"
     return 1
   fi
-  bearer=$(jq -r '.token // .access_token // empty' "$tmp/token" 2>/dev/null) || bearer=""
+  bearer=$(ghcr_json_string "$tmp/token" '(.token // .access_token)') || bearer=""
   # RFC 6750 b64token, which also keeps the value inert inside the quoted config line.
   if [[ ! "$bearer" =~ ^[A-Za-z0-9._~+/=-]+$ ]]; then
     echo "::error::GHCR token exchange for ${repository} answered HTTP 200 with no usable token." >&2
@@ -430,63 +450,93 @@ ghcr_tag_state() (
   fi
   auth="header = \"Authorization: Bearer ${bearer}\""
 
-  ghcr_request "manifest lookup" "$auth" "$tmp/manifest" \
-    "https://ghcr.io/v2/${repository}/manifests/${tag}" -H "Accept: ${GHCR_ACCEPT}"
-  case "$GHCR_STATUS" in
-    200)
-      if ! jq -e '.schemaVersion' "$tmp/manifest" >/dev/null 2>&1; then
-        echo "::error::GHCR manifest lookup for ${repository}:${tag} answered HTTP 200 without a manifest body; refusing to guess the tag's state." >&2
-        return 1
-      fi
-      echo "present"
-      return 0 ;;
-    404)
-      if [ "$(ghcr_error_code "$tmp/manifest")" != "MANIFEST_UNKNOWN" ]; then
+  states=""
+  any_absent="false"
+  for tag in "$@"; do
+    ghcr_request "manifest lookup" "$auth" "$tmp/manifest" \
+      "https://ghcr.io/v2/${repository}/manifests/${tag}" -H "Accept: ${GHCR_ACCEPT}"
+    case "$GHCR_STATUS" in
+      200)
+        if ! ghcr_json_is "$tmp/manifest" '.schemaVersion == 2'; then
+          echo "::error::GHCR manifest lookup for ${repository}:${tag} answered HTTP 200 without a manifest body; refusing to guess the tag's state." >&2
+          return 1
+        fi
+        states+="${tag} present"$'\n' ;;
+      404)
+        if ! ghcr_json_is "$tmp/manifest" '.errors[0].code == "MANIFEST_UNKNOWN"'; then
+          ghcr_fail "manifest lookup for ${repository}:${tag}" "$tmp/manifest"
+          return 1
+        fi
+        states+="${tag} absent"$'\n'
+        any_absent="true" ;;
+      *)
         ghcr_fail "manifest lookup for ${repository}:${tag}" "$tmp/manifest"
-        return 1
-      fi ;;
-    *)
-      ghcr_fail "manifest lookup for ${repository}:${tag}" "$tmp/manifest"
-      return 1 ;;
-  esac
+        return 1 ;;
+    esac
+  done
 
-  ghcr_request "tag listing" "$auth" "$tmp/tags" "https://ghcr.io/v2/${repository}/tags/list?n=1"
-  case "$GHCR_STATUS" in
-    200)
-      listed=$(jq -r '.name // empty' "$tmp/tags" 2>/dev/null | tr -cd 'A-Za-z0-9._/-') || listed=""
-      if [ "$listed" != "$repository" ]; then
-        echo "::error::GHCR tag listing for ${repository} answered HTTP 200 for '${listed}'; refusing to read the manifest 404 for ${tag} as absence." >&2
-        return 1
-      fi
-      echo "absent"
-      return 0 ;;
-    404)
-      if [ "$(ghcr_error_code "$tmp/tags")" = "NAME_UNKNOWN" ]; then
-        echo "::error::ghcr.io/${repository} is not visible to the job token (tag listing: HTTP 404 NAME_UNKNOWN), so the manifest 404 for ${tag} cannot be trusted as absence. Grant this repository read access to the package; if the package genuinely does not exist yet, publish its first image deliberately rather than through this automatic path." >&2
-        return 1
-      fi
-      ghcr_fail "tag listing for ${repository}" "$tmp/tags"
-      return 1 ;;
-    *)
-      ghcr_fail "tag listing for ${repository}" "$tmp/tags"
-      return 1 ;;
-  esac
+  if [ "$any_absent" = "true" ]; then
+    ghcr_request "tag listing" "$auth" "$tmp/tags" "https://ghcr.io/v2/${repository}/tags/list?n=1"
+    case "$GHCR_STATUS" in
+      200)
+        if ! ghcr_json_is "$tmp/tags" '.name == $repo' --arg repo "$repository"; then
+          echo "::error::GHCR tag listing for ${repository} answered HTTP 200 for a different or malformed repository name; refusing to read the manifest 404s as absence." >&2
+          return 1
+        fi ;;
+      404)
+        if ghcr_json_is "$tmp/tags" '.errors[0].code == "NAME_UNKNOWN"'; then
+          echo "::error::ghcr.io/${repository} is not visible to the job token (tag listing: HTTP 404 NAME_UNKNOWN), so its manifest 404s cannot be trusted as absence. Grant this repository read access to the package; if the package genuinely does not exist yet, publish its first image deliberately rather than through this automatic path." >&2
+          return 1
+        fi
+        ghcr_fail "tag listing for ${repository}" "$tmp/tags"
+        return 1 ;;
+      *)
+        ghcr_fail "tag listing for ${repository}" "$tmp/tags"
+        return 1 ;;
+    esac
+  fi
+  printf '%s' "$states"
 )
 
 GHCR_OWNER="${GITHUB_REPOSITORY_OWNER:-capsohq}"
 GHCR_REPOSITORY="${GHCR_OWNER}/bifrost"
-echo "   🐳 Checking GHCR for tag v${TRANSPORT_VERSION} in ${GHCR_REPOSITORY}..."
-if ! GHCR_TAG_STATE=$(ghcr_tag_state "$GHCR_REPOSITORY" "v${TRANSPORT_VERSION}"); then
-  echo "   ❌ Could not establish whether Docker tag v${TRANSPORT_VERSION} exists on GHCR; stopping rather than risk overwriting a published image" >&2
+# Output name -> tag suffix, for every destination the release publishes.
+DOCKER_DESTINATIONS=(
+  "version:"
+  "amd64:-amd64"
+  "arm64:-arm64"
+  "ubi9:-ubi9"
+  "ubi9-amd64:-ubi9-amd64"
+  "ubi9-arm64:-ubi9-arm64"
+)
+DOCKER_TAGS=()
+for _dest in "${DOCKER_DESTINATIONS[@]}"; do
+  DOCKER_TAGS+=("v${TRANSPORT_VERSION}${_dest#*:}")
+done
+echo "   🐳 Checking GHCR for ${DOCKER_TAGS[*]} in ${GHCR_REPOSITORY}..."
+if ! GHCR_TAG_STATES=$(ghcr_tag_states "$GHCR_REPOSITORY" "${DOCKER_TAGS[@]}"); then
+  echo "   ❌ Could not establish which Docker tags for v${TRANSPORT_VERSION} exist on GHCR; stopping rather than risk overwriting a published image" >&2
   exit 1
 fi
 
-if [ "$GHCR_TAG_STATE" = "present" ]; then
-  echo "   ⏭️ Docker tag v${TRANSPORT_VERSION} already exists on GHCR"
-  DOCKER_TAG_EXISTS="true"
-else
-  echo "   ❌ Docker tag v${TRANSPORT_VERSION} confirmed absent on GHCR"
-fi
+# docker-publish-<name>=true only for a destination the registry confirmed absent, held in
+# DOCKER_PUBLISH_<name with - as _>.
+DOCKER_TAG_EXISTS="true"
+for _dest in "${DOCKER_DESTINATIONS[@]}"; do
+  _name="${_dest%%:*}"
+  _tag="v${TRANSPORT_VERSION}${_dest#*:}"
+  if grep -qxF "${_tag} present" <<<"$GHCR_TAG_STATES"; then
+    echo "   ⏭️ Docker tag ${_tag} already exists on GHCR"
+    printf -v "DOCKER_PUBLISH_${_name//-/_}" '%s' "false"
+  elif grep -qxF "${_tag} absent" <<<"$GHCR_TAG_STATES"; then
+    echo "   ❌ Docker tag ${_tag} confirmed absent on GHCR"
+    printf -v "DOCKER_PUBLISH_${_name//-/_}" '%s' "true"
+    DOCKER_TAG_EXISTS="false"
+  else
+    echo "::error::GHCR probe returned no state for ${_tag}" >&2
+    exit 1
+  fi
+done
 
 # Determine if release is needed
 if [ "$GIT_TAG_EXISTS" = "true" ] && [ "$DOCKER_TAG_EXISTS" = "true" ]; then
@@ -607,7 +657,7 @@ fi
   
 # Check if Docker image needs to be built (independent of transport release)
 if [ "$DOCKER_TAG_EXISTS" = "false" ]; then
-  echo "   🐳 Docker image missing - docker release needed"
+  echo "   🐳 Docker destination missing - docker release needed for the absent tags only"
   DOCKER_NEEDS_RELEASE="true"
 fi
 
@@ -657,6 +707,11 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
     echo "plugins-need-release=$PLUGINS_NEED_RELEASE"
     echo "bifrost-http-needs-release=$BIFROST_HTTP_NEEDS_RELEASE"
     echo "docker-needs-release=$DOCKER_NEEDS_RELEASE"
+    for _dest in "${DOCKER_DESTINATIONS[@]}"; do
+      _name="${_dest%%:*}"
+      _var="DOCKER_PUBLISH_${_name//-/_}"
+      echo "docker-publish-${_name}=${!_var}"
+    done
     echo "changed-plugins=$CHANGED_PLUGINS_JSON"
     echo "core-version=$CORE_VERSION"
     echo "framework-version=$FRAMEWORK_VERSION"

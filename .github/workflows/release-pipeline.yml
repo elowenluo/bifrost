@@ -110,6 +110,12 @@ jobs:
       plugins-need-release: ${{ steps.detect.outputs.plugins-need-release }}
       bifrost-http-needs-release: ${{ steps.detect.outputs.bifrost-http-needs-release }}
       docker-needs-release: ${{ steps.detect.outputs.docker-needs-release }}
+      docker-publish-version: ${{ steps.detect.outputs.docker-publish-version }}
+      docker-publish-amd64: ${{ steps.detect.outputs.docker-publish-amd64 }}
+      docker-publish-arm64: ${{ steps.detect.outputs.docker-publish-arm64 }}
+      docker-publish-ubi9: ${{ steps.detect.outputs.docker-publish-ubi9 }}
+      docker-publish-ubi9-amd64: ${{ steps.detect.outputs.docker-publish-ubi9-amd64 }}
+      docker-publish-ubi9-arm64: ${{ steps.detect.outputs.docker-publish-ubi9-arm64 }}
       changed-plugins: ${{ steps.detect.outputs.changed-plugins }}
       core-version: ${{ steps.detect.outputs.core-version }}
       framework-version: ${{ steps.detect.outputs.framework-version }}
@@ -2979,6 +2985,8 @@ jobs:
           echo "ghcr-tag=${GHCR_TAG}" >> $GITHUB_OUTPUT
 
       - name: Build and push AMD64 Docker image
+        # Pushing over a published tag replaces it with a rebuild; only an absent one is built.
+        if: needs.detect-changes.outputs.docker-publish-amd64 == 'true'
         uses: step-security/docker-build-push-action@846549baaf047e867d038826129a64d81df0f704 # v7.1.0
         with:
           context: .
@@ -2993,6 +3001,7 @@ jobs:
       # by copying it with buildx imagetools (no rebuild). Best-effort: a ghcr.io
       # failure must not fail the Docker Hub release.
       - name: Mirror AMD64 image to GitHub Container Registry
+        if: needs.detect-changes.outputs.docker-publish-amd64 == 'true'
         continue-on-error: true
         run: |
           docker buildx imagetools create \
@@ -3099,6 +3108,8 @@ jobs:
           echo "ghcr-tag=${GHCR_TAG}" >> $GITHUB_OUTPUT
 
       - name: Build and push ARM64 Docker image
+        # Pushing over a published tag replaces it with a rebuild; only an absent one is built.
+        if: needs.detect-changes.outputs.docker-publish-arm64 == 'true'
         uses: step-security/docker-build-push-action@846549baaf047e867d038826129a64d81df0f704 # v7.1.0
         with:
           context: .
@@ -3113,6 +3124,7 @@ jobs:
       # by copying it with buildx imagetools (no rebuild). Best-effort: a ghcr.io
       # failure must not fail the Docker Hub release.
       - name: Mirror ARM64 image to GitHub Container Registry
+        if: needs.detect-changes.outputs.docker-publish-arm64 == 'true'
         continue-on-error: true
         run: |
           docker buildx imagetools create \
@@ -3163,6 +3175,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create and push multi-arch manifest
+        env:
+          PUBLISH_VERSION_TAG: ${{ needs.detect-changes.outputs.docker-publish-version }}
         run: |
           ./.github/workflows/scripts/create-docker-manifest.sh "${{ needs.detect-changes.outputs.transport-version }}"
 
@@ -3268,6 +3282,8 @@ jobs:
           echo "ghcr-tag=${GHCR_TAG}" >> $GITHUB_OUTPUT
 
       - name: Build and push UBI9 AMD64 Docker image
+        # Pushing over a published tag replaces it with a rebuild; only an absent one is built.
+        if: needs.detect-changes.outputs.docker-publish-ubi9-amd64 == 'true'
         uses: step-security/docker-build-push-action@846549baaf047e867d038826129a64d81df0f704 # v7.1.0
         with:
           context: .
@@ -3284,6 +3300,7 @@ jobs:
       # by copying it with buildx imagetools (no rebuild). Best-effort: a ghcr.io
       # failure must not fail the Docker Hub release.
       - name: Mirror UBI9 AMD64 image to GitHub Container Registry
+        if: needs.detect-changes.outputs.docker-publish-ubi9-amd64 == 'true'
         continue-on-error: true
         run: |
           docker buildx imagetools create \
@@ -3392,6 +3409,8 @@ jobs:
           echo "ghcr-tag=${GHCR_TAG}" >> $GITHUB_OUTPUT
 
       - name: Build and push UBI9 ARM64 Docker image
+        # Pushing over a published tag replaces it with a rebuild; only an absent one is built.
+        if: needs.detect-changes.outputs.docker-publish-ubi9-arm64 == 'true'
         uses: step-security/docker-build-push-action@846549baaf047e867d038826129a64d81df0f704 # v7.1.0
         with:
           context: .
@@ -3408,6 +3427,7 @@ jobs:
       # by copying it with buildx imagetools (no rebuild). Best-effort: a ghcr.io
       # failure must not fail the Docker Hub release.
       - name: Mirror UBI9 ARM64 image to GitHub Container Registry
+        if: needs.detect-changes.outputs.docker-publish-ubi9-arm64 == 'true'
         continue-on-error: true
         run: |
           docker buildx imagetools create \
@@ -3458,6 +3478,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create and push UBI9 multi-arch manifest
+        env:
+          PUBLISH_VERSION_TAG: ${{ needs.detect-changes.outputs.docker-publish-ubi9 }}
         run: |
           ./.github/workflows/scripts/create-docker-manifest-ubi9.sh "${{ needs.detect-changes.outputs.transport-version }}"
 

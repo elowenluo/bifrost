@@ -3,12 +3,14 @@ set -uo pipefail
 
 # Tests the GHCR tag probe in detect-all-changes.sh.
 #
-# That probe decides docker-needs-release, and docker-needs-release=true is what lets the
-# release pipeline push v<transport-version> to ghcr.io. Pushing a tag that already exists
-# overwrites a published image with a rebuild, so "absent" has to be a definite answer from
-# the registry, never the leftover when a lookup fails. ghcr.io/txehq/bifrost is private: an
-# anonymous token request for it is refused with 401, which is exactly the failure an
-# unauthenticated probe used to read as "absent".
+# That probe decides docker-needs-release and the per-destination docker-publish-* flags,
+# and a "true" flag is what lets the release pipeline push that tag to ghcr.io. Pushing a
+# tag that already exists overwrites a published image with a rebuild, so "absent" has to
+# be a definite answer from the registry, never the leftover when a lookup fails - and it
+# has to be decided per tag, because a failed run can leave some of a release's six tags
+# published and the rest not. ghcr.io/txehq/bifrost is private: an anonymous token request
+# for it is refused with 401, which is exactly the failure an unauthenticated probe used to
+# read as "absent".
 #
 # This runs the real script end to end, with a fake curl (and a no-op sleep) first on PATH,
 # so no request leaves the machine and no credential is real. Each scenario scripts the
@@ -28,6 +30,8 @@ for tool in git jq; do
   fi
 done
 
+V="v$(cat "$REPO_ROOT/transports/version")"
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 FAKE_BIN="$WORK/bin"
@@ -38,8 +42,9 @@ mkdir -p "$FAKE_BIN"
 JOB_TOKEN="ghs_SENTINELjobtoken0123456789"
 BEARER="SENTINELbearer456+/="
 
-# The fake curl. Responses for each endpoint come from $FAKE_DIR/<kind>, one line per
-# request, "<http status> <curl exit code> <body>"; the last line repeats once exhausted.
+# The fake curl. Responses come from $FAKE_DIR/<key>, one line per request,
+# "<http status> <curl exit code> <body>"; the last line repeats once exhausted. The key is
+# "token", "tags", or for a manifest "manifest:<tag>" when that file exists, else "manifest".
 cat > "$FAKE_BIN/curl" <<'FAKE'
 #!/usr/bin/env bash
 out="" fmt="" url="" fail=0
@@ -59,17 +64,19 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$url" in
-  "https://ghcr.io/token?"*) kind=token ;;
-  "https://ghcr.io/v2/"*"/manifests/"*) kind=manifest ;;
-  "https://ghcr.io/v2/"*"/tags/list"*) kind=tags ;;
+  "https://ghcr.io/token?"*) kind=token key=token ;;
+  "https://ghcr.io/v2/"*"/manifests/"*)
+    kind=manifest key=manifest
+    [ -f "$FAKE_DIR/manifest:${url##*/manifests/}" ] && key="manifest:${url##*/manifests/}" ;;
+  "https://ghcr.io/v2/"*"/tags/list"*) kind=tags key=tags ;;
   *) echo "fake curl: unexpected URL: $url" >&2; exit 99 ;;
 esac
 echo "$kind $url" >> "$FAKE_DIR/calls.log"
-n=$(( $(cat "$FAKE_DIR/$kind.n" 2>/dev/null || echo 0) + 1 ))
-echo "$n" > "$FAKE_DIR/$kind.n"
-total=$(wc -l < "$FAKE_DIR/$kind")
+n=$(( $(cat "$FAKE_DIR/$key.n" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$FAKE_DIR/$key.n"
+total=$(wc -l < "$FAKE_DIR/$key")
 [ "$n" -gt "$total" ] && n="$total"
-read -r status code body < <(sed -n "${n}p" "$FAKE_DIR/$kind")
+read -r status code body < <(sed -n "${n}p" "$FAKE_DIR/$key")
 if [ "$code" != "0" ]; then
   [ -n "$fmt" ] && printf '000'
   echo "curl: ($code) Failed to connect to ghcr.io" >&2
@@ -95,6 +102,16 @@ MANIFEST_OK='200 0 {"schemaVersion":2,"mediaType":"application/vnd.oci.image.ind
 MANIFEST_UNKNOWN='404 0 {"errors":[{"code":"MANIFEST_UNKNOWN","message":"manifest unknown"}]}'
 TAGS_OK='200 0 {"name":"txehq/bifrost","tags":["v2.1.1","latest"]}'
 
+# Every destination a release publishes: output name, tag.
+DESTINATIONS=(
+  "version $V"
+  "amd64 $V-amd64"
+  "arm64 $V-arm64"
+  "ubi9 $V-ubi9"
+  "ubi9-amd64 $V-ubi9-amd64"
+  "ubi9-arm64 $V-ubi9-arm64"
+)
+
 passed=0
 failed=0
 SCENARIO=""
@@ -112,11 +129,11 @@ new_scenario() {
   : > "$FAKE_DIR/github_output"
 }
 
-# respond <kind> <line>...: queue registry answers for one endpoint.
+# respond <key> <line>...: queue registry answers for one endpoint (or one manifest tag).
 respond() {
-  local kind="$1"
+  local key="$1"
   shift
-  printf '%s\n' "$@" >> "$FAKE_DIR/$kind"
+  printf '%s\n' "$@" >> "$FAKE_DIR/$key"
 }
 
 # run_detect [env assignments...]: run the real script against the fake registry.
@@ -158,23 +175,40 @@ check_no_leak() {
   fi
 }
 
-expect_docker_release() {
+# expect_release <docker-needs-release> <names of destinations to publish...>: the run
+# succeeded and flagged exactly those destinations for publication.
+expect_release() {
   local want="$1"
+  shift
+  local publish=" $* " entry name flag
   if [ "$RC" -ne 0 ]; then
     fail "script exited $RC, expected docker-needs-release=$want (log: $(tail -3 "$FAKE_DIR/log" | tr '\n' ' '))"
-  elif ! grep -qx "docker-needs-release=$want" "$FAKE_DIR/github_output"; then
-    fail "expected docker-needs-release=$want, got: $(grep docker-needs-release "$FAKE_DIR/github_output" || echo none)"
-  else
-    ok "docker-needs-release=$want"
+    check_no_leak
+    return
   fi
+  if grep -qx "docker-needs-release=$want" "$FAKE_DIR/github_output"; then
+    ok "docker-needs-release=$want"
+  else
+    fail "expected docker-needs-release=$want, got: $(grep docker-needs-release "$FAKE_DIR/github_output" || echo none)"
+  fi
+  for entry in "${DESTINATIONS[@]}"; do
+    name="${entry%% *}"
+    flag="false"
+    [[ "$publish" == *" $name "* ]] && flag="true"
+    if grep -qx "docker-publish-${name}=${flag}" "$FAKE_DIR/github_output"; then
+      ok "docker-publish-${name}=${flag}"
+    else
+      fail "expected docker-publish-${name}=${flag}, got: $(grep "^docker-publish-${name}=" "$FAKE_DIR/github_output" || echo none)"
+    fi
+  done
   check_no_leak
 }
 
 # The registry's answer was not definitive: the job must fail, publish nothing, and say why.
 expect_fail_closed() {
   local reason="$1"
-  if grep -qx "docker-needs-release=true" "$FAKE_DIR/github_output"; then
-    fail "emitted docker-needs-release=true on an ambiguous registry answer"
+  if grep -q "=true$" <(grep "^docker-" "$FAKE_DIR/github_output"); then
+    fail "emitted a docker publication flag on an ambiguous registry answer"
   elif [ "$RC" -eq 0 ]; then
     fail "script exited 0 on an ambiguous registry answer"
   elif ! grep -q "::error::.*${reason}" "$FAKE_DIR/log"; then
@@ -209,33 +243,83 @@ expect_authenticated() {
   fi
 }
 
-echo "GHCR tag probe ($TARGET)"
+# Every destination must have been looked up, each by its own tag.
+expect_every_destination_checked() {
+  local entry tag missing=""
+  for entry in "${DESTINATIONS[@]}"; do
+    tag="${entry#* }"
+    grep -q "/manifests/${tag}\$" "$FAKE_DIR/calls.log" || missing+=" $tag"
+  done
+  if [ -z "$missing" ]; then
+    ok "all six destinations looked up"
+  else
+    fail "destinations never looked up:$missing"
+  fi
+}
+
+echo "GHCR tag probe ($TARGET, $V)"
 
 # --- Definitive answers ----------------------------------------------------------------
 
-new_scenario "existing tag"
+new_scenario "every destination published"
 respond token "$TOKEN_OK"
 respond manifest "$MANIFEST_OK"
 run_detect GITHUB_TOKEN="$JOB_TOKEN"
-expect_docker_release false
+expect_release false
 expect_authenticated
+expect_every_destination_checked
 expect_calls tags 0
 
-new_scenario "absent tag in a visible repository"
+new_scenario "nothing published yet"
 respond token "$TOKEN_OK"
 respond manifest "$MANIFEST_UNKNOWN"
 respond tags "$TAGS_OK"
 run_detect GITHUB_TOKEN="$JOB_TOKEN"
-expect_docker_release true
+expect_release true version amd64 arm64 ubi9 ubi9-amd64 ubi9-arm64
 expect_authenticated
+expect_every_destination_checked
 expect_calls tags 1
 
-new_scenario "transient 503 then existing tag"
+new_scenario "transient 503 then every destination published"
 respond token "$TOKEN_OK"
 respond manifest '503 0 {"errors":[{"code":"UNAVAILABLE"}]}' "$MANIFEST_OK"
 run_detect GITHUB_TOKEN="$JOB_TOKEN"
-expect_docker_release false
-expect_calls manifest 2
+expect_release false
+expect_calls manifest 7
+
+# --- Partial releases: only what is absent may be published ------------------------------
+
+new_scenario "architecture images published, manifests and UBI9 not"
+respond token "$TOKEN_OK"
+respond manifest "$MANIFEST_UNKNOWN"
+respond "manifest:$V-amd64" "$MANIFEST_OK"
+respond "manifest:$V-arm64" "$MANIFEST_OK"
+respond tags "$TAGS_OK"
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_release true version ubi9 ubi9-amd64 ubi9-arm64
+
+new_scenario "everything but the UBI9 manifest published"
+respond token "$TOKEN_OK"
+respond manifest "$MANIFEST_OK"
+respond "manifest:$V-ubi9" "$MANIFEST_UNKNOWN"
+respond tags "$TAGS_OK"
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_release true ubi9
+
+new_scenario "only amd64 published"
+respond token "$TOKEN_OK"
+respond manifest "$MANIFEST_UNKNOWN"
+respond "manifest:$V-amd64" "$MANIFEST_OK"
+respond tags "$TAGS_OK"
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_release true version arm64 ubi9 ubi9-amd64 ubi9-arm64
+
+new_scenario "one destination ambiguous among published ones"
+respond token "$TOKEN_OK"
+respond manifest "$MANIFEST_OK"
+respond "manifest:$V-ubi9-arm64" '500 0 {"errors":[{"code":"UNKNOWN"}]}'
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_fail_closed "500"
 
 # --- Credentials -------------------------------------------------------------------------
 
@@ -265,6 +349,12 @@ expect_calls manifest 0
 
 new_scenario "token exchange returns a malformed token"
 respond token '200 0 {"token":"abc\"def ghi"}'
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_fail_closed "no usable token"
+expect_calls manifest 0
+
+new_scenario "token exchange body has trailing bytes"
+respond token "200 0 {\"token\":\"${BEARER}\"} junk"
 run_detect GITHUB_TOKEN="$JOB_TOKEN"
 expect_fail_closed "no usable token"
 expect_calls manifest 0
@@ -325,9 +415,46 @@ respond manifest '404 0 {"errors":[{"code":"NAME_UNKNOWN"}]}'
 run_detect GITHUB_TOKEN="$JOB_TOKEN"
 expect_fail_closed "NAME_UNKNOWN"
 
+# Exactness: each of these yields the safe answer only after something lossy - a parser that
+# printed before it failed, or characters deleted - so each must be refused.
+new_scenario "manifest 404 MANIFEST_UNKNOWN followed by trailing bytes"
+respond token "$TOKEN_OK"
+respond manifest '404 0 {"errors":[{"code":"MANIFEST_UNKNOWN"}]} invalid'
+respond tags "$TAGS_OK"
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_fail_closed "404"
+expect_calls tags 0
+
+new_scenario "manifest 404 as two JSON documents"
+respond token "$TOKEN_OK"
+respond manifest '404 0 {"errors":[{"code":"MANIFEST_UNKNOWN"}]} {"errors":[]}'
+respond tags "$TAGS_OK"
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_fail_closed "404"
+
+new_scenario "manifest 404 MANIFEST_UNKNOWN123"
+respond token "$TOKEN_OK"
+respond manifest '404 0 {"errors":[{"code":"MANIFEST_UNKNOWN123"}]}'
+respond tags "$TAGS_OK"
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_fail_closed "404"
+
+new_scenario "manifest 404 code with a space"
+respond token "$TOKEN_OK"
+respond manifest '404 0 {"errors":[{"code":"MANIFEST_UNKNOWN "}]}'
+respond tags "$TAGS_OK"
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_fail_closed "404"
+
 new_scenario "manifest 200 without a manifest body"
 respond token "$TOKEN_OK"
 respond manifest '200 0 <html>Sign in</html>'
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_fail_closed "without a manifest body"
+
+new_scenario "manifest 200 with trailing bytes"
+respond token "$TOKEN_OK"
+respond manifest '200 0 {"schemaVersion":2} <html>'
 run_detect GITHUB_TOKEN="$JOB_TOKEN"
 expect_fail_closed "without a manifest body"
 
@@ -359,6 +486,20 @@ new_scenario "manifest absent but tag listing names another repository"
 respond token "$TOKEN_OK"
 respond manifest "$MANIFEST_UNKNOWN"
 respond tags '200 0 {"name":"someone/else","tags":[]}'
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_fail_closed "tag listing"
+
+new_scenario "manifest absent but tag listing name differs by one character"
+respond token "$TOKEN_OK"
+respond manifest "$MANIFEST_UNKNOWN"
+respond tags '200 0 {"name":"txehq/bifrost!","tags":[]}'
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_fail_closed "tag listing"
+
+new_scenario "manifest absent but tag listing has trailing bytes"
+respond token "$TOKEN_OK"
+respond manifest "$MANIFEST_UNKNOWN"
+respond tags '200 0 {"name":"txehq/bifrost","tags":[]} junk'
 run_detect GITHUB_TOKEN="$JOB_TOKEN"
 expect_fail_closed "tag listing"
 
