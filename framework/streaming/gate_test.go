@@ -2342,3 +2342,34 @@ func TestGate_ApprovedFullDrainWhilePausedThenResumeEnds(t *testing.T) {
 		t.Fatalf("gate state = %v after flusher exit, want Ended", state)
 	}
 }
+
+// TestGate_EstimateChunkBytesCountsCitationAnnotations: a chat delta's URL
+// citations carry titles, cited text and provider source blobs that grow with
+// the response; uncounted, a citation-heavy paused stream could buffer past
+// the replay cap without overflowing.
+func TestGate_EstimateChunkBytesCountsCitationAnnotations(t *testing.T) {
+	text := strings.Repeat("t", 4*1024)
+	var sources interface{} = []interface{}{map[string]interface{}{"snippet": strings.Repeat("s", 4*1024)}}
+	annotations := make([]schemas.ChatAssistantMessageAnnotation, 8)
+	for i := range annotations {
+		annotations[i] = schemas.ChatAssistantMessageAnnotation{
+			Type: "url_citation",
+			URLCitation: schemas.ChatAssistantMessageAnnotationCitation{
+				Title: strings.Repeat("h", 512), Text: &text, Sources: &sources,
+			},
+		}
+	}
+	chunk := &schemas.BifrostStreamChunk{
+		BifrostChatResponse: &schemas.BifrostChatResponse{
+			Choices: []schemas.BifrostResponseChoice{{
+				ChatStreamResponseChoice: &schemas.ChatStreamResponseChoice{
+					Delta: &schemas.ChatStreamResponseChoiceDelta{Annotations: annotations},
+				},
+			}},
+		},
+	}
+	want := int64(len(annotations) * (512 + 2*4*1024))
+	if got := estimateChunkBytes(chunk); got < want {
+		t.Fatalf("citation estimate = %d, want >= %d (titles, cited text and sources)", got, want)
+	}
+}

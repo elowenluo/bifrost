@@ -159,6 +159,11 @@ func (s *Store) RoutingCallCost(call schemas.BifrostRoutingCall, scopes *LookupS
 	default:
 		return 0
 	}
+	// Off-peak pricing discounts the call's usage as it does a request to the
+	// same model (see computeCostFromInput); the flat fee below stays whole.
+	if m, ok := offPeakMultiplier(pricing, lookupScopes.BilledAt); ok {
+		scaleUsageCost(breakdown, m)
+	}
 	var cost float64
 	if breakdown != nil {
 		cost = breakdown.TotalCost

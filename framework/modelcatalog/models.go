@@ -309,7 +309,9 @@ func (mc *ModelCatalog) computeProvidersForModel(model string) []schemas.ModelPr
 // checks, not by the static keyconfig allow set).
 //
 //   - allowedModels=["*"]: defer to GetProvidersForModel (with custom-provider
-//     fast path when list-models is disabled).
+//     fast path when list-models is disabled), falling back to the provider's
+//     keys for a provider the datasheet describes but list-models cannot
+//     enumerate.
 //   - allowedModels=[]: deny-by-default.
 //   - explicit allowedModels: direct or provider-prefixed match against the
 //     provider's catalog.
@@ -325,7 +327,20 @@ func (mc *ModelCatalog) IsModelAllowedForProvider(provider schemas.ModelProvider
 		if isCustomProvider && hasListModelsEndpointDisabled {
 			return true
 		}
-		return slices.Contains(mc.GetProvidersForModel(model), provider)
+		if slices.Contains(mc.GetProvidersForModel(model), provider) {
+			return true
+		}
+		// A provider the datasheet describes but list-models cannot enumerate
+		// (Fireworks lists only a key's configured models) is known only through
+		// the pricing sheet, which lags new releases. Refusing on that list makes
+		// ["*"] narrower than the provider itself, so defer to the provider's
+		// keys instead: their allow-lists and blacklists still apply, and the
+		// provider rejects a model it does not have. A provider with no datasheet
+		// rows is covered by computeProvidersForModel's keyconfig fallback, and
+		// one whose list-models answered is enumerable, so its catalog narrows.
+		return len(mc.live.UnfilteredModelsForProvider(provider)) == 0 &&
+			len(mc.datasheet.DatasheetModelsForProvider(provider)) > 0 &&
+			mc.keyconf.IsAllowed(provider, model)
 	}
 	if allowedModels.IsEmpty() {
 		return false

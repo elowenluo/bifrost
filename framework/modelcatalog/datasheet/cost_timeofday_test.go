@@ -565,3 +565,26 @@ func TestOffPeak_EndToEndFromDatasheetFile(t *testing.T) {
 	assert.InDelta(t, peakCost/2,
 		s.CalculateCost(resp(), &LookupScopes{BilledAt: utc(t, "2026-08-17T05:00:00Z")}), 1e-12)
 }
+
+// TestOffPeak_DiscountsRoutingClassificationCalls pins that a routing
+// classification call is billed at the same rate as a request to the same
+// model: its usage charge takes the off-peak discount, and its flat per-request
+// fee does not.
+func TestOffPeak_DiscountsRoutingClassificationCalls(t *testing.T) {
+	pricing := deepSeekPricing()
+	pricing.CostPerRequest = bifrost.Ptr(0.01)
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey("deepseek-v4-flash", "deepseek", "chat"): pricing,
+	})
+	provider, model, in, out := "deepseek", "deepseek-v4-flash", 1000, 1000
+	call := schemas.BifrostRoutingCall{
+		ProviderUsed: &provider, ModelUsed: &model, InputTokens: &in, OutputTokens: &out,
+		CountTowardBudgets: true,
+	}
+	const peakUsage = 0.00176 // 1000*0.00000044 + 1000*0.00000132
+
+	peak := s.RoutingCallCost(call, &LookupScopes{BilledAt: utc(t, "2026-08-17T02:00:00Z")})
+	off := s.RoutingCallCost(call, &LookupScopes{BilledAt: utc(t, "2026-08-17T05:00:00Z")})
+	assert.InDelta(t, peakUsage+0.01, peak, 1e-12)
+	assert.InDelta(t, peakUsage/2+0.01, off, 1e-12, "off-peak classification billed at the peak rate")
+}

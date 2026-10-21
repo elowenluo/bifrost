@@ -435,6 +435,27 @@ func TestFlattenInputSchema_AllOfMemberChoicesStayWhole(t *testing.T) {
 	}
 }
 
+// TestFlattenInputSchema_RootPropertiesWithUnmergedAllOfStayWhole: a body
+// naming its own properties beside an allOf that cannot be merged would
+// flatten to the root properties alone, so fields supplied for the allOf
+// branch were never sent.
+func TestFlattenInputSchema_RootPropertiesWithUnmergedAllOfStayWhole(t *testing.T) {
+	contact := map[string]any{"type": "object", "oneOf": []any{
+		map[string]any{"type": "object", "properties": map[string]any{"email": map[string]any{"type": "string"}}},
+		map[string]any{"type": "object", "properties": map[string]any{"phone": map[string]any{"type": "string"}}},
+	}}
+	schema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"id": map[string]any{"type": "string"}},
+		"allOf":      []any{contact},
+	}
+	require.Contains(t, NormalizeSchema(schema), "allOf", "fixture: the allOf must survive normalization unmerged")
+	op := Operation{Method: "POST", Path: "/x", Body: &RequestBody{ContentType: ContentTypeJSON, Schema: schema}}
+	_, _, body, _, err := FlattenInputSchema(op)
+	require.NoError(t, err)
+	assert.Equal(t, "single", body.Mode)
+}
+
 // TestSelectBodyContent_BooleanSchemas: OpenAPI 3.1 `schema: true` accepts any
 // value, so it is not narrowed to an object; `schema: false` accepts nothing.
 func TestSelectBodyContent_BooleanSchemas(t *testing.T) {

@@ -556,12 +556,16 @@ func flattenQuerystring(p Parameter, props map[string]any, requiredSet map[strin
 // hasFreeFormOnly reports whether an object body cannot be flattened into its
 // named properties without losing something: it allows keys beyond the ones it
 // names (or names none), carries a oneOf/anyOf whose members define more
-// fields, or may be null as a whole. Such a body travels as one `body`.
+// fields, keeps an allOf that normalization could not merge, or may be null as
+// a whole. Such a body travels as one `body`.
 func hasFreeFormOnly(schema map[string]any) bool {
 	if _, choice := schema["oneOf"]; choice {
 		return true
 	}
 	if _, choice := schema["anyOf"]; choice {
+		return true
+	}
+	if _, unmerged := schema["allOf"]; unmerged {
 		return true
 	}
 	if asBool(schema["nullable"]) {

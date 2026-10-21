@@ -174,6 +174,11 @@ func gateChoiceBytes(choices []schemas.BifrostResponseChoice) int64 {
 				size += gateStrPtrBytes(rd.Text) + gateStrPtrBytes(rd.Data) +
 					gateStrPtrBytes(rd.Signature) + gateStrPtrBytes(rd.Summary)
 			}
+			if len(d.Annotations) > 0 {
+				// URL citations: titles, cited text and provider source blobs
+				// of any size, on the chunks that carry them.
+				size += gateCompositeBytes(d.Annotations)
+			}
 		}
 		if c.LogProbs != nil {
 			// Only present when the client requested logprobs; several KB per

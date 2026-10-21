@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/capsohq/bifrost/core/schemas"
+	configstoreTables "github.com/capsohq/bifrost/framework/configstore/tables"
 	"github.com/capsohq/bifrost/framework/modelcatalog/datasheet"
 	"github.com/capsohq/bifrost/framework/modelcatalog/keyconfig"
 	"github.com/capsohq/bifrost/framework/modelcatalog/live"
@@ -50,5 +51,50 @@ func TestIsModelAllowedForProvider_ExplicitList(t *testing.T) {
 				t.Errorf("IsModelAllowedForProvider(%q, %v) = %v, want %v", tc.model, tc.allowed, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestIsModelAllowedForProvider_WildcardAllowsUncataloguedModel covers a
+// provider the datasheet describes but list-models cannot enumerate: Fireworks
+// builds its list from the key's configured models, so a key added with no
+// models leaves the live store empty and the pricing sheet, which lags new
+// releases, is the only catalog. A virtual key's ["*"] must not be narrower
+// than the provider key itself; key restrictions and blacklists still apply.
+func TestIsModelAllowedForProvider_WildcardAllowsUncataloguedModel(t *testing.T) {
+	ds := datasheet.NewTestStore(nil)
+	ds.SetPricingRowsForTest([]configstoreTables.TableModelPricing{
+		{Model: "accounts/fireworks/models/glm-5p2", Provider: "fireworks_ai", Mode: "chat"},
+		{Model: "mistral-large", Provider: "mistral", Mode: "chat"},
+	})
+	newCatalog := func(key schemas.Key) *ModelCatalog {
+		kc := keyconfig.New(nil)
+		kc.Replace(map[schemas.ModelProvider][]schemas.Key{schemas.Fireworks: {key}})
+		mc := &ModelCatalog{datasheet: ds, live: live.New(nil), keyconf: kc, done: make(chan struct{})}
+		mc.initCaches()
+		return mc
+	}
+	wildcard := schemas.WhiteList{"*"}
+	const known, unlisted = "accounts/fireworks/models/glm-5p2", "accounts/fireworks/models/glm-5p3"
+
+	open := newCatalog(schemas.Key{ID: "fw", Enabled: ptrBool(true), Models: schemas.WhiteList{"*"}})
+	if !open.IsModelAllowedForProvider(schemas.Fireworks, known, nil, wildcard) {
+		t.Fatalf("control: a datasheet-known Fireworks model must be allowed under a wildcard")
+	}
+	if !open.IsModelAllowedForProvider(schemas.Fireworks, unlisted, nil, wildcard) {
+		t.Errorf("wildcard refused %q on an unrestricted, non-enumerable provider", unlisted)
+	}
+
+	restricted := newCatalog(schemas.Key{ID: "fw", Enabled: ptrBool(true), Models: schemas.WhiteList{known}})
+	if restricted.IsModelAllowedForProvider(schemas.Fireworks, unlisted, nil, wildcard) {
+		t.Errorf("wildcard allowed %q although no provider key may serve it", unlisted)
+	}
+	blocked := newCatalog(schemas.Key{ID: "fw", Enabled: ptrBool(true), Models: schemas.WhiteList{"*"},
+		BlacklistedModels: schemas.BlackList{unlisted}})
+	if blocked.IsModelAllowedForProvider(schemas.Fireworks, unlisted, nil, wildcard) {
+		t.Errorf("wildcard allowed %q although the provider key blacklists it", unlisted)
+	}
+	// A provider with no configured key has nothing to defer to.
+	if open.IsModelAllowedForProvider(schemas.Mistral, "mistral-next", nil, wildcard) {
+		t.Errorf("wildcard allowed a model on a provider with no configured key")
 	}
 }
