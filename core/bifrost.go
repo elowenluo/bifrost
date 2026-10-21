@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -88,16 +89,25 @@ type ChannelMessage struct {
 }
 
 const (
-	handoffOpen      int32 = iota // neither side has committed
-	handoffClaimed                // worker will send; tryRequest must receive
-	handoffAbandoned              // tryRequest left on ctx.Done; worker owns the value and the message
+	handoffOpen       int32 = iota // neither side has committed
+	handoffClaimed                 // worker will send; tryRequest must receive
+	handoffAbandoned               // tryRequest left on ctx.Done; worker owns the value and the message
+	handoffAbandoning              // tryRequest won the abandon and is still deferring trace completion
 )
 
 // claimDelivery is called by the worker before it sends a terminal value. False
 // means tryRequest already abandoned the message: nobody will read the channel,
-// so the worker bills the value itself and releases the message.
+// so the worker bills the value itself and releases the message. A caller still
+// mid-abandon is waited out, so the worker never completes the trace (or
+// releases the message) before the trace deferral is registered.
 func (m *ChannelMessage) claimDelivery() bool {
-	return m.handoff.CompareAndSwap(handoffOpen, handoffClaimed)
+	if m.handoff.CompareAndSwap(handoffOpen, handoffClaimed) {
+		return true
+	}
+	for m.handoff.Load() == handoffAbandoning {
+		runtime.Gosched()
+	}
+	return false
 }
 
 // abandonDelivery is called by tryRequest when its context ends before a value
@@ -109,16 +119,19 @@ func (m *ChannelMessage) claimDelivery() bool {
 // abandon needs is read before the swap.
 func (m *ChannelMessage) abandonDelivery() bool {
 	ctx := m.Context
-	if !m.handoff.CompareAndSwap(handoffOpen, handoffAbandoned) {
+	if !m.handoff.CompareAndSwap(handoffOpen, handoffAbandoning) {
 		return false
 	}
 	// The worker still writes response attributes and plugin logs, so the transport
-	// must not flush the trace yet. Set on the CAS so every abandonment marks it.
+	// must not flush the trace yet. The worker waits in claimDelivery until the
+	// deferral is registered and ownership is published below, so it can neither
+	// complete the trace before the marker exists nor leave a marker behind.
 	if ctx != nil {
 		if tracer, traceID, err := GetTracerFromContext(ctx); err == nil {
 			tracer.DeferTraceCompletion(traceID)
 		}
 	}
+	m.handoff.Store(handoffAbandoned)
 	return true
 }
 
