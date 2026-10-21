@@ -36,7 +36,9 @@ fi
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/helm-publish-index.XXXXXX")"
 trap 'rm -rf "$ROOT"' EXIT
 
-# Keep the user's git identity, signing and hooks out of the fixtures.
+# Keep the user's git identity, signing and hooks out of the fixtures, and keep
+# macOS tar from adding AppleDouble entries helm rejects.
+export COPYFILE_DISABLE=1
 export GIT_CONFIG_GLOBAL=/dev/null
 export GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid
@@ -162,10 +164,6 @@ helm repo index "$ROOT/fx/u2" --url "$UPSTREAM_DL/helm-chart-v1.3.0" --merge "$R
 mkdir -p "$ROOT/upstream"
 UPSTREAM_INDEX="$ROOT/upstream/index.yaml"
 cp "$ROOT/fx/u2/index.yaml" "$UPSTREAM_INDEX"
-
-# RED baseline only: the extracted legacy step reads its merge base from this URL
-# (default: the upstream Pages index). The fixed script never consults it.
-export HELM_INDEX_URL="file://$UPSTREAM_INDEX"
 
 # make_origin NAME MODE [INDEX] -> path of a bare repo standing in for origin.
 #   MODE: absent      no gh-pages branch at all
