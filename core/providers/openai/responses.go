@@ -740,6 +740,9 @@ func ToOpenAIResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.B
 		case message.Type != nil && (*message.Type == schemas.ResponsesMessageTypeApplyPatchCall ||
 			*message.Type == schemas.ResponsesMessageTypeApplyPatchCallOutput):
 			// OpenAI requires status here, and it carries whether the patch failed.
+		case message.Type != nil && *message.Type == schemas.ResponsesMessageTypeComputerCall && message.Status != nil &&
+			(*message.Status == "in_progress" || *message.Status == "completed" || *message.Status == "incomplete"):
+			// A replayed computer_call is a ResponseComputerToolCallParam, where status is required.
 		case message.Type != nil && *message.Type == schemas.ResponsesMessageTypeFunctionCallOutput &&
 			message.Status != nil && *message.Status == "incomplete":
 			// "incomplete" on a function_call_output is the only marker a failed tool

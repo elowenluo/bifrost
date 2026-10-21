@@ -4676,6 +4676,34 @@ func TestApplyPatchReplayKeepsStatus(t *testing.T) {
 	}
 }
 
+// TestComputerCallReplayKeepsStatus pins that a replayed computer_call keeps its
+// status, which OpenAI requires on that input item, in the serialized request.
+func TestComputerCallReplayKeepsStatus(t *testing.T) {
+	var input []schemas.ResponsesMessage
+	if err := sonic.Unmarshal([]byte(`[
+		{"type":"computer_call","id":"cu_1","call_id":"call_cu","status":"completed","action":{"type":"screenshot"},"pending_safety_checks":[]},
+		{"type":"computer_call_output","call_id":"call_cu","output":{"type":"computer_screenshot","image_url":"data:image/png;base64,AA=="}}
+	]`), &input); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	req := ToOpenAIResponsesRequest(nil, &schemas.BifrostResponsesRequest{
+		Provider: schemas.OpenAI, Model: "computer-use-preview", Input: input,
+	})
+	wire, err := sonic.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var payload struct {
+		Input []map[string]any `json:"input"`
+	}
+	if err := sonic.Unmarshal(wire, &payload); err != nil || len(payload.Input) != 2 {
+		t.Fatalf("decode %s: %v", wire, err)
+	}
+	if payload.Input[0]["status"] != "completed" {
+		t.Fatalf("computer_call lost its required status: %s", wire)
+	}
+}
+
 func TestFilterUnsupportedToolsKeepsBareOpenAITools(t *testing.T) {
 	req := &OpenAIResponsesRequest{
 		ResponsesParameters: schemas.ResponsesParameters{
