@@ -431,7 +431,8 @@ func passthroughReachesTuning(r *schemas.BifrostPassthroughRequest) bool {
 		name, _, _ := strings.Cut(lower, ":")
 		switch name {
 		case "fine_tuning", "tunedmodels", "tuningjobs", "model-customization-jobs", "custom-models",
-			"custom-model-deployments", "imported-models", "model-import-jobs", "model-copy-jobs", "provisioned-model-throughput":
+			"custom-model-deployments", "imported-models", "model-import-jobs", "model-copy-jobs",
+			"provisioned-model-throughput", "provisioned-model-throughputs":
 			return true
 		case "models":
 			// An OpenAI fine-tuned model (models/ft:...) belongs to the key that tuned it.
