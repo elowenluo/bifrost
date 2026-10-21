@@ -135,8 +135,10 @@ sha256_of() {
 }
 
 # chart_meta TGZ KEY -> the top-level Chart.yaml scalar inside the package.
+# Top-level keys only: helm sorts the output, so a nested key with the same
+# name (a maintainer's `name:`) comes first and must not be taken for it.
 chart_meta() {
-  helm show chart "$1" | awk -v k="$2:" '$1 == k { v = $2; gsub(/^"|"$/, "", v); print v; exit }'
+  helm show chart "$1" | awk -v k="$2" '$0 ~ "^" k ": " { v = substr($0, length(k) + 3); gsub(/^"|"$/, "", v); print v; exit }'
 }
 
 # index_entries INDEX -> one line per entry: chart name, version, digest and

@@ -104,8 +104,10 @@ sha256_of() {
   fi
 }
 
+# Top-level keys only: helm sorts the output, so a nested key with the same
+# name (a maintainer's `name:`) comes first and must not be taken for it.
 chart_meta() {
-  helm show chart "$1" | awk -v k="$2:" '$1 == k { v = $2; gsub(/^"|"$/, "", v); print v; exit }'
+  helm show chart "$1" | awk -v k="$2" '$0 ~ "^" k ": " { v = substr($0, length(k) + 3); gsub(/^"|"$/, "", v); print v; exit }'
 }
 
 # ghcr_chart_manifest_state <owner/path/name> <tag>: prints "present" or

@@ -196,7 +196,7 @@ run_oci() {
   LOG="$ROOT/log-$name.txt"
   FAKE_DIR="$FAKE_DIR" PATH="$FAKE_BIN:$PATH" "$TARGET" \
     --chart-name bifrost \
-    --chart-version 1.2.0 \
+    --chart-version "${CHART_VERSION:-1.2.0}" \
     --canonical-chart "$canonical" \
     --registry ghcr.io \
     --owner "${OWNER:-txehq}" \
@@ -308,6 +308,20 @@ check "exits 0" [ "$RC" -eq 0 ]
 check "looks the manifest up under the lowercased owner" owner_lookup_lowercased
 check "pushes into the lowercased owner's namespace" \
   grep -qF -- "oci://ghcr.io/txehq/helm-charts" "$FAKE_DIR/push.log"
+
+echo "# the repository's real chart, maintainers and all"
+# helm sorts keys, so a maintainer's nested `name:` precedes the top-level
+# `name:` in `helm show chart`; the fixtures above carry no maintainers.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+REAL_VERSION="$(awk '/^version:/ { print $2; exit }' "$REPO_ROOT/helm-charts/bifrost/Chart.yaml")"
+mkdir -p "$ROOT/pkg/real"
+helm package "$REPO_ROOT/helm-charts/bifrost" -d "$ROOT/pkg/real" >/dev/null 2>&1
+REAL="$ROOT/pkg/real/bifrost-$REAL_VERSION.tgz"
+check "fixture sanity: the real chart packages and names a maintainer" \
+  grep -q '^  name: ' <(helm show chart "$REAL" 2>/dev/null)
+CHART_VERSION="$REAL_VERSION" run_oci real "$REAL" "$TOKEN_OK" "$MANIFEST_OK" "$TAGS_OK" "file:$REAL"
+check "the real chart is accepted as the version it is" [ "$RC" -eq 0 ]
+check "an identical published real chart is left alone" [ "$PUSHES" -eq 0 ]
 
 # ---------------------------------------------------------------------------
 echo "# workflow wiring"
