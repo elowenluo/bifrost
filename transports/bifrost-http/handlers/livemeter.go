@@ -288,17 +288,20 @@ func (m *liveMeter) failBackend(bifrostErr *schemas.BifrostError) *schemas.Bifro
 		return m.refusal
 	}
 	next, openErr := m.openUnit(liveUnitBackend, lane.model, true)
-	postErr := *bifrostErr
-	postErr.ExtraFields.RequestType = schemas.LiveRequest
-	postErr.ExtraFields.Provider = m.provider
-	postErr.ExtraFields.OriginalModelRequested = lane.model
-	postCtx := m.unitContext(lane.current.requestID, true, liveUnitBackend)
-	postCtx.SetValue(schemas.BifrostContextKeyLiveDelegationFailed, true)
-	m.runPostHooks(lane.current, postCtx, nil, &postErr)
+	// The successor owns the lane before the failed unit's post hooks run: if one panics, the
+	// session's recovery finishes through the successor, never the unit the hooks released.
+	failed := lane.current
 	lane.current = next
 	if openErr != nil {
 		m.refusal = openErr
 	}
+	postErr := *bifrostErr
+	postErr.ExtraFields.RequestType = schemas.LiveRequest
+	postErr.ExtraFields.Provider = m.provider
+	postErr.ExtraFields.OriginalModelRequested = lane.model
+	postCtx := m.unitContext(failed.requestID, true, liveUnitBackend)
+	postCtx.SetValue(schemas.BifrostContextKeyLiveDelegationFailed, true)
+	m.runPostHooks(failed, postCtx, nil, &postErr)
 	return m.refusal
 }
 

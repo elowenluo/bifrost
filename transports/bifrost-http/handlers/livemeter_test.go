@@ -19,6 +19,7 @@ type fakeLiveRunner struct {
 	opens       []fakeLiveOpen
 	posts       []fakeLivePost
 	cleanups    int
+	cleanedBy   map[int]int // open index -> times its unit was cleaned
 	refuse      bool
 	panicOnPost bool // the post hook panics, the way a billing plugin might
 	keyIDs      map[string][]string
@@ -53,6 +54,7 @@ func (f *fakeLiveRunner) RunRealtimeTurnPreHooks(ctx *schemas.BifrostContext, re
 	kind, _ := ctx.Value(schemas.BifrostContextKeyLiveUnit).(string)
 	start, _ := ctx.Value(schemas.BifrostContextKeyLiveSessionStart).(bool)
 	f.opens = append(f.opens, fakeLiveOpen{model: model, continuation: continuation, kind: kind, start: start})
+	openIndex := len(f.opens) - 1
 	if f.refuse {
 		return nil, newRealtimeWireBifrostError(402, "budget_exceeded", "Budget exceeded: virtual key budget spent")
 	}
@@ -85,6 +87,10 @@ func (f *fakeLiveRunner) RunRealtimeTurnPreHooks(ctx *schemas.BifrostContext, re
 		Cleanup: func() {
 			f.mu.Lock()
 			f.cleanups++
+			if f.cleanedBy == nil {
+				f.cleanedBy = make(map[int]int)
+			}
+			f.cleanedBy[openIndex]++
 			f.mu.Unlock()
 		},
 	}, nil
@@ -328,6 +334,31 @@ func TestLiveMeterSumsBackendUsageWhileRefused(t *testing.T) {
 	require.NotNil(t, backend)
 	assert.Equal(t, 200, backend.Usage.InputTokens, "both responses bill on the admitted unit")
 	assert.Equal(t, 220, backend.Usage.TotalTokens)
+}
+
+// TestLiveMeterFailedDelegationPanicKeepsTheSuccessor pins that a post hook panicking
+// while a refused delegation closes still leaves the admitted successor on the lane:
+// the session's recovery then finishes through it, so every admitted unit is cleaned
+// exactly once and the released one is never reused.
+func TestLiveMeterFailedDelegationPanicKeepsTheSuccessor(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeLiveRunner{}
+	meter := newTestLiveMeter(runner)
+	require.Nil(t, meter.admit("gpt-live-1", "gpt-5.6-luna"))
+
+	runner.setPanicOnPost(true)
+	func() {
+		defer func() { require.NotNil(t, recover(), "the post hook was expected to panic") }()
+		meter.failBackend(newRealtimeWireBifrostError(400, "responses_validation_failed", "The model does not exist"))
+	}()
+	meter.finish(1)
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	for i := range runner.opens {
+		assert.Equal(t, 1, runner.cleanedBy[i], "unit %d (%s) cleaned %d times", i, runner.opens[i].kind, runner.cleanedBy[i])
+	}
 }
 
 func TestLiveMeterFailedDelegationClosesItsUnitWithTheError(t *testing.T) {
