@@ -1089,6 +1089,11 @@ func TestPreLLMHookBindsObjectsReferencedInsideRequests(t *testing.T) {
 			{"DELETE", "/v1/models/ft:gpt-4o-mini:org::other"},
 			{"GET", "/custom-models"},
 			{"DELETE", "/custom-models/other-model"},
+			{"DELETE", "/imported-models/other-model"},
+			{"GET", "/model-import-jobs"},
+			{"POST", "/model-copy-jobs"},
+			{"DELETE", "/custom-model-deployments/other"},
+			{"DELETE", "/provisioned-model-throughput/other"},
 		} {
 			_, shortCircuit, err := plugin.PreLLMHook(presentCtx(mcpTestVKValue), pass(schemas.OpenAI, tc.method, tc.path, ""))
 			require.NoError(t, err)

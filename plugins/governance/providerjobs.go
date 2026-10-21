@@ -410,8 +410,9 @@ var passthroughCollections = map[string]string{
 
 // passthroughReachesTuning reports whether a passthrough request reaches a
 // tuning collection or tuned model on any provider (OpenAI fine_tuning and its
-// ft: models, Gemini tunedModels, Vertex tuningJobs, Bedrock
-// model-customization-jobs and custom-models). None records which key
+// ft: models, Gemini tunedModels, Vertex tuningJobs, and Bedrock's customization
+// collections: jobs, custom and imported models, their deployments, imports,
+// copies and provisioned throughput). None records which key
 // created a job or tuned model, so a virtual key can neither manage its own nor be
 // kept from another's: a list, read or cancel would reach other keys' jobs, and a
 // create may name another key's tuned model as its base. The path is matched as it
@@ -429,7 +430,8 @@ func passthroughReachesTuning(r *schemas.BifrostPassthroughRequest) bool {
 		lower := strings.ToLower(segment)
 		name, _, _ := strings.Cut(lower, ":")
 		switch name {
-		case "fine_tuning", "tunedmodels", "tuningjobs", "model-customization-jobs", "custom-models":
+		case "fine_tuning", "tunedmodels", "tuningjobs", "model-customization-jobs", "custom-models",
+			"custom-model-deployments", "imported-models", "model-import-jobs", "model-copy-jobs", "provisioned-model-throughput":
 			return true
 		case "models":
 			// An OpenAI fine-tuned model (models/ft:...) belongs to the key that tuned it.
