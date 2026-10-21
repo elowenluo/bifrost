@@ -14,6 +14,9 @@ permissions:
 
 jobs:
   release:
+    # Every write below (GitHub release, Pages, OCI) shares this gate, so a
+    # manual dispatch from another branch can never occupy a release version.
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1.5.0'
     runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
     permissions:
       contents: write
@@ -29,8 +32,8 @@ jobs:
             get.helm.sh:443
             ghcr.io:443
             github.com:443
+            pkg-containers.githubusercontent.com:443
             registry-1.docker.io:443
-            maximhq.github.io:443
             proxy.golang.org:443
             release-assets.githubusercontent.com:443
             storage.googleapis.com:443
@@ -111,33 +114,72 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update Helm repository index
+      # The release asset is the canonical tarball for this chart version, so the
+      # index entry has to carry its digest and URL. A rerun repackages the chart
+      # with different bytes, which is why the index is built from the asset
+      # rather than from the local package (TXE-4820).
+      - name: Fetch canonical chart release asset
+        id: release-asset
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.chart-version.outputs.version }}
         run: |
-          cd helm-charts
-          # Download existing index if it exists
-          curl -sLO https://maximhq.github.io/bifrost/helm-charts/index.yaml || true
-          # Merge with new chart only if index.yaml exists
-          if [ -f index.yaml ]; then
-            helm repo index . --url https://github.com/capsohq/bifrost/releases/download/helm-chart-v${{ steps.chart-version.outputs.version }} --merge index.yaml
-          else
-            helm repo index . --url https://github.com/capsohq/bifrost/releases/download/helm-chart-v${{ steps.chart-version.outputs.version }}
-          fi
+          asset_dir="$RUNNER_TEMP/helm-release-asset"
+          rm -rf "$asset_dir"
+          gh release download "helm-chart-v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "bifrost-$VERSION.tgz" \
+            --dir "$asset_dir"
+          echo "path=$asset_dir/bifrost-$VERSION.tgz" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy to GitHub Pages
-        uses: step-security/actions-gh-pages@db28a5e317d585916043c4acc5a4319ab3da9275 # v4.0.1
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1.5.0'
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./helm-charts
-          destination_dir: helm-charts
-          keep_files: false
-          enable_jekyll: false
-          user_name: "github-actions[bot]"
-          user_email: "github-actions[bot]@users.noreply.github.com"
+      # Merges this release into THIS repository's published index - the gh-pages
+      # branch the deploy step below pushes to - never an upstream one, and fails
+      # rather than publish on any error, so history is never replaced by an
+      # empty or foreign index. The rules are in the script header.
+      - name: Update Helm repository index
+        env:
+          VERSION: ${{ steps.chart-version.outputs.version }}
+          RELEASE_ASSET: ${{ steps.release-asset.outputs.path }}
+        run: |
+          chmod +x .github/workflows/scripts/helm-publish-index.sh
+          .github/workflows/scripts/helm-publish-index.sh \
+            --chart-name bifrost \
+            --chart-version "$VERSION" \
+            --release-tag "helm-chart-v$VERSION" \
+            --canonical-chart "$RELEASE_ASSET" \
+            --local-chart "helm-charts/bifrost-$VERSION.tgz" \
+            --repository "$GITHUB_REPOSITORY" \
+            --server-url "$GITHUB_SERVER_URL" \
+            --remote origin \
+            --publish-branch gh-pages \
+            --index-path helm-charts/index.yaml \
+            --output helm-charts/index.yaml \
+            --base-sha-output "$RUNNER_TEMP/helm-index-base-sha"
+
+      # Publishes helm-charts/ to the gh-pages branch as one commit on the exact
+      # revision the index was read from, pushed with that revision as the
+      # branch's expected value (compare-and-swap; never a plain force). Only
+      # helm-charts/ in the branch is replaced; everything else is preserved. A
+      # writer that landed in the meantime makes the push fail visibly and a
+      # re-run rebuilds from it, so no concurrency group is needed and a queued
+      # release is never cancelled.
+      - name: Publish to GitHub Pages branch
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: |
+          chmod +x .github/workflows/scripts/helm-publish-pages.sh
+          .github/workflows/scripts/helm-publish-pages.sh \
+            --remote origin \
+            --publish-branch gh-pages \
+            --base-sha-file "$RUNNER_TEMP/helm-index-base-sha" \
+            --publish-dir helm-charts \
+            --destination-dir helm-charts \
+            --message "deploy: $GITHUB_SHA"
 
       - name: Login to GitHub Container Registry
-        if: steps.check-release.outputs.exists == 'false'
-        continue-on-error: true
         uses: step-security/docker-login-action@870af644803bf9f204aed474adbad2958fec048b # v4.1.0
         with:
           registry: ghcr.io
@@ -152,14 +194,32 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      # Publishes under the owner this workflow runs in, never a hardcoded
+      # organisation. The registry is asked on every attempt for this version's
+      # manifest (job token, fail-closed): a version absent from a repository
+      # the token can see is pushed from the canonical asset and read back, an
+      # identical one is left alone, a different one, an unfetchable one or any
+      # registry error fails the job. A package the token cannot see, which is
+      # also what a package that does not exist yet looks like, fails visibly:
+      # the first publication is bootstrapped deliberately by an operator (see
+      # the script header), never guessed here. This does not depend on
+      # whether the GitHub release pre-existed, so a re-run after a failed
+      # publication still publishes the artifact.
       - name: Push Helm chart as OCI artifact to GHCR
-        if: steps.check-release.outputs.exists == 'false'
-        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.chart-version.outputs.version }}
+          RELEASE_ASSET: ${{ steps.release-asset.outputs.path }}
         run: |
-          helm push helm-charts/bifrost-${{ steps.chart-version.outputs.version }}.tgz oci://ghcr.io/maximhq/helm-charts
+          chmod +x .github/workflows/scripts/helm-publish-oci.sh
+          .github/workflows/scripts/helm-publish-oci.sh \
+            --chart-name bifrost \
+            --chart-version "$VERSION" \
+            --canonical-chart "$RELEASE_ASSET" \
+            --registry ghcr.io \
+            --owner "$GITHUB_REPOSITORY_OWNER" \
+            --repository-path helm-charts
 
-      # - name: Push Helm chart as OCI artifact to Docker Hub
-      #   if: steps.check-release.outputs.exists == 'false'
-      #   continue-on-error: true
-      #   run: |
-      #     helm push helm-charts/bifrost-${{ steps.chart-version.outputs.version }}.tgz oci://registry-1.docker.io/maximhq
+      # Docker Hub publication stays disabled. Re-enabling it needs a Docker Hub
+      # manifest lookup in helm-publish-oci.sh (which is GHCR-specific) so that
+      # it is idempotent and fail-closed there too.

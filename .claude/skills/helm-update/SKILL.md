@@ -27,23 +27,41 @@ Apply changes to the Bifrost Helm chart, keep it in sync with `config.schema.jso
 
 ### Step 1: Check the published release and local state
 
-Read the production Helm repository index used by the installation and upgrade docs:
+Read the current helm chart version, then find the last version **this repository** published. The chart is published from this repository's own `gh-pages` branch (`helm-charts/index.yaml`, pushed by `.github/workflows/helm-release.yml`), with each tarball attached to this repository's `helm-chart-v<VERSION>` GitHub release. That index is the only record of what was released here. Do not read the upstream project's Pages index, and do not infer the last release from `docs/changelogs/helm-v*.mdx`: upstream merges bring in changelog pages for versions this repository never published.
 
 ```bash
-curl -fsSL https://maximhq.github.io/bifrost/helm-charts/index.yaml
+# Current helm chart version
+grep '^version:' helm-charts/bifrost/Chart.yaml
+
+# This repository, from its origin remote. Never rely on gh's default repo
+# resolution here: with an `upstream` remote configured, gh resolves to upstream.
+ORIGIN_REPO=$(git remote get-url origin | sed -E 's#\.git$##; s#^.*[:/]([^/]+/[^/]+)$#\1#')
+
+# The index this repository publishes (read-only)
+git fetch --no-tags origin refs/heads/gh-pages
+git show FETCH_HEAD:helm-charts/index.yaml
+
+# Releases cut from this repository
+gh release list --repo "$ORIGIN_REPO" --limit 200 | grep 'helm-chart-v'
 ```
 
-Parse `entries.bifrost` and select the highest stable chart `version` using semantic version ordering. Do not confuse `appVersion` with the chart version or rely on array order. This is the repository users add with `helm repo add bifrost https://maximhq.github.io/bifrost/helm-charts`; `helm repo update` refreshes its index.
+Select the highest chart `version` under `entries.bifrost` using semantic version ordering (not `appVersion`, not array order). Then confirm the release exists in this repository and resolve its source commit from the tag **as origin has it**. The shared local tag namespace is not evidence: it can hold a same-named upstream tag, and a fork tag may not have been fetched yet. Fetch the exact tag from `origin` into an isolated ref and resolve that:
 
-Inspect `Chart.yaml`, README Upcoming notes, existing Helm changelog pages, and `docs.json`. A local version or changelog can describe unreleased work. Neither its presence nor its modification time establishes that it was published.
+```bash
+gh release view --repo "$ORIGIN_REPO" "helm-chart-v<VERSION>" --json tagName,targetCommitish
+git fetch --no-tags origin "+refs/tags/helm-chart-v<VERSION>:refs/helm-release/helm-chart-v<VERSION>"
+LAST_COMMIT=$(git rev-parse "refs/helm-release/helm-chart-v<VERSION>^{commit}")
+```
 
-Record the published version and index URL. Identify its source commit using the matching GitHub release/tag `helm-chart-v<VERSION>`, through read-only local git queries or GitHub inspection. Use that commit for the schema comparison below. Do not substitute the commit that created a local changelog.
-
-If the index cannot be retrieved or parsed, report the blocker and leave version selection pending. Do not fall back to guessing from local files. If the published source commit cannot be established, report that limitation before claiming the schema comparison is complete.
+Save that commit SHA — you'll need it to scope the config.schema.json diff. If the index cannot be fetched or parsed, if the `gh-pages` branch does not exist, if `gh release view` finds no `helm-chart-v<VERSION>` release in `$ORIGIN_REPO` (the entry was inherited from upstream rather than released here), or if the tag cannot be fetched from `origin`, report that and stop version selection. Do not guess from local files or local tags.
 
 ### Step 2: Check config.schema.json Changes Since Last Helm Release
 
-Compare `transports/config.schema.json` at the published source commit from Step 1 with the current working tree. Include staged and unstaged changes, not only committed changes. For example, use `git diff <published-source-commit> -- transports/config.schema.json`.
+```bash
+# LAST_COMMIT is the published source commit from Step 1.
+# What changed in config.schema.json since then?
+git diff ${LAST_COMMIT}..HEAD -- transports/config.schema.json
+```
 
 Identify any fields added, removed, or changed in `config.schema.json` that are **not yet reflected** in the helm chart. These are gaps that must be closed — even if the user did not explicitly ask for them. Note each gap; you will apply them alongside the user's requested changes.
 
