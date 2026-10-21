@@ -2146,9 +2146,7 @@ func HandleOpenAIResponsesRequest(
 	}
 
 	// Custom tools sent as function tools come back as function calls; restore them.
-	if names := customToolNamesToRestore(ctx, request); names != nil {
-		restoreCustomToolCalls(response.Output, names)
-	}
+	restoreCustomToolResponse(response, customToolNamesToRestore(ctx, request))
 
 	response.ExtraFields.Latency = latency.Milliseconds()
 	response.ExtraFields.ProviderResponseHeaders = providerResponseHeaders
