@@ -54,3 +54,17 @@ jobs:
 
       - name: Check module path major versions
         run: ./.github/workflows/scripts/module-major.test.sh
+
+      # Release image publication guards. Fake curl/docker only: nothing reaches a registry.
+      # They run even when an earlier guard failed, so their own results are always reported.
+      - name: Check GHCR tag probe fails closed
+        if: ${{ !cancelled() }}
+        run: ./.github/workflows/scripts/ghcr-tag-probe.test.sh
+
+      - name: Check manifest scripts never re-push a published version tag
+        if: ${{ !cancelled() }}
+        run: ./.github/workflows/scripts/docker-manifest-publish.test.sh
+
+      - name: Check every image publication re-checks the registry on each attempt
+        if: ${{ !cancelled() }}
+        run: python3 .github/workflows/scripts/test-docker-publish-gates.py

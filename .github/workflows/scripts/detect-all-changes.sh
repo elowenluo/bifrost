@@ -326,27 +326,42 @@ if git rev-parse --verify "$TRANSPORT_TAG" >/dev/null 2>&1; then
   GIT_TAG_EXISTS="true"
 fi
 
-# Check if Docker tag exists on GHCR
+# Check which Docker destinations already exist on GHCR
+#
+# One release publishes six immutable tags: v<version> and v<version>-ubi9 (multi-arch
+# manifests) and the four architecture images under them. A run can fail part-way, after
+# some are pushed and before the rest, so each is checked on its own. This only decides
+# whether the release has anything left to publish: each publishing job asks the registry
+# again for its own tag on every attempt (ghcr-tag-gate.sh), because a re-run of a failed
+# job reuses the outputs written here.
+# shellcheck source=ghcr-tags.sh
+source "$(dirname "${BASH_SOURCE[0]}")/ghcr-tags.sh"
+
 GHCR_OWNER="${GITHUB_REPOSITORY_OWNER:-capsohq}"
 GHCR_REPOSITORY="${GHCR_OWNER}/bifrost"
-echo "   🐳 Checking GHCR for tag v${TRANSPORT_VERSION} in ${GHCR_REPOSITORY}..."
-GHCR_TOKEN=$(curl -fsSL "https://ghcr.io/token?scope=repository:${GHCR_REPOSITORY}:pull" | jq -r '.token // empty' 2>/dev/null || true)
-if [ -n "$GHCR_TOKEN" ]; then
-  GHCR_MANIFEST_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: Bearer ${GHCR_TOKEN}" \
-    -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
-    "https://ghcr.io/v2/${GHCR_REPOSITORY}/manifests/v${TRANSPORT_VERSION}" \
-    2>/dev/null || true)
-else
-  GHCR_MANIFEST_STATUS=""
+# Every destination the release publishes, as a tag suffix.
+DOCKER_TAGS=()
+for _suffix in "" -amd64 -arm64 -ubi9 -ubi9-amd64 -ubi9-arm64; do
+  DOCKER_TAGS+=("v${TRANSPORT_VERSION}${_suffix}")
+done
+echo "   🐳 Checking GHCR for ${DOCKER_TAGS[*]} in ${GHCR_REPOSITORY}..."
+if ! GHCR_TAG_STATES=$(ghcr_tag_states "$GHCR_REPOSITORY" "${DOCKER_TAGS[@]}"); then
+  echo "   ❌ Could not establish which Docker tags for v${TRANSPORT_VERSION} exist on GHCR; stopping rather than risk overwriting a published image" >&2
+  exit 1
 fi
 
-if [ "$GHCR_MANIFEST_STATUS" = "200" ]; then
-  echo "   ⏭️ Docker tag v${TRANSPORT_VERSION} already exists on GHCR"
-  DOCKER_TAG_EXISTS="true"
-else
-  echo "   ❌ Docker tag v${TRANSPORT_VERSION} not found on GHCR"
-fi
+DOCKER_TAG_EXISTS="true"
+for _tag in "${DOCKER_TAGS[@]}"; do
+  if grep -qxF "${_tag} present" <<<"$GHCR_TAG_STATES"; then
+    echo "   ⏭️ Docker tag ${_tag} already exists on GHCR"
+  elif grep -qxF "${_tag} absent" <<<"$GHCR_TAG_STATES"; then
+    echo "   ❌ Docker tag ${_tag} confirmed absent on GHCR"
+    DOCKER_TAG_EXISTS="false"
+  else
+    echo "::error::GHCR probe returned no state for ${_tag}" >&2
+    exit 1
+  fi
+done
 
 # Determine if release is needed
 if [ "$GIT_TAG_EXISTS" = "true" ] && [ "$DOCKER_TAG_EXISTS" = "true" ]; then
@@ -467,7 +482,7 @@ fi
   
 # Check if Docker image needs to be built (independent of transport release)
 if [ "$DOCKER_TAG_EXISTS" = "false" ]; then
-  echo "   🐳 Docker image missing - docker release needed"
+  echo "   🐳 Docker destination missing - docker release needed for the absent tags only"
   DOCKER_NEEDS_RELEASE="true"
 fi
 

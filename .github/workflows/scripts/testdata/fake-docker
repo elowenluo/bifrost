@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Fake docker for the release-image tests. Nothing reaches a registry.
+#
+# Logs every call to $DOCKER_LOG. `manifest inspect <image>:<tag>-amd64|-arm64` answers with
+# an image index like the one docker/build-push-action pushes: one platform manifest, whose
+# digest is the architecture's letter repeated (a... for amd64, b... for arm64), plus a
+# provenance attestation. `manifest push` of a reference ending in $FAKE_DOCKER_FAIL_PUSH
+# fails, after being logged, to simulate a push that dies part-way through a job.
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+digest() { printf 'sha256:'; printf "$1%.0s" $(seq 1 64); }
+case "$1 $2" in
+  "manifest inspect")
+    case "$3" in
+      *-arm64) arch=arm64 letter=b ;;
+      *-amd64) arch=amd64 letter=a ;;
+      *) echo "fake docker: unexpected inspect $3" >&2; exit 1 ;;
+    esac
+    printf '{"manifests":[{"digest":"%s","platform":{"architecture":"%s","os":"linux"}},{"digest":"%s","platform":{"architecture":"unknown","os":"unknown"}}]}' \
+      "$(digest "$letter")" "$arch" "$(digest c)" ;;
+  "manifest push")
+    if [ -n "${FAKE_DOCKER_FAIL_PUSH:-}" ] && [[ "$3" == *":${FAKE_DOCKER_FAIL_PUSH}" ]]; then
+      echo "fake docker: push of $3 failed" >&2
+      exit 1
+    fi ;;
+esac
+exit 0
