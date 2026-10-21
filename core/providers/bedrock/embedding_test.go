@@ -1214,11 +1214,26 @@ func TestBedrockNovaEmbeddingResponse(t *testing.T) {
 		assert.Equal(t, schemas.EmbeddingModalityAudio, converted.Data[0].Modality)
 		assert.Equal(t, 0, converted.Data[0].Index)
 		assert.Equal(t, schemas.EmbeddingModalityVideo, converted.Data[1].Modality)
-		assert.Equal(t, 1, converted.Data[1].Index)
+		assert.Equal(t, 0, converted.Data[1].Index)
 		assert.Equal(t, []float64{0.3, 0.4}, converted.Data[1].Embedding.EmbeddingArray)
 		// Nova reports its token count in a response header only, so Usage stays nil
 		// here and the provider backfills it from X-Amzn-Bedrock-Input-Token-Count.
 		assert.Nil(t, converted.Usage)
+	})
+
+	t.Run("separate audio and video vectors share their single input's index", func(t *testing.T) {
+		// SINGLE_EMBEDDING takes exactly one input, so every vector it returns belongs to
+		// input 0; Modality, not Index, tells the AUDIO_VIDEO_SEPARATE pair apart. Index
+		// 1 would name a second input that was never sent.
+		converted, err := (&BedrockNovaEmbeddingResponse{Embeddings: []BedrockNovaEmbedding{
+			{Embedding: []float64{0.1}, EmbeddingType: "AUDIO"},
+			{Embedding: []float64{0.2}, EmbeddingType: "VIDEO"},
+		}}).ToBifrostEmbeddingResponse()
+		require.NoError(t, err)
+		require.Len(t, converted.Data, 2)
+		for _, d := range converted.Data {
+			assert.Equal(t, 0, d.Index, "modality %s points at input %d of a one-input request", d.Modality, d.Index)
+		}
 	})
 
 	t.Run("a combined audio-video vector is labelled as such", func(t *testing.T) {

@@ -28,7 +28,7 @@ import (
 // contextTransport owns the socket for the life of the request, so it can:
 //   - apply the client's WriteTimeout / ReadTimeout (default_request_timeout_in_seconds)
 //     to the request write and to the wait for response headers, tightened by the
-//     request context's deadline;
+//     request context's deadline and by a per-request DoTimeout / DoDeadline;
 //   - clear those deadlines the moment headers are parsed for a streamed body, so
 //     stream_idle_timeout_in_seconds (NewIdleTimeoutReader) is the only bound on the
 //     body, exactly as before;
@@ -49,9 +49,13 @@ import (
 // ReadCloserWithError contract that NewIdleTimeoutReader, SetupStreamCancellation,
 // ReleaseStreamingResponse and Response.Body already rely on.
 //
-// Not supported, by design: per-request DoTimeout / DoDeadline (their deadline is
-// unexported; Bifrost never uses them), Response.SkipBody combined with streaming
-// beyond HEAD/204/304, and HTTP pipelining.
+// A per-request DoTimeout / DoDeadline (Request.GetTimeOut) bounds the connection
+// wait, the write and the header wait the way fasthttp's default transport does;
+// credential exchanges (githubcopilot) rely on it. For a streamed body it, like
+// the client timeouts, is cleared once headers are parsed.
+//
+// Not supported, by design: Response.SkipBody combined with streaming beyond
+// HEAD/204/304, and HTTP pipelining.
 
 // requestContexts maps an in-flight *fasthttp.Request to its context. Requests are
 // pooled, so a binding must be removed once client.Do returns and before the
@@ -126,7 +130,15 @@ func (t *contextTransport) RoundTrip(hc *fasthttp.HostClient, req *fasthttp.Requ
 
 	customSkipBody := resp.SkipBody
 
-	cc, err := hc.AcquireConn(0, req.ConnectionClose())
+	// DoTimeout / DoDeadline leave the remaining time on the request; fasthttp's
+	// HostClient.Do recomputes it before every attempt.
+	reqTimeout := req.GetTimeOut()
+	var reqDeadline time.Time
+	if reqTimeout > 0 {
+		reqDeadline = time.Now().Add(reqTimeout)
+	}
+
+	cc, err := hc.AcquireConn(reqTimeout, req.ConnectionClose())
 	if err != nil {
 		return false, err
 	}
@@ -142,7 +154,7 @@ func (t *contextTransport) RoundTrip(hc *fasthttp.HostClient, req *fasthttp.Requ
 	watcher := startCancelWatcher(ctx, abort, conn)
 	defer watcher.stop()
 
-	if err = conn.SetWriteDeadline(deadlineFor(hc.WriteTimeout, ctx)); err != nil {
+	if err = conn.SetWriteDeadline(deadlineFor(hc.WriteTimeout, reqDeadline, ctx)); err != nil {
 		hc.CloseConn(cc)
 		return retryOn(err), watcher.classify(err)
 	}
@@ -169,7 +181,7 @@ func (t *contextTransport) RoundTrip(hc *fasthttp.HostClient, req *fasthttp.Requ
 
 	// Setting a deadline fails with "use of closed network connection" when the
 	// watcher closed the socket a moment ago; classify turns that into ctx.Err().
-	if err = conn.SetReadDeadline(deadlineFor(hc.ReadTimeout, ctx)); err != nil {
+	if err = conn.SetReadDeadline(deadlineFor(hc.ReadTimeout, reqDeadline, ctx)); err != nil {
 		hc.CloseConn(cc)
 		return retryOn(err), watcher.classify(err)
 	}
@@ -268,12 +280,15 @@ func (t *contextTransport) RoundTrip(hc *fasthttp.HostClient, req *fasthttp.Requ
 	return false, nil
 }
 
-// deadlineFor returns now+timeout, tightened by ctx's deadline when that comes
-// first. A zero time means no deadline.
-func deadlineFor(timeout time.Duration, ctx context.Context) time.Time {
+// deadlineFor returns now+timeout, tightened by the per-request deadline and by
+// ctx's deadline when either comes first. A zero time means no deadline.
+func deadlineFor(timeout time.Duration, reqDeadline time.Time, ctx context.Context) time.Time {
 	var deadline time.Time
 	if timeout > 0 {
 		deadline = time.Now().Add(timeout)
+	}
+	if !reqDeadline.IsZero() && (deadline.IsZero() || reqDeadline.Before(deadline)) {
+		deadline = reqDeadline
 	}
 	if ctxDeadline, ok := ctx.Deadline(); ok && (deadline.IsZero() || ctxDeadline.Before(deadline)) {
 		deadline = ctxDeadline

@@ -286,7 +286,8 @@ func (provider *VolcengineProvider) Embedding(ctx *schemas.BifrostContext, key s
 
 // useVolcengineMultiModalEmbedding reports whether a request belongs on
 // /embeddings/multimodal: any media part does, and so does a single text input
-// to a vision embedding model.
+// to a vision embedding model, however many text parts it has. /embeddings would
+// join those parts and drop instructions and sparse_embedding.
 func useVolcengineMultiModalEmbedding(request *schemas.BifrostEmbeddingRequest) bool {
 	if request == nil || len(request.Input) == 0 {
 		return false
@@ -298,7 +299,7 @@ func useVolcengineMultiModalEmbedding(request *schemas.BifrostEmbeddingRequest) 
 			}
 		}
 	}
-	return isVolcengineVisionEmbeddingModel(request.Model) && len(request.Input) == 1 && schemas.EmbeddingInput(request.Input).AllSingleText()
+	return isVolcengineVisionEmbeddingModel(request.Model) && len(request.Input) == 1
 }
 
 // volcengineMultiModalInputType is the part type on Volcengine's native multimodal wire format.

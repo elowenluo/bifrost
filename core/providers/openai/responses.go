@@ -547,6 +547,13 @@ func applyResponsesCacheBreakpoints(messages []schemas.ResponsesMessage, openAIF
 	}
 }
 
+// isNativeOpenAIWebSearchCall reports whether message is a web_search_call that OpenAI
+// itself produced (ws_ id). Foreign histories (Gemini, Anthropic srvtoolu_) use other ids.
+func isNativeOpenAIWebSearchCall(message schemas.ResponsesMessage) bool {
+	return message.Type != nil && *message.Type == schemas.ResponsesMessageTypeWebSearchCall &&
+		message.ID != nil && strings.HasPrefix(*message.ID, "ws_")
+}
+
 // ToOpenAIResponsesRequest converts a Bifrost responses request to OpenAI format
 // bareTextContentBlockType is the Anthropic/Gemini spelling of a text content block.
 // OpenAI's Responses input only knows input_text / output_text, so the converter
@@ -740,6 +747,11 @@ func ToOpenAIResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.B
 			// OpenAI wire, and `error` on an input item is rejected outright. Dropping
 			// it too would make a failed tool call indistinguishable from a successful
 			// one. Only this value is kept; any other status is still stripped.
+		case isNativeOpenAIWebSearchCall(message) && message.Status != nil &&
+			(*message.Status == "in_progress" || *message.Status == "searching" ||
+				*message.Status == "completed" || *message.Status == "failed"):
+			// A native web_search_call (ws_ id) is a ResponseFunctionWebSearchParam, where
+			// id and status are both required.
 		case message.Type != nil && *message.Type == schemas.ResponsesMessageTypeMessage &&
 			message.Role != nil && *message.Role == schemas.ResponsesInputMessageRoleAssistant &&
 			message.ID != nil && *message.ID != "" && message.Status != nil &&
@@ -754,12 +766,14 @@ func ToOpenAIResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.B
 		// Gemini streaming generates non-standard IDs for reasoning items (msg_<id>_reasoning_N,
 		// reasoning_N) and function_call_output items (func_resp_<id>). OpenAI rejects these.
 		// Drop them; the call_id and output pairing are unaffected. message is a value copy.
-		// But preserve native OpenAI reasoning IDs (rs_ prefix) which are needed for replay.
+		// But preserve native OpenAI reasoning (rs_) and web_search_call (ws_) IDs, which
+		// are needed for replay.
 		if message.Type != nil && (*message.Type == schemas.ResponsesMessageTypeReasoning ||
 			*message.Type == schemas.ResponsesMessageTypeFunctionCallOutput ||
 			*message.Type == schemas.ResponsesMessageTypeWebSearchCall) &&
 			message.ID != nil && *message.ID != "" &&
-			!(*message.Type == schemas.ResponsesMessageTypeReasoning && strings.HasPrefix(*message.ID, "rs_")) {
+			!(*message.Type == schemas.ResponsesMessageTypeReasoning && strings.HasPrefix(*message.ID, "rs_")) &&
+			!isNativeOpenAIWebSearchCall(message) {
 			message.ID = nil
 		}
 

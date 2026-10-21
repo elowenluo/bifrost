@@ -2136,6 +2136,57 @@ func bedrockInvokeStreamItemKey(resp *schemas.BifrostResponsesStreamResponse) st
 	return ""
 }
 
+// bedrockInvokeToolSearchDoneBytes completes a streamed tool search the way Anthropic
+// streamed it: the query lands on the server_tool_use block opened at queryIndex, which
+// is then closed, and the paired tool_search_tool_result is replayed whole at
+// resultIndex. Anthropic requires both blocks to be echoed back unchanged on the next
+// turn, so a stream that closed the query block alone could not be replayed. The
+// neutral stream buffers the query rather than forwarding its input_json deltas, and
+// delivers it on this done item, so it is emitted here exactly once.
+func bedrockInvokeToolSearchDoneBytes(ts *schemas.ResponsesToolMessage, queryIndex, resultIndex int) ([][]byte, error) {
+	events := make([]interface{}, 0, 4)
+	if ts.Arguments != nil && *ts.Arguments != "" {
+		events = append(events, map[string]interface{}{
+			"type":  "content_block_delta",
+			"index": queryIndex,
+			"delta": map[string]interface{}{
+				"type":         "input_json_delta",
+				"partial_json": *ts.Arguments,
+			},
+		})
+	}
+	refs := []BedrockInvokeToolReference{}
+	if ts.ResponsesToolSearchCall != nil {
+		for _, name := range ts.ResponsesToolSearchCall.ToolReferences {
+			refs = append(refs, BedrockInvokeToolReference{Type: "tool_reference", ToolName: name})
+		}
+	}
+	result := BedrockInvokeMessagesContentBlock{
+		Type: "tool_search_tool_result",
+		Content: &BedrockInvokeToolSearchResult{
+			Type:           "tool_search_tool_search_result",
+			ToolReferences: refs,
+		},
+	}
+	if ts.CallID != nil {
+		result.ToolUseID = *ts.CallID
+	}
+	events = append(events,
+		map[string]interface{}{"type": "content_block_stop", "index": queryIndex},
+		map[string]interface{}{"type": "content_block_start", "index": resultIndex, "content_block": result},
+		map[string]interface{}{"type": "content_block_stop", "index": resultIndex},
+	)
+	frames := make([][]byte, 0, len(events))
+	for _, event := range events {
+		eventBytes, err := providerUtils.MarshalSorted(event)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal invoke stream event: %w", err)
+		}
+		frames = append(frames, eventBytes)
+	}
+	return frames, nil
+}
+
 // toAnthropicInvokeStreamBytes converts a Bifrost stream event into raw bytes representing
 // the Anthropic Messages API streaming event JSON, suitable for wrapping in InvokeModelRawChunks.
 // Returns a slice of byte slices since some Bifrost events map to multiple Anthropic events
@@ -2213,12 +2264,12 @@ func toAnthropicInvokeStreamBytes(ctx *schemas.BifrostContext, resp *schemas.Bif
 			// "Never return a tool_result for its srvtoolu_... ID."
 			// (https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool)
 			//
-			// The paired tool_search_tool_result block is deliberately NOT re-emitted
-			// here. The neutral stream collapses Anthropic's two blocks into a single
-			// tool_search_call item, so the caller sees the query block alone; the
-			// non-streaming path emits the full pair. The stop for this block is
-			// realigned onto the index opened here (see bedrockInvokeStreamState), so
-			// dropping the result block does not leave an unclosed block behind.
+			// The neutral stream collapses Anthropic's two blocks into a single
+			// tool_search_call item, so only the server_tool_use opens here; its query
+			// and the paired tool_search_tool_result are replayed when the item
+			// completes (bedrockInvokeToolSearchDoneBytes), matching the non-streaming
+			// path. The stop for this block is realigned onto the index opened here
+			// (see bedrockInvokeStreamState).
 			blockType := "tool_use"
 			if resp.Item.Type != nil && *resp.Item.Type == schemas.ResponsesMessageTypeToolSearchCall {
 				blockType = "server_tool_use"
@@ -2349,6 +2400,10 @@ func toAnthropicInvokeStreamBytes(ctx *schemas.BifrostContext, resp *schemas.Bif
 		// A tool_search_call's done event carries the tool_search_tool_result index, one
 		// past the server_tool_use its added event opened, so close the opened block.
 		if opened, ok := lookupBedrockInvokeStreamState(ctx).takeBlockIndex(bedrockInvokeStreamItemKey(resp)); ok {
+			if resp.Item != nil && resp.Item.Type != nil && *resp.Item.Type == schemas.ResponsesMessageTypeToolSearchCall &&
+				resp.Item.ResponsesToolMessage != nil && idx > opened {
+				return bedrockInvokeToolSearchDoneBytes(resp.Item.ResponsesToolMessage, opened, idx)
+			}
 			idx = opened
 		}
 		event = map[string]interface{}{

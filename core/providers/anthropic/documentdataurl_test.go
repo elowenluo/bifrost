@@ -91,3 +91,26 @@ func TestNormalizeBase64TextSources_AllocationScaling(t *testing.T) {
 		}
 	})
 }
+
+// TestNormalizeBase64TextSources_UnmatchedPayloadNotCopied pins that a request whose only
+// documents are images/PDFs is returned unchanged without copying its messages or blocks.
+func TestNormalizeBase64TextSources_UnmatchedPayloadNotCopied(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xff}, 1<<20))
+	body := []byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":[` +
+		`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + payload + `"}},` +
+		`{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"` + payload + `"}},` +
+		`{"type":"text","text":"describe"}]}]}`)
+	var out []byte
+	allocated := memtest.AllocBytesPerOp(func() {
+		var err error
+		if out, err = normalizeBase64TextSources(body); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if &out[0] != &body[0] {
+		t.Fatalf("unchanged body must be returned as-is")
+	}
+	if allocated > int64(len(body))/8 {
+		t.Fatalf("normalization allocated %d bytes for a %d-byte body with no eligible documents", allocated, len(body))
+	}
+}
