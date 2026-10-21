@@ -183,7 +183,11 @@ func TestSecurityLive(t *testing.T) {
 	lifecycleCard := &a2a.AgentCard{Name: "security-fixture", Version: "1", Capabilities: a2a.AgentCapabilities{Streaming: true, ExtendedAgentCard: true}, DefaultInputModes: []string{"text/plain"}, DefaultOutputModes: []string{"text/plain"}}
 	lifecycleCard.Skills = []a2a.AgentSkill{{ID: "fixture", Name: "Lifecycle", Description: "Finite lifecycle validation", Tags: []string{"validation"}}}
 	lifecycleCard.SupportedInterfaces = []*a2a.AgentInterface{a2a.NewAgentInterface(upstream.URL+"/jsonrpc", a2a.TransportProtocolJSONRPC)}
-	handler, _ := fixture.NewLifecycleHandler(lifecycleCard)
+	// This handler backs the published UI fixture, whose "interruptible stream" the capture test
+	// reads to completion; nothing here drives its checkpoint, so open the gate now rather than
+	// leave the stream parked at checkpoint 1.
+	handler, releaseCheckpoint := fixture.NewLifecycleHandler(lifecycleCard)
+	releaseCheckpoint()
 	grpcServer := grpc.NewServer()
 	a2apb.RegisterA2AServiceServer(grpcServer, a2agrpc.NewHandler(handler))
 	go grpcServer.Serve(listener)
@@ -366,13 +370,11 @@ func TestSecurityLive(t *testing.T) {
 			e = driver.AssertLogs(logCtx, gw, lifecycleName, lifecycleResult, false, driver.Tags{})
 			stopLogs()
 			if e != nil {
+				// Missing, duplicated or miscorrelated history is a failure, not a note.
 				logObservations = append(logObservations, fmt.Sprintf("%s -> %s: %v", inbound, binding, e))
-				t.Logf("OBSERVATION logs %s -> %s: %v", inbound, binding, e)
-			}
-			if e == nil {
-				t.Logf("PASS lifecycle + logs %s -> %s", inbound, binding)
+				t.Errorf("logs %s -> %s: %v", inbound, binding, e)
 			} else {
-				t.Logf("PASS native lifecycle %s -> %s; log correlation unresolved", inbound, binding)
+				t.Logf("PASS lifecycle + logs %s -> %s", inbound, binding)
 			}
 		}
 	}
@@ -446,7 +448,7 @@ func TestSecurityLive(t *testing.T) {
 			time.Sleep(time.Second)
 		}
 	}
-	t.Logf("log observations=%d", len(logObservations))
+	t.Logf("log failures=%d", len(logObservations))
 	t.Logf("PASS live explicitOperations=%d runtimeHTTP=%d oauthDiscovery=%d oauthToken=%d; resources=%s", requests, runtimeCalls.Load(), discoveryCalls.Load(), tokenCalls.Load(), id)
 }
 

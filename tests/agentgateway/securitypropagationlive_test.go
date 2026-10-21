@@ -83,6 +83,9 @@ func TestSecurityLivePropagation(t *testing.T) {
 	}
 	var baseline []string
 	json.Unmarshal(cc["a2a_private_allowlist"], &baseline)
+	// Registered before the denied phase revokes loopback, so a fatal failure there still puts the
+	// baseline allowlist back.
+	restoreClientConfigOnCleanup(t, gw, cc, cfg["framework_config"], "a2a_private_allowlist")
 	denied := []string{}
 	for _, entry := range baseline {
 		if entry != "127.0.0.1" && entry != "localhost" {
