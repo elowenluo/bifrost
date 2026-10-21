@@ -861,47 +861,32 @@ func TestBuildTLSHTTPClientRefusesProxyingBlockedLiteral(t *testing.T) {
 	}
 }
 
-// TestBuildTLSHTTPClientProxiedHostnameNeedsNoLocalDNS proves a proxied
-// request is handed to the proxy with its hostname unresolved. A proxy-only
-// deployment resolves public names at the proxy, not on the Bifrost host, so
-// the selector must not resolve locally: the target here is under .invalid
-// (RFC 6761, guaranteed not to resolve) and the request must still reach the
-// proxy and succeed.
-func TestBuildTLSHTTPClientProxiedHostnameNeedsNoLocalDNS(t *testing.T) {
-	var (
-		mu      sync.Mutex
-		lastReq string
-	)
-	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		lastReq = r.Method + " " + r.Host
-		mu.Unlock()
-		answerThroughTunnel(w, r, "via-proxy")
-	}))
-	t.Cleanup(proxy.Close)
+// TestBuildTLSHTTPClientRefusesProxiedNamesItCannotCheck: a proxied request reaches
+// the proxy only as an address the destination policy approved. A name the local
+// resolver cannot answer cannot be checked, and a proxy that resolved it on its own
+// could reach a metadata address, so it is refused for every MCP client, strict or
+// not, before the proxy is contacted.
+func TestBuildTLSHTTPClientRefusesProxiedNamesItCannotCheck(t *testing.T) {
+	var tunnels atomic.Int32
+	proxy := proxytest.ForwardProxy(t, func(w http.ResponseWriter, _ *http.Request) {
+		tunnels.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
 	proxyURL, err := url.Parse(proxy.URL)
 	require.NoError(t, err)
-
-	base, ok := http.DefaultTransport.(*http.Transport)
-	require.True(t, ok)
-	origProxy := base.Proxy
-	base.Proxy = http.ProxyURL(proxyURL)
-	t.Cleanup(func() { base.Proxy = origProxy })
-
-	httpClient, err := (&MCPManager{logger: defaultLogger}).buildTLSHTTPClient(&schemas.MCPClientConfig{})
-	require.NoError(t, err)
-	httpClient.Timeout = 5 * time.Second
-
-	resp, err := httpClient.Get("http://mcp.invalid/mcp")
-	require.NoError(t, err, "a hostname the host cannot resolve must still be sent to the proxy")
-	body, readErr := io.ReadAll(resp.Body)
-	require.NoError(t, resp.Body.Close())
-	require.NoError(t, readErr)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Equal(t, "via-proxy", string(body))
-	mu.Lock()
-	defer mu.Unlock()
-	require.Equal(t, "CONNECT mcp.invalid:80", lastReq, "the proxy must receive the original hostname")
+	selector := func(*http.Request) (*url.URL, error) { return proxyURL, nil }
+	for _, strict := range []bool{false, true} {
+		httpClient, err := (&MCPManager{logger: &MockLogger{}}).buildTLSHTTPClientWithProxyAndResolver(
+			&schemas.MCPClientConfig{Name: "unresolvable", RequirePublicTarget: strict}, selector,
+			stubResolver{err: errors.New("no such host")})
+		require.NoError(t, err)
+		resp, err := httpClient.Get("http://only-proxy-knows.example/mcp")
+		if resp != nil {
+			resp.Body.Close()
+		}
+		require.Error(t, err, "strict=%v: an unresolvable name must not be tunnelled by name", strict)
+	}
+	require.Zero(t, tunnels.Load(), "nothing may reach the proxy for a name the gateway could not check")
 }
 
 // TestBuildTLSHTTPClientBypassedProxyDialsDirect covers the NO_PROXY shape: the
@@ -1164,7 +1149,7 @@ func TestMCPProxySelectorAppliesPolicyToHostnames(t *testing.T) {
 		{"strict refuses a hostname resolving to loopback", true, stubResolver{ips: []net.IP{net.ParseIP("127.0.0.1")}}, "blocked connection to non-public address"},
 		{"strict proxies a hostname resolving to a public address", true, stubResolver{ips: []net.IP{net.ParseIP("93.184.216.34")}}, ""},
 		{"strict refuses an unresolvable hostname rather than trusting the proxy", true, stubResolver{err: errors.New("no such host")}, "DNS lookup failed"},
-		{"unflagged leaves an unresolvable hostname to the proxy", false, stubResolver{err: errors.New("no such host")}, ""},
+		{"unflagged refuses an unresolvable hostname too: nothing could check it", false, stubResolver{err: errors.New("no such host")}, "DNS lookup failed"},
 		{"unflagged proxies a hostname resolving to a private address", false, stubResolver{ips: []net.IP{net.ParseIP("10.0.0.5")}}, ""},
 		{"unflagged refuses a hostname resolving to metadata", false, stubResolver{ips: []net.IP{net.ParseIP("169.254.169.254")}}, "link-local"},
 	}

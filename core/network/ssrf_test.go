@@ -806,7 +806,7 @@ func TestGuardedClientRedirectToLoopbackRefusedEndToEnd(t *testing.T) {
 				return fmt.Errorf("blocked redirect to non-public address %s (host %s)", ip, host)
 			}
 			return nil
-		}, true)
+		})
 		mustFailGet(t, client, entry.URL, "blocked redirect to non-public address")
 	}
 }
@@ -891,20 +891,20 @@ func redirectVia() []*http.Request {
 	return []*http.Request{{URL: &url.URL{Scheme: "https", Host: "entry.example"}}}
 }
 
-// TestGuardedRedirectViaProxyToleratesProxyOnlyDNS: when the redirect hop is
-// routed through a proxy, the proxy resolves the hostname on its own side, so a
-// local resolver that cannot resolve it (a proxy-only egress deployment) must
-// not block the hop. The direct path keeps failing closed on the same error.
-func TestGuardedRedirectViaProxyToleratesProxyOnlyDNS(t *testing.T) {
+// TestGuardedRedirectRefusesUnresolvableHops: a redirect hop the local resolver
+// cannot answer cannot be checked, so it is refused whether or not it would travel
+// through a proxy: a proxy resolving it on its own side could reach a blocked
+// address. The direct path fails closed on the same error.
+func TestGuardedRedirectRefusesUnresolvableHops(t *testing.T) {
 	noDNS := &fakeResolver{err: errors.New("no route to resolver")}
 	req, _ := http.NewRequest(http.MethodGet, "https://catalog.example/next", nil)
 
-	proxied := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, fixedProxy(t, "http://proxy.internal:3128"), noDNS, false)
-	if err := proxied.CheckRedirect(req, redirectVia()); err != nil {
-		t.Fatalf("proxied redirect to an unresolvable hostname must be left to the proxy, got %v", err)
+	proxied := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, fixedProxy(t, "http://proxy.internal:3128"), noDNS)
+	if err := proxied.CheckRedirect(req, redirectVia()); err == nil || !strings.Contains(err.Error(), "DNS lookup failed") {
+		t.Fatalf("proxied redirect to an unresolvable hostname must be refused, got %v", err)
 	}
 
-	direct := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, nil, noDNS, false)
+	direct := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, nil, noDNS)
 	if err := direct.CheckRedirect(req, redirectVia()); err == nil || !strings.Contains(err.Error(), "DNS lookup failed") {
 		t.Fatalf("direct redirect with a failing resolver must be refused, got %v", err)
 	}
@@ -946,7 +946,7 @@ func TestNewSSRFSafeHTTPClientReachesConfiguredPrivateProxy(t *testing.T) {
 // maps to a blocked address is refused before the proxy is asked for it.
 func TestGuardedRedirectViaProxyStillAppliesPolicyWhenResolvable(t *testing.T) {
 	metadata := &fakeResolver{ips: []net.IP{net.ParseIP("169.254.169.254")}}
-	client := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, fixedProxy(t, "http://proxy.internal:3128"), metadata, false)
+	client := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, fixedProxy(t, "http://proxy.internal:3128"), metadata)
 	req, _ := http.NewRequest(http.MethodGet, "http://metadata.internal/latest/meta-data/", nil)
 	if err := client.CheckRedirect(req, redirectVia()); err == nil || !strings.Contains(err.Error(), "link-local") {
 		t.Fatalf("proxied redirect to a hostname resolving to link-local must be refused, got %v", err)
@@ -956,8 +956,8 @@ func TestGuardedRedirectViaProxyStillAppliesPolicyWhenResolvable(t *testing.T) {
 // TestGuardedProxySelectorAppliesPolicyToHostnames: on the proxied path the
 // dialer only ever sees the proxy, so the selector is where the destination
 // policy runs. A hostname that resolves locally to a blocked address is
-// refused; one the local resolver cannot resolve is handed to the proxy, which
-// resolves it on its own side; an IP literal is checked without DNS.
+// refused, and so is one the local resolver cannot resolve (it cannot be
+// checked); an IP literal is checked without DNS.
 func TestGuardedProxySelectorAppliesPolicyToHostnames(t *testing.T) {
 	proxy := fixedProxy(t, "http://proxy.internal:3128")
 	cases := []struct {
@@ -969,7 +969,7 @@ func TestGuardedProxySelectorAppliesPolicyToHostnames(t *testing.T) {
 		{"hostname resolving to metadata is refused", "http://metadata.internal/", &fakeResolver{ips: []net.IP{net.ParseIP("169.254.169.254")}}, "link-local"},
 		{"hostname resolving to NAT64 metadata is refused", "http://metadata.internal/", &fakeResolver{ips: []net.IP{net.ParseIP("64:ff9b::a9fe:a9fe")}}, "link-local"},
 		{"hostname resolving to a public address is proxied", "http://catalog.example/", &fakeResolver{ips: []net.IP{net.ParseIP("93.184.216.34")}}, ""},
-		{"unresolvable hostname is left to the proxy", "http://only-the-proxy-knows.corp/", &fakeResolver{err: errors.New("no such host")}, ""},
+		{"unresolvable hostname is refused", "http://only-the-proxy-knows.corp/", &fakeResolver{err: errors.New("no such host")}, "DNS lookup failed"},
 		{"blocked IP literal is refused without DNS", "http://169.254.169.254/", &fakeResolver{err: errors.New("must not resolve")}, "link-local"},
 	}
 	for _, tc := range cases {
@@ -1047,7 +1047,7 @@ func TestCheckProxiedDestination(t *testing.T) {
 		{"strict refuses loopback literal", "127.0.0.1", true, &fakeResolver{err: errors.New("no dns")}, "non-public"},
 		{"strict accepts public answer", "mcp.example", true, &fakeResolver{ips: []net.IP{net.ParseIP("93.184.216.34")}}, ""},
 		{"strict refuses an unresolvable name rather than trusting the proxy", "only.proxy.knows", true, &fakeResolver{err: errors.New("no dns")}, "DNS lookup failed"},
-		{"permissive leaves an unresolvable name to the proxy", "only.proxy.knows", false, &fakeResolver{err: errors.New("no dns")}, ""},
+		{"permissive refuses an unresolvable name too: nothing could check it", "only.proxy.knows", false, &fakeResolver{err: errors.New("no dns")}, "DNS lookup failed"},
 		{"permissive accepts private answer", "mcp.corp", false, &fakeResolver{ips: []net.IP{net.ParseIP("10.0.0.5")}}, ""},
 		{"permissive refuses metadata answer", "md.corp", false, &fakeResolver{ips: []net.IP{net.ParseIP("169.254.169.254")}}, "link-local"},
 	}
@@ -1170,7 +1170,7 @@ func TestGuardedProxyPinsTheCheckedAddress(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			seen.Store("")
 			host.Store("")
-			client := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, tc.checkIP, fixedProxy(t, proxy.URL), tc.resolver, tc.strict)
+			client := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, tc.checkIP, fixedProxy(t, proxy.URL), tc.resolver)
 			resp, err := client.Get("http://rebind.example/latest/meta-data/")
 			if err != nil {
 				t.Fatalf("a destination that passed the routing check must be reachable at the checked address, got %v", err)
@@ -1199,7 +1199,7 @@ func TestPinnedProxyDialRechecksAddressesItResolves(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	resolver := &flakyThenResolver{err: errors.New("SERVFAIL"), then: net.ParseIP("169.254.169.254")}
-	client := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, fixedProxy(t, proxy.URL), resolver, false)
+	client := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, fixedProxy(t, proxy.URL), resolver)
 	if _, err := client.Get("http://rebind.example/latest/meta-data/"); err == nil {
 		t.Fatal("a metadata answer at dial time must be refused")
 	}
@@ -1222,9 +1222,11 @@ func (r *flakyThenResolver) LookupIP(context.Context, string, string) ([]net.IP,
 	return []net.IP{r.then}, nil
 }
 
-// TestStrictGuardedProxyRefusesUnresolvedNames: the strict client must not hand a
-// name the local resolver cannot answer to the proxy, where it would resolve with
-// no check at all. The private-network client still defers it (proxy-only DNS).
+// TestStrictGuardedProxyRefusesUnresolvedNames: no guarded client hands a name the
+// local resolver cannot answer to the proxy, where it would resolve with no check
+// at all (to a metadata address, through a permissive proxy). That holds for the
+// private-network client too, so proxy-only DNS deployments must let the gateway
+// resolve the destinations it reaches through the proxy.
 func TestStrictGuardedProxyRefusesUnresolvedNames(t *testing.T) {
 	var seen atomic.Value
 	proxy := proxytest.ForwardProxy(t, func(w http.ResponseWriter, r *http.Request) {
@@ -1239,7 +1241,7 @@ func TestStrictGuardedProxyRefusesUnresolvedNames(t *testing.T) {
 		return nil
 	}
 
-	strict := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, strictCheck, fixedProxy(t, proxy.URL), noDNS, true)
+	strict := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, strictCheck, fixedProxy(t, proxy.URL), noDNS)
 	if _, err := strict.Get("http://only-proxy-knows.example/x"); err == nil || !strings.Contains(err.Error(), "DNS lookup failed") {
 		t.Fatalf("strict client must refuse an unresolvable proxied name, got %v", err)
 	}
@@ -1247,14 +1249,12 @@ func TestStrictGuardedProxyRefusesUnresolvedNames(t *testing.T) {
 		t.Fatalf("strict client handed %q to the proxy", got)
 	}
 
-	lenient := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, fixedProxy(t, proxy.URL), noDNS, false)
-	resp, err := lenient.Get("http://only-proxy-knows.example/x")
-	if err != nil {
-		t.Fatalf("private-network client must defer an unresolvable name to the proxy, got %v", err)
+	lenient := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, fixedProxy(t, proxy.URL), noDNS)
+	if _, err := lenient.Get("http://only-proxy-knows.example/x"); err == nil || !strings.Contains(err.Error(), "DNS lookup failed") {
+		t.Fatalf("private-network client must refuse an unresolvable proxied name, got %v", err)
 	}
-	resp.Body.Close()
-	if got, _ := seen.Load().(string); got != "only-proxy-knows.example" {
-		t.Fatalf("proxy saw %q, want the name it was deferred", got)
+	if got, _ := seen.Load().(string); got != "" {
+		t.Fatalf("private-network client handed %q to the proxy", got)
 	}
 }
 
@@ -1264,8 +1264,8 @@ func TestStrictGuardedProxyRefusesUnresolvedNames(t *testing.T) {
 // expiry would stay open, with its transport goroutines, for the life of the process.
 func TestGuardedHTTPClientIdleConnectionsExpire(t *testing.T) {
 	noDNS := &fakeResolver{err: errors.New("no dns")}
-	direct := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, nil, noDNS, false)
-	proxied := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, fixedProxy(t, "http://proxy.internal:3128"), noDNS, false)
+	direct := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, nil, noDNS)
+	proxied := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, fixedProxy(t, "http://proxy.internal:3128"), noDNS)
 
 	directTransport, ok := direct.Transport.(*http.Transport)
 	if !ok {

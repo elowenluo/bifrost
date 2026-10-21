@@ -3411,7 +3411,7 @@ func (m *MCPManager) buildTLSHTTPClientWithProxyAndResolver(config *schemas.MCPC
 	return &http.Client{Transport: &network.ProxyAwareTransport{
 		Proxy:    mcpProxySelector(proxy, strict, resolver),
 		Direct:   newTransport(nil, direct),
-		ViaProxy: newTransport(nil, network.PinnedProxyDialContext(policy, resolver, !strict)),
+		ViaProxy: newTransport(nil, network.PinnedProxyDialContext(policy, resolver)),
 	}}, nil
 }
 
@@ -3421,12 +3421,10 @@ func (m *MCPManager) buildTLSHTTPClientWithProxyAndResolver(config *schemas.MCPC
 // target. A proxied request is validated here, through
 // network.CheckProxiedDestination: an IP-literal host is checked as is and a
 // hostname against what the local resolver answers. A hostname the local
-// resolver cannot answer is handed to the proxy only for an unflagged client
-// (the proxy resolves it on its own side in a proxy-only deployment); with
-// requirePublicTarget set it is refused, since that client's target was
-// chosen by a caller who passed no credential check and a name that stops
-// resolving locally must not become a way to route a private resolution
-// through the proxy unvetted. The proxy is operator configuration (process
+// resolver cannot answer is refused for every client: it cannot be checked,
+// and a proxy that resolved it on its own side could reach a metadata
+// address. A proxy-only DNS deployment must therefore let the gateway resolve
+// the MCP servers it reaches through the proxy. The proxy is operator configuration (process
 // environment), not request input; the dialer still refuses a proxy that
 // itself sits on a link-local or metadata address. With requirePublicTarget
 // set the destination must be public, matching the strict dialer the same

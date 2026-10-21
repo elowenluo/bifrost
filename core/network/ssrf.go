@@ -673,7 +673,7 @@ func NewSSRFSafeHTTPClient(timeout time.Duration) *http.Client {
 			return fmt.Errorf("blocked redirect to non-public address %s (host %s)", ip, host)
 		}
 		return nil
-	}, true)
+	})
 }
 
 // NewPrivateNetworkHTTPClient is the PrivateNetworkDialContext counterpart of
@@ -689,7 +689,7 @@ func NewSSRFSafeHTTPClient(timeout time.Duration) *http.Client {
 // ranges, not an authorization check: callers remain responsible for gating
 // who may configure the URL.
 func NewPrivateNetworkHTTPClient(timeout time.Duration) *http.Client {
-	return newGuardedHTTPClient(timeout, PrivateNetworkDialContext(timeout), checkPrivateNetworkPolicy, false)
+	return newGuardedHTTPClient(timeout, PrivateNetworkDialContext(timeout), checkPrivateNetworkPolicy)
 }
 
 // newGuardedHTTPClient assembles the client shared by NewSSRFSafeHTTPClient
@@ -698,10 +698,9 @@ func NewPrivateNetworkHTTPClient(timeout time.Duration) *http.Client {
 // targets (every resolved address must pass) and, through
 // guardedProxySelector, to IP-literal destinations on the proxied path. The
 // proxy is the global proxy when it is enabled for API traffic, else the
-// environment's (DefaultProxyFunc). strict refuses a proxied destination the local
-// resolver cannot answer instead of leaving it to the proxy.
-func newGuardedHTTPClient(timeout time.Duration, dial func(ctx context.Context, netw, addr string) (net.Conn, error), checkIP func(ip net.IP, host string) error, strict bool) *http.Client {
-	return newGuardedHTTPClientWith(timeout, dial, checkIP, DefaultProxyFunc(ClientPurposeAPI), net.DefaultResolver, strict)
+// environment's (DefaultProxyFunc).
+func newGuardedHTTPClient(timeout time.Duration, dial func(ctx context.Context, netw, addr string) (net.Conn, error), checkIP func(ip net.IP, host string) error) *http.Client {
+	return newGuardedHTTPClientWith(timeout, dial, checkIP, DefaultProxyFunc(ClientPurposeAPI), net.DefaultResolver)
 }
 
 // newGuardedHTTPClientWith is the seam behind newGuardedHTTPClient with the
@@ -715,7 +714,10 @@ func newGuardedHTTPClient(timeout time.Duration, dial func(ctx context.Context, 
 // under the private-network policy: an operator's proxy on a private or
 // loopback address is the normal self-hosted setup. guardedProxySelector still vets
 // the destination when the request is routed, so a blocked one fails before any dial.
-func newGuardedHTTPClientWith(timeout time.Duration, dial func(ctx context.Context, netw, addr string) (net.Conn, error), checkIP func(ip net.IP, host string) error, proxy func(*http.Request) (*url.URL, error), resolver ipLookuper, strict bool) *http.Client {
+// A destination the local resolver cannot answer is refused on every path: it cannot
+// be checked, and a proxy resolving it on its own side could reach a blocked address,
+// so a proxy-only DNS deployment must let the gateway resolve what it proxies.
+func newGuardedHTTPClientWith(timeout time.Duration, dial func(ctx context.Context, netw, addr string) (net.Conn, error), checkIP func(ip net.IP, host string) error, proxy func(*http.Request) (*url.URL, error), resolver ipLookuper) *http.Client {
 	newTransport := func(selector func(*http.Request) (*url.URL, error), dial func(ctx context.Context, netw, addr string) (net.Conn, error)) *http.Transport {
 		return &http.Transport{
 			Proxy:                 selector,
@@ -730,9 +732,9 @@ func newGuardedHTTPClientWith(timeout time.Duration, dial func(ctx context.Conte
 	var transport http.RoundTripper = newTransport(nil, dial)
 	if proxy != nil {
 		transport = &ProxyAwareTransport{
-			Proxy:    guardedProxySelectorWith(proxy, checkIP, resolver, !strict),
+			Proxy:    guardedProxySelector(proxy, checkIP, resolver),
 			Direct:   newTransport(nil, dial),
-			ViaProxy: newTransport(nil, PinnedProxyDialContext(checkIP, resolver, !strict)),
+			ViaProxy: newTransport(nil, PinnedProxyDialContext(checkIP, resolver)),
 		}
 	}
 	return &http.Client{
@@ -749,17 +751,15 @@ func newGuardedHTTPClientWith(timeout time.Duration, dial func(ctx context.Conte
 			if host == "" {
 				return fmt.Errorf("blocked redirect to URL without a host")
 			}
-			proxied := false
 			if proxy != nil {
-				proxyURL, err := proxy(req)
-				if err != nil {
+				if _, err := proxy(req); err != nil {
 					return fmt.Errorf("blocked redirect to %s: %w", host, err)
 				}
-				proxied = proxyURL != nil
 			}
+			// Proxied or direct, the hop must resolve locally and pass checkIP.
 			ctx, cancel := context.WithTimeout(req.Context(), guardedRedirectDNSTimeout)
 			defer cancel()
-			if err := vetGuardedDestination(ctx, host, proxied && !strict, resolver, checkIP); err != nil {
+			if err := vetGuardedDestination(ctx, host, resolver, checkIP); err != nil {
 				return fmt.Errorf("blocked redirect to %s: %w", host, err)
 			}
 			return nil
@@ -770,21 +770,12 @@ func newGuardedHTTPClientWith(timeout time.Duration, dial func(ctx context.Conte
 // guardedProxySelector wraps an http.Transport Proxy selector so the
 // destination policy still applies to a request that is routed through a
 // proxy, where the dialer only ever sees the proxy address. It runs
-// vetGuardedDestination in proxied mode: an IP-literal destination is checked
-// without DNS, a hostname is checked against what the local resolver returns,
-// and a hostname the local resolver cannot answer is handed to the proxy,
-// which resolves it on its own side (a proxy-only egress deployment). The
-// proxy itself is operator configuration (process environment) and is the
-// policy boundary for anything resolved only there; the dialer still refuses a
-// proxy that sits on a blocked address. A nil selector stays nil.
+// vetGuardedDestination: an IP-literal destination is checked without DNS, a
+// hostname is checked against what the local resolver returns, and a hostname
+// the local resolver cannot answer is refused, since nothing could check it. The
+// proxy itself is operator configuration (process environment); the dialer
+// still refuses a proxy that sits on a blocked address. A nil selector stays nil.
 func guardedProxySelector(next func(*http.Request) (*url.URL, error), checkIP func(ip net.IP, host string) error, resolver ipLookuper) func(*http.Request) (*url.URL, error) {
-	return guardedProxySelectorWith(next, checkIP, resolver, true)
-}
-
-// guardedProxySelectorWith is guardedProxySelector with the unresolved-name
-// decision explicit: deferUnresolved false refuses a hostname the local resolver
-// cannot answer instead of handing it to the proxy (the strict policy).
-func guardedProxySelectorWith(next func(*http.Request) (*url.URL, error), checkIP func(ip net.IP, host string) error, resolver ipLookuper, deferUnresolved bool) func(*http.Request) (*url.URL, error) {
 	if next == nil {
 		return nil
 	}
@@ -795,7 +786,7 @@ func guardedProxySelectorWith(next func(*http.Request) (*url.URL, error), checkI
 		}
 		ctx, cancel := context.WithTimeout(req.Context(), guardedRedirectDNSTimeout)
 		defer cancel()
-		if err := vetGuardedDestination(ctx, req.URL.Hostname(), deferUnresolved, resolver, checkIP); err != nil {
+		if err := vetGuardedDestination(ctx, req.URL.Hostname(), resolver, checkIP); err != nil {
 			return nil, err
 		}
 		return proxyURL, nil
@@ -804,21 +795,15 @@ func guardedProxySelectorWith(next func(*http.Request) (*url.URL, error), checkI
 
 // vetGuardedDestination applies checkIP to a destination host before a guarded
 // client contacts it. An IP literal is checked as is. A hostname is resolved
-// and every returned address must pass. When the lookup itself fails,
-// deferUnresolved decides: false refuses with a clear reason (the direct path,
-// where the dialer would fail the same way, and the strict proxied path, where
-// nothing may reach the proxy unvetted); true leaves the name to the proxy,
-// which resolves it on its own side (the private-network proxied path, where a
-// proxy-only DNS deployment is the documented reason local resolution fails).
-func vetGuardedDestination(ctx context.Context, host string, deferUnresolved bool, resolver ipLookuper, checkIP func(ip net.IP, host string) error) error {
+// and every returned address must pass; a failed lookup is refused with a clear
+// reason, on the direct and proxied paths alike, since an unchecked name must
+// not reach a proxy that could resolve it to a blocked address.
+func vetGuardedDestination(ctx context.Context, host string, resolver ipLookuper, checkIP func(ip net.IP, host string) error) error {
 	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
 		return checkIP(ip, host)
 	}
 	ips, err := resolver.LookupIP(ctx, "ip", host)
 	if err != nil {
-		if deferUnresolved {
-			return nil
-		}
 		return fmt.Errorf("DNS lookup failed: %w", err)
 	}
 	for _, ip := range ips {
@@ -868,14 +853,10 @@ func (r *routedResolution) get(host string) []net.IP {
 // SSRFSafeDialContext; otherwise the private-network policy of
 // PrivateNetworkDialContext applies. An IP literal is checked as is and a
 // hostname against the resolver's answer. A hostname the resolver cannot
-// answer is treated differently by policy: the private-network policy leaves
-// it to the proxy (a proxy-only egress deployment resolves names there), the
-// strict policy refuses it, because strict guards a target chosen by a caller
-// who passed no credential check and a name that stops resolving locally is
-// also how such a caller would route a later private resolution through the
-// proxy unchecked.
+// answer is refused under either policy: it cannot be checked, and a proxy
+// that resolved it on its own side could reach a metadata address.
 func CheckProxiedDestination(ctx context.Context, host string, strict bool, resolver IPLookuper) error {
-	return vetGuardedDestination(ctx, host, !strict, resolver, ProxiedDestinationPolicy(strict))
+	return vetGuardedDestination(ctx, host, resolver, ProxiedDestinationPolicy(strict))
 }
 
 // ProxiedDestinationPolicy is the per-address check CheckProxiedDestination
@@ -897,10 +878,9 @@ type pinnedProxyURLKey struct{}
 // pinnedDestination resolves host for a proxied request and requires checkIP to
 // pass for every address. Addresses the routing-time check already resolved for
 // this request are used as they are, rechecked, rather than looked up again. It
-// returns the checked addresses, or none when host is an IP literal that passed or
-// a name neither lookup could answer and deferUnresolved allows handing it to the
-// proxy by name.
-func pinnedDestination(ctx context.Context, host string, checkIP func(ip net.IP, host string) error, resolver IPLookuper, deferUnresolved bool) ([]net.IP, error) {
+// returns the checked addresses, or none when host is an IP literal that passed; a
+// name neither lookup could answer is refused.
+func pinnedDestination(ctx context.Context, host string, checkIP func(ip net.IP, host string) error, resolver IPLookuper) ([]net.IP, error) {
 	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
 		if err := checkIP(ip, host); err != nil {
 			return nil, err
@@ -918,9 +898,6 @@ func pinnedDestination(ctx context.Context, host string, checkIP func(ip net.IP,
 	}
 	ips, err := resolver.LookupIP(ctx, "ip", host)
 	if err != nil {
-		if deferUnresolved {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("DNS lookup failed: %w", err)
 	}
 	if len(ips) == 0 {
@@ -944,23 +921,22 @@ func pinnedDestination(ctx context.Context, host string, checkIP func(ip net.IP,
 // well as TLS ones. The proxy never resolves the
 // destination, so a DNS answer that changes after the check cannot redirect the
 // connection; the hostname still reaches the target in TLS SNI and the Host
-// header. A name the resolver cannot answer is tunnelled by name when
-// deferUnresolved is set (a proxy-only DNS deployment) and refused otherwise. The
+// header. A name the resolver cannot answer is refused, never tunnelled by name. The
 // proxy itself must pass the private-network policy, as before.
-func PinnedProxyDialContext(checkIP func(ip net.IP, host string) error, resolver IPLookuper, deferUnresolved bool) func(ctx context.Context, netw, addr string) (net.Conn, error) {
+func PinnedProxyDialContext(checkIP func(ip net.IP, host string) error, resolver IPLookuper) func(ctx context.Context, netw, addr string) (net.Conn, error) {
 	return func(ctx context.Context, netw, addr string) (net.Conn, error) {
 		proxyURL, _ := ctx.Value(pinnedProxyURLKey{}).(*url.URL)
 		if proxyURL == nil {
 			return nil, fmt.Errorf("blocked dial to %s: no proxy was selected for this request", addr)
 		}
-		if err := vetGuardedDestination(ctx, proxyURL.Hostname(), false, resolver, checkPrivateNetworkPolicy); err != nil {
+		if err := vetGuardedDestination(ctx, proxyURL.Hostname(), resolver, checkPrivateNetworkPolicy); err != nil {
 			return nil, fmt.Errorf("blocked dial to proxy %s: %w", proxyURL.Hostname(), err)
 		}
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, err
 		}
-		ips, err := pinnedDestination(ctx, host, checkIP, resolver, deferUnresolved)
+		ips, err := pinnedDestination(ctx, host, checkIP, resolver)
 		if err != nil {
 			return nil, err
 		}
