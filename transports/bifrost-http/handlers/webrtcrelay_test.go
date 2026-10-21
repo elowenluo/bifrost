@@ -2,11 +2,14 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/capsohq/bifrost/core/schemas"
+	bfws "github.com/capsohq/bifrost/transports/v2/bifrost-http/websocket"
 	"github.com/pion/ice/v4"
 	"github.com/pion/logging"
 	"github.com/pion/transport/v5/vnet"
@@ -386,4 +389,48 @@ func TestConstrainSDPMaxMessageSize(t *testing.T) {
 			assert.Contains(t, got, application)
 		})
 	}
+}
+
+// translatingRealtimeProvider is the slice of a realtime provider the WebRTC
+// browser-message path calls for a session.update: no turn starts, and the event
+// is translated as its own JSON.
+type translatingRealtimeProvider struct{ schemas.RealtimeProvider }
+
+func (translatingRealtimeProvider) ShouldStartRealtimeTurn(*schemas.BifrostRealtimeEvent) bool {
+	return false
+}
+
+func (translatingRealtimeProvider) ToProviderRealtimeEvent(event *schemas.BifrostRealtimeEvent) (json.RawMessage, error) {
+	// Like the OpenAI translator, the output is built from the parsed fields, not the raw bytes.
+	translated := *event
+	translated.RawData = nil
+	return json.Marshal(translated)
+}
+
+// TestWebRTCTranscriptionUpdatesKeepTheAdmittedModel: a WebRTC transcription
+// session was admitted (authorized and attributed) for one model, so a
+// session.update naming another is forwarded with the admitted model, and an
+// update that cannot be parsed is refused rather than forwarded unchecked.
+func TestWebRTCTranscriptionUpdatesKeepTheAdmittedModel(t *testing.T) {
+	messages := &realtimeWebRTCMessages{
+		session:              bfws.NewSession(nil),
+		bifrostCtx:           schemas.NewBifrostContext(context.Background(), schemas.NoDeadline),
+		provider:             translatingRealtimeProvider{},
+		providerKey:          schemas.OpenAI,
+		model:                "gpt-4o-mini-transcribe",
+		transcriptionSession: true,
+	}
+
+	relay := &webrtcRelay{}
+	update := `{"type":"session.update","session":{"type":"transcription","audio":{"input":{"transcription":{"model":"gpt-4o-transcribe"}}}}}`
+	messages.fromBrowser(relay, webrtc.DataChannelMessage{IsString: true, Data: []byte(update)})
+	require.Len(t, relay.pendingToUpstream, 1)
+	forwarded := string(relay.pendingToUpstream[0].payload)
+	require.Contains(t, forwarded, "gpt-4o-mini-transcribe", "the admitted model is what the provider sees")
+	require.NotContains(t, forwarded, `"gpt-4o-transcribe"`, "the restricted model must not reach the provider")
+
+	relay = &webrtcRelay{}
+	messages.fromBrowser(relay, webrtc.DataChannelMessage{IsString: true, Data: []byte(`{"type":"session.update","session":{"audio":`)})
+	require.Empty(t, relay.pendingToUpstream, "an unparsable update must not be forwarded")
+	require.Len(t, relay.pendingToDownstream, 1, "the browser is told the update was refused")
 }

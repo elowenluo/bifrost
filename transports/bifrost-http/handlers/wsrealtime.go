@@ -751,7 +751,7 @@ func pinRealtimeTranscriptionModel(event *schemas.BifrostRealtimeEvent, model st
 	}
 	var audio map[string]json.RawMessage
 	if err := json.Unmarshal(audioRaw, &audio); err != nil {
-		return nil
+		return fmt.Errorf("invalid session.update audio: %w", err)
 	}
 	inputRaw, ok := audio["input"]
 	if !ok {
@@ -759,7 +759,7 @@ func pinRealtimeTranscriptionModel(event *schemas.BifrostRealtimeEvent, model st
 	}
 	var input map[string]json.RawMessage
 	if err := json.Unmarshal(inputRaw, &input); err != nil {
-		return nil
+		return fmt.Errorf("invalid session.update audio.input: %w", err)
 	}
 	transcriptionRaw, ok := input["transcription"]
 	if !ok || string(transcriptionRaw) == "null" {
@@ -767,7 +767,7 @@ func pinRealtimeTranscriptionModel(event *schemas.BifrostRealtimeEvent, model st
 	}
 	var transcription map[string]json.RawMessage
 	if err := json.Unmarshal(transcriptionRaw, &transcription); err != nil {
-		return nil
+		return fmt.Errorf("invalid session.update audio.input.transcription: %w", err)
 	}
 	if _, ok := transcription["model"]; !ok {
 		return nil
