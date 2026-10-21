@@ -60,6 +60,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./.github/workflows/scripts/docker-manifest-publish.test.sh
 
-      - name: Check every image publication is gated per destination
+      - name: Check every image publication re-checks the registry on each attempt
         if: ${{ !cancelled() }}
-        run: python3 .github/workflows/scripts/test-docker-publish-wiring.py
+        run: python3 .github/workflows/scripts/test-docker-publish-gates.py

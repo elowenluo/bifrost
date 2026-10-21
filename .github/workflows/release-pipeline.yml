@@ -110,12 +110,6 @@ jobs:
       plugins-need-release: ${{ steps.detect.outputs.plugins-need-release }}
       bifrost-http-needs-release: ${{ steps.detect.outputs.bifrost-http-needs-release }}
       docker-needs-release: ${{ steps.detect.outputs.docker-needs-release }}
-      docker-publish-version: ${{ steps.detect.outputs.docker-publish-version }}
-      docker-publish-amd64: ${{ steps.detect.outputs.docker-publish-amd64 }}
-      docker-publish-arm64: ${{ steps.detect.outputs.docker-publish-arm64 }}
-      docker-publish-ubi9: ${{ steps.detect.outputs.docker-publish-ubi9 }}
-      docker-publish-ubi9-amd64: ${{ steps.detect.outputs.docker-publish-ubi9-amd64 }}
-      docker-publish-ubi9-arm64: ${{ steps.detect.outputs.docker-publish-ubi9-arm64 }}
       changed-plugins: ${{ steps.detect.outputs.changed-plugins }}
       core-version: ${{ steps.detect.outputs.core-version }}
       framework-version: ${{ steps.detect.outputs.framework-version }}
@@ -2984,9 +2978,18 @@ jobs:
           echo "dockerhub-tag=${BASE_TAG}" >> $GITHUB_OUTPUT
           echo "ghcr-tag=${GHCR_TAG}" >> $GITHUB_OUTPUT
 
+      # Detection ran once for the whole run, but a re-run of a failed job reuses its
+      # outputs, and an earlier attempt of this job may already have pushed the tag. So
+      # the registry is asked again here, on every attempt, and only an absent tag is pushed.
+      - name: Re-check the tag on GHCR before publishing
+        id: recheck
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.detect-changes.outputs.transport-version }}
+        run: ./.github/workflows/scripts/ghcr-tag-gate.sh "${ACCOUNT}/${IMAGE_NAME}" "v${VERSION}-amd64"
+
       - name: Build and push AMD64 Docker image
-        # Pushing over a published tag replaces it with a rebuild; only an absent one is built.
-        if: needs.detect-changes.outputs.docker-publish-amd64 == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         uses: step-security/docker-build-push-action@846549baaf047e867d038826129a64d81df0f704 # v7.1.0
         with:
           context: .
@@ -3001,7 +3004,7 @@ jobs:
       # by copying it with buildx imagetools (no rebuild). Best-effort: a ghcr.io
       # failure must not fail the Docker Hub release.
       - name: Mirror AMD64 image to GitHub Container Registry
-        if: needs.detect-changes.outputs.docker-publish-amd64 == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         continue-on-error: true
         run: |
           docker buildx imagetools create \
@@ -3107,9 +3110,18 @@ jobs:
           echo "dockerhub-tag=${BASE_TAG}" >> $GITHUB_OUTPUT
           echo "ghcr-tag=${GHCR_TAG}" >> $GITHUB_OUTPUT
 
+      # Detection ran once for the whole run, but a re-run of a failed job reuses its
+      # outputs, and an earlier attempt of this job may already have pushed the tag. So
+      # the registry is asked again here, on every attempt, and only an absent tag is pushed.
+      - name: Re-check the tag on GHCR before publishing
+        id: recheck
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.detect-changes.outputs.transport-version }}
+        run: ./.github/workflows/scripts/ghcr-tag-gate.sh "${ACCOUNT}/${IMAGE_NAME}" "v${VERSION}-arm64"
+
       - name: Build and push ARM64 Docker image
-        # Pushing over a published tag replaces it with a rebuild; only an absent one is built.
-        if: needs.detect-changes.outputs.docker-publish-arm64 == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         uses: step-security/docker-build-push-action@846549baaf047e867d038826129a64d81df0f704 # v7.1.0
         with:
           context: .
@@ -3124,7 +3136,7 @@ jobs:
       # by copying it with buildx imagetools (no rebuild). Best-effort: a ghcr.io
       # failure must not fail the Docker Hub release.
       - name: Mirror ARM64 image to GitHub Container Registry
-        if: needs.detect-changes.outputs.docker-publish-arm64 == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         continue-on-error: true
         run: |
           docker buildx imagetools create \
@@ -3174,9 +3186,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Detection ran once for the whole run, but a re-run of a failed job reuses its
+      # outputs, and an earlier attempt of this job may already have pushed the tag. So
+      # the registry is asked again here, on every attempt, and only an absent tag is pushed.
+      - name: Re-check the tag on GHCR before publishing
+        id: recheck
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.detect-changes.outputs.transport-version }}
+        run: ./.github/workflows/scripts/ghcr-tag-gate.sh "${ACCOUNT}/${IMAGE_NAME}" "v${VERSION}"
+
       - name: Create and push multi-arch manifest
         env:
-          PUBLISH_VERSION_TAG: ${{ needs.detect-changes.outputs.docker-publish-version }}
+          PUBLISH_VERSION_TAG: ${{ steps.recheck.outputs.publish }}
         run: |
           ./.github/workflows/scripts/create-docker-manifest.sh "${{ needs.detect-changes.outputs.transport-version }}"
 
@@ -3281,9 +3303,18 @@ jobs:
           echo "dockerhub-tag=${BASE_TAG}" >> $GITHUB_OUTPUT
           echo "ghcr-tag=${GHCR_TAG}" >> $GITHUB_OUTPUT
 
+      # Detection ran once for the whole run, but a re-run of a failed job reuses its
+      # outputs, and an earlier attempt of this job may already have pushed the tag. So
+      # the registry is asked again here, on every attempt, and only an absent tag is pushed.
+      - name: Re-check the tag on GHCR before publishing
+        id: recheck
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.detect-changes.outputs.transport-version }}
+        run: ./.github/workflows/scripts/ghcr-tag-gate.sh "${ACCOUNT}/${IMAGE_NAME}" "v${VERSION}-ubi9-amd64"
+
       - name: Build and push UBI9 AMD64 Docker image
-        # Pushing over a published tag replaces it with a rebuild; only an absent one is built.
-        if: needs.detect-changes.outputs.docker-publish-ubi9-amd64 == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         uses: step-security/docker-build-push-action@846549baaf047e867d038826129a64d81df0f704 # v7.1.0
         with:
           context: .
@@ -3300,7 +3331,7 @@ jobs:
       # by copying it with buildx imagetools (no rebuild). Best-effort: a ghcr.io
       # failure must not fail the Docker Hub release.
       - name: Mirror UBI9 AMD64 image to GitHub Container Registry
-        if: needs.detect-changes.outputs.docker-publish-ubi9-amd64 == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         continue-on-error: true
         run: |
           docker buildx imagetools create \
@@ -3408,9 +3439,18 @@ jobs:
           echo "dockerhub-tag=${BASE_TAG}" >> $GITHUB_OUTPUT
           echo "ghcr-tag=${GHCR_TAG}" >> $GITHUB_OUTPUT
 
+      # Detection ran once for the whole run, but a re-run of a failed job reuses its
+      # outputs, and an earlier attempt of this job may already have pushed the tag. So
+      # the registry is asked again here, on every attempt, and only an absent tag is pushed.
+      - name: Re-check the tag on GHCR before publishing
+        id: recheck
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.detect-changes.outputs.transport-version }}
+        run: ./.github/workflows/scripts/ghcr-tag-gate.sh "${ACCOUNT}/${IMAGE_NAME}" "v${VERSION}-ubi9-arm64"
+
       - name: Build and push UBI9 ARM64 Docker image
-        # Pushing over a published tag replaces it with a rebuild; only an absent one is built.
-        if: needs.detect-changes.outputs.docker-publish-ubi9-arm64 == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         uses: step-security/docker-build-push-action@846549baaf047e867d038826129a64d81df0f704 # v7.1.0
         with:
           context: .
@@ -3427,7 +3467,7 @@ jobs:
       # by copying it with buildx imagetools (no rebuild). Best-effort: a ghcr.io
       # failure must not fail the Docker Hub release.
       - name: Mirror UBI9 ARM64 image to GitHub Container Registry
-        if: needs.detect-changes.outputs.docker-publish-ubi9-arm64 == 'true'
+        if: steps.recheck.outputs.publish == 'true'
         continue-on-error: true
         run: |
           docker buildx imagetools create \
@@ -3477,9 +3517,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Detection ran once for the whole run, but a re-run of a failed job reuses its
+      # outputs, and an earlier attempt of this job may already have pushed the tag. So
+      # the registry is asked again here, on every attempt, and only an absent tag is pushed.
+      - name: Re-check the tag on GHCR before publishing
+        id: recheck
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.detect-changes.outputs.transport-version }}
+        run: ./.github/workflows/scripts/ghcr-tag-gate.sh "${ACCOUNT}/${IMAGE_NAME}" "v${VERSION}-ubi9"
+
       - name: Create and push UBI9 multi-arch manifest
         env:
-          PUBLISH_VERSION_TAG: ${{ needs.detect-changes.outputs.docker-publish-ubi9 }}
+          PUBLISH_VERSION_TAG: ${{ steps.recheck.outputs.publish }}
         run: |
           ./.github/workflows/scripts/create-docker-manifest-ubi9.sh "${{ needs.detect-changes.outputs.transport-version }}"
 

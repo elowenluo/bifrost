@@ -10,7 +10,8 @@ set -uo pipefail
 # confirmed that tag absent. The architecture images are reused by digest either way, so
 # latest still lands on the same images.
 #
-# Runs both real scripts with a fake docker first on PATH; nothing reaches a registry.
+# Runs both real scripts with a fake docker (testdata/fake-docker) first on PATH; nothing
+# reaches a registry.
 #
 # Usage: ./docker-manifest-publish.test.sh
 
@@ -25,25 +26,11 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin"
 
-AMD64_DIGEST="sha256:$(printf 'a%.0s' {1..64})"
-ARM64_DIGEST="sha256:$(printf 'b%.0s' {1..64})"
+AMD64_DIGEST="sha256:$(printf 'a%.0s' $(seq 1 64))"
+ARM64_DIGEST="sha256:$(printf 'b%.0s' $(seq 1 64))"
 
-# The fake docker logs every call. `manifest inspect` answers with an image index like the
-# one docker/build-push-action pushes: one platform manifest plus a provenance attestation.
-cat > "$WORK/bin/docker" <<FAKE
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "\$DOCKER_LOG"
-if [ "\$1 \$2" = "manifest inspect" ]; then
-  case "\$3" in
-    *-arm64) arch=arm64 digest="$ARM64_DIGEST" ;;
-    *-amd64) arch=amd64 digest="$AMD64_DIGEST" ;;
-    *) echo "fake docker: unexpected inspect \$3" >&2; exit 1 ;;
-  esac
-  printf '{"manifests":[{"digest":"%s","platform":{"architecture":"%s","os":"linux"}},{"digest":"sha256:%s","platform":{"architecture":"unknown","os":"unknown"}}]}' \
-    "\$digest" "\$arch" "$(printf 'c%.0s' {1..64})"
-fi
-FAKE
-chmod +x "$WORK/bin/docker"
+# The fake docker (see testdata/fake-docker): architecture digests are a... and b....
+cp "$SCRIPT_DIR/testdata/fake-docker" "$WORK/bin/docker"
 
 passed=0
 failed=0

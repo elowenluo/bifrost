@@ -3,18 +3,18 @@ set -uo pipefail
 
 # Tests the GHCR tag probe in detect-all-changes.sh.
 #
-# That probe decides docker-needs-release and the per-destination docker-publish-* flags,
-# and a "true" flag is what lets the release pipeline push that tag to ghcr.io. Pushing a
-# tag that already exists overwrites a published image with a rebuild, so "absent" has to
-# be a definite answer from the registry, never the leftover when a lookup fails - and it
-# has to be decided per tag, because a failed run can leave some of a release's six tags
-# published and the rest not. ghcr.io/txehq/bifrost is private: an anonymous token request
-# for it is refused with 401, which is exactly the failure an unauthenticated probe used to
-# read as "absent".
+# That probe decides docker-needs-release, which is what starts the release pipeline's image
+# publishing jobs. Pushing a tag that already exists overwrites a published image with a
+# rebuild, so "absent" has to be a definite answer from the registry, never the leftover
+# when a lookup fails - and it has to be decided per tag, because a failed run can leave
+# some of a release's six tags published and the rest not. Each publishing job then checks
+# its own tag again before pushing; test-docker-publish-gates.py covers that.
+# ghcr.io/txehq/bifrost is private: an anonymous token request for it is refused with 401,
+# which is exactly the failure an unauthenticated probe used to read as "absent".
 #
-# This runs the real script end to end, with a fake curl (and a no-op sleep) first on PATH,
-# so no request leaves the machine and no credential is real. Each scenario scripts the
-# registry's answers and checks what the script emits to GITHUB_OUTPUT.
+# This runs the real script end to end, with a fake curl (testdata/fake-ghcr-curl) and a
+# no-op sleep first on PATH, so no request leaves the machine and no credential is real.
+# Each scenario scripts the registry's answers and checks what the script reports.
 #
 # Usage: ./ghcr-tag-probe.test.sh
 #        DETECT_ALL_CHANGES=/path/to/other/detect-all-changes.sh ./ghcr-tag-probe.test.sh
@@ -42,55 +42,8 @@ mkdir -p "$FAKE_BIN"
 JOB_TOKEN="ghs_SENTINELjobtoken0123456789"
 BEARER="SENTINELbearer456+/="
 
-# The fake curl. Responses come from $FAKE_DIR/<key>, one line per request,
-# "<http status> <curl exit code> <body>"; the last line repeats once exhausted. The key is
-# "token", "tags", or for a manifest "manifest:<tag>" when that file exists, else "manifest".
-cat > "$FAKE_BIN/curl" <<'FAKE'
-#!/usr/bin/env bash
-out="" fmt="" url="" fail=0
-printf '%s\n' "$*" >> "$FAKE_DIR/argv.log"
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -o|--output) out="$2"; shift 2 ;;
-    -w|--write-out) fmt="$2"; shift 2 ;;
-    -K|--config)
-      if [ "$2" = "-" ]; then cat >> "$FAKE_DIR/stdin.log"; fi
-      shift 2 ;;
-    -H|--header|--connect-timeout|--max-time|-u|--user) shift 2 ;;
-    --fail) fail=1; shift ;;
-    --*) shift ;;
-    -*) case "$1" in *f*) fail=1 ;; esac; shift ;;
-    *) url="$1"; shift ;;
-  esac
-done
-case "$url" in
-  "https://ghcr.io/token?"*) kind=token key=token ;;
-  "https://ghcr.io/v2/"*"/manifests/"*)
-    kind=manifest key=manifest
-    [ -f "$FAKE_DIR/manifest:${url##*/manifests/}" ] && key="manifest:${url##*/manifests/}" ;;
-  "https://ghcr.io/v2/"*"/tags/list"*) kind=tags key=tags ;;
-  *) echo "fake curl: unexpected URL: $url" >&2; exit 99 ;;
-esac
-echo "$kind $url" >> "$FAKE_DIR/calls.log"
-n=$(( $(cat "$FAKE_DIR/$key.n" 2>/dev/null || echo 0) + 1 ))
-echo "$n" > "$FAKE_DIR/$key.n"
-total=$(wc -l < "$FAKE_DIR/$key")
-[ "$n" -gt "$total" ] && n="$total"
-read -r status code body < <(sed -n "${n}p" "$FAKE_DIR/$key")
-if [ "$code" != "0" ]; then
-  [ -n "$fmt" ] && printf '000'
-  echo "curl: ($code) Failed to connect to ghcr.io" >&2
-  exit "$code"
-fi
-if [ "$fail" = "1" ] && [ "$status" -ge 400 ]; then
-  [ -n "$fmt" ] && printf '%s' "$status"
-  echo "curl: (22) The requested URL returned error: $status" >&2
-  exit 22
-fi
-if [ -n "$out" ]; then printf '%s' "$body" > "$out"; else printf '%s' "$body"; fi
-[ -n "$fmt" ] && printf '%s' "$status"
-exit 0
-FAKE
+# The fake registry (see testdata/fake-ghcr-curl for its response format).
+cp "$SCRIPT_DIR/testdata/fake-ghcr-curl" "$FAKE_BIN/curl"
 cat > "$FAKE_BIN/sleep" <<'FAKE'
 #!/usr/bin/env bash
 echo "sleep $*" >> "$FAKE_DIR/sleep.log"
@@ -102,7 +55,7 @@ MANIFEST_OK='200 0 {"schemaVersion":2,"mediaType":"application/vnd.oci.image.ind
 MANIFEST_UNKNOWN='404 0 {"errors":[{"code":"MANIFEST_UNKNOWN","message":"manifest unknown"}]}'
 TAGS_OK='200 0 {"name":"txehq/bifrost","tags":["v2.1.1","latest"]}'
 
-# Every destination a release publishes: output name, tag.
+# Every destination a release publishes: short name, tag.
 DESTINATIONS=(
   "version $V"
   "amd64 $V-amd64"
@@ -175,12 +128,12 @@ check_no_leak() {
   fi
 }
 
-# expect_release <docker-needs-release> <names of destinations to publish...>: the run
-# succeeded and flagged exactly those destinations for publication.
+# expect_release <docker-needs-release> <short names of the destinations seen absent...>:
+# the run succeeded and reported exactly those destinations absent and the rest published.
 expect_release() {
   local want="$1"
   shift
-  local publish=" $* " entry name flag
+  local absent=" $* " entry name tag line
   if [ "$RC" -ne 0 ]; then
     fail "script exited $RC, expected docker-needs-release=$want (log: $(tail -3 "$FAKE_DIR/log" | tr '\n' ' '))"
     check_no_leak
@@ -193,12 +146,13 @@ expect_release() {
   fi
   for entry in "${DESTINATIONS[@]}"; do
     name="${entry%% *}"
-    flag="false"
-    [[ "$publish" == *" $name "* ]] && flag="true"
-    if grep -qx "docker-publish-${name}=${flag}" "$FAKE_DIR/github_output"; then
-      ok "docker-publish-${name}=${flag}"
+    tag="${entry#* }"
+    line="Docker tag ${tag} already exists on GHCR"
+    [[ "$absent" == *" $name "* ]] && line="Docker tag ${tag} confirmed absent on GHCR"
+    if grep -qF "$line" "$FAKE_DIR/log"; then
+      ok "$line"
     else
-      fail "expected docker-publish-${name}=${flag}, got: $(grep "^docker-publish-${name}=" "$FAKE_DIR/github_output" || echo none)"
+      fail "expected '$line'"
     fi
   done
   check_no_leak
@@ -207,8 +161,8 @@ expect_release() {
 # The registry's answer was not definitive: the job must fail, publish nothing, and say why.
 expect_fail_closed() {
   local reason="$1"
-  if grep -q "=true$" <(grep "^docker-" "$FAKE_DIR/github_output"); then
-    fail "emitted a docker publication flag on an ambiguous registry answer"
+  if grep -qx "docker-needs-release=true" "$FAKE_DIR/github_output"; then
+    fail "emitted docker-needs-release=true on an ambiguous registry answer"
   elif [ "$RC" -eq 0 ]; then
     fail "script exited 0 on an ambiguous registry answer"
   elif ! grep -q "::error::.*${reason}" "$FAKE_DIR/log"; then
@@ -287,7 +241,7 @@ run_detect GITHUB_TOKEN="$JOB_TOKEN"
 expect_release false
 expect_calls manifest 7
 
-# --- Partial releases: only what is absent may be published ------------------------------
+# --- Partial releases: each destination is reported on its own -----------------------------
 
 new_scenario "architecture images published, manifests and UBI9 not"
 respond token "$TOKEN_OK"
