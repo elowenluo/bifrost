@@ -408,6 +408,27 @@ var passthroughCollections = map[string]string{
 	"cachedContents": configstoreTables.ProviderObjectKindCachedContent,
 }
 
+// passthroughManagesFineTuning reports whether a passthrough request reaches an
+// existing fine-tuning job or checkpoint (a list, read, cancel, events, checkpoints
+// or permissions call), as opposed to creating a job. The path is matched as it
+// will be sent, as in passthroughObjectRefs.
+func passthroughManagesFineTuning(r *schemas.BifrostPassthroughRequest) bool {
+	sent := r.Path
+	if strings.Contains(sent, "/.") || strings.Contains(sent, "//") || strings.HasPrefix(sent, ".") {
+		sent = path.Clean("/" + sent)
+	}
+	segments := strings.Split(strings.Trim(sent, "/"), "/")
+	for i, segment := range segments {
+		if segment != "fine_tuning" {
+			continue
+		}
+		rest := segments[i+1:]
+		creates := strings.EqualFold(r.Method, "POST") && len(rest) == 1 && rest[0] == "jobs"
+		return !creates
+	}
+	return false
+}
+
 // passthroughObjectRefs returns the provider objects a passthrough request reaches. The router
 // forwards the provider's own path and body under the shared key, so the object a path addresses
 // (files/<id>, batches/<id>, containers/<id> and the files inside it, videos/<id>,
@@ -1077,6 +1098,16 @@ func (p *GovernancePlugin) enforceProviderObjectOwnership(ctx *schemas.BifrostCo
 	}
 	if !enforced {
 		return nil
+	}
+	// Fine-tuning jobs carry no creator record, so under the shared provider key a
+	// list, read or cancel through passthrough would reach other keys' jobs.
+	if r := req.PassthroughRequest; r != nil && passthroughManagesFineTuning(r) {
+		ctx.SetValue(governanceRejectedContextKey, true)
+		return &schemas.LLMPluginShortCircuit{Error: &schemas.BifrostError{
+			Type:       bifrost.Ptr(string(DecisionAccessBlocked)),
+			StatusCode: bifrost.Ptr(403),
+			Error:      &schemas.ErrorField{Message: "managing fine-tuning jobs through a passthrough route is not available to virtual keys: jobs carry no per-key ownership, so a list, read or cancel could reach another key's job"},
+		}}
 	}
 	for _, ref := range refs {
 		if ref.isList {

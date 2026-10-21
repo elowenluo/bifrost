@@ -1065,6 +1065,25 @@ func TestPreLLMHookBindsObjectsReferencedInsideRequests(t *testing.T) {
 		_, shortCircuit, err := plugin.PreLLMHook(emptyCtx(), pass(schemas.OpenAI, "GET", "/v1/files", ""))
 		require.NoError(t, err)
 		assert.Nil(t, shortCircuit, "a request that presented no key may list")
+
+		// Fine-tuning jobs carry no creator record, so a virtual key cannot list, read or
+		// cancel them through passthrough: under the shared key that would reach other
+		// keys' jobs. Creating one (its files are checked above) stays open.
+		for _, tc := range []struct{ method, path string }{
+			{"GET", "/v1/fine_tuning/jobs"},
+			{"GET", "/v1/fine_tuning/jobs/ftjob-other"},
+			{"POST", "/v1/fine_tuning/jobs/ftjob-other/cancel"},
+			{"GET", "/v1/fine_tuning/jobs/ftjob-other/events"},
+			{"GET", "/v1/fine_tuning/jobs/x/../ftjob-other/checkpoints"},
+			{"POST", "/v1/fine_tuning/checkpoints/ft:gpt-4o-mini:other/permissions"},
+		} {
+			_, shortCircuit, err := plugin.PreLLMHook(presentCtx(mcpTestVKValue), pass(schemas.OpenAI, tc.method, tc.path, ""))
+			require.NoError(t, err)
+			require.NotNil(t, shortCircuit, "%s %s must be refused for a virtual key", tc.method, tc.path)
+			assert.Equal(t, 403, *shortCircuit.Error.StatusCode)
+		}
+		allowed(t, presentCtx(mcpTestVKValue), pass(schemas.OpenAI, "POST", "/v1/fine_tuning/jobs", `{"model":"gpt-4o-mini","training_file":"file-own"}`), "a key creates a fine-tuning job on its own file")
+		allowed(t, emptyCtx(), pass(schemas.OpenAI, "POST", "/v1/fine_tuning/jobs/ftjob-other/cancel", ""), "a request that presented no key is unrestricted")
 	})
 
 	// An inline batch carries its work in each item's body, where the provider reads the files and
