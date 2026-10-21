@@ -409,23 +409,33 @@ var passthroughCollections = map[string]string{
 }
 
 // passthroughReachesTuning reports whether a passthrough request reaches a
-// tuning collection on any provider (OpenAI fine_tuning, Gemini tunedModels,
-// Vertex tuningJobs, Bedrock model-customization-jobs). None records which key
+// tuning collection or tuned model on any provider (OpenAI fine_tuning and its
+// ft: models, Gemini tunedModels, Vertex tuningJobs, Bedrock
+// model-customization-jobs and custom-models). None records which key
 // created a job or tuned model, so a virtual key can neither manage its own nor be
 // kept from another's: a list, read or cancel would reach other keys' jobs, and a
 // create may name another key's tuned model as its base. The path is matched as it
 // will be sent, as in passthroughObjectRefs: BuildPassthroughURL re-encodes every
-// literal %, so the provider reads exactly these segments. Segments are folded,
-// which can only refuse more.
+// literal %, so the provider reads exactly these segments. Segments are folded and
+// cut at a Google custom-method ':' (tunedModels:generateText), which can only
+// refuse more.
 func passthroughReachesTuning(r *schemas.BifrostPassthroughRequest) bool {
 	sent := r.Path
 	if strings.Contains(sent, "/.") || strings.Contains(sent, "//") || strings.HasPrefix(sent, ".") {
 		sent = path.Clean("/" + sent)
 	}
-	for _, segment := range strings.Split(strings.Trim(sent, "/"), "/") {
-		switch strings.ToLower(segment) {
-		case "fine_tuning", "tunedmodels", "tuningjobs", "model-customization-jobs":
+	segments := strings.Split(strings.Trim(sent, "/"), "/")
+	for i, segment := range segments {
+		lower := strings.ToLower(segment)
+		name, _, _ := strings.Cut(lower, ":")
+		switch name {
+		case "fine_tuning", "tunedmodels", "tuningjobs", "model-customization-jobs", "custom-models":
 			return true
+		case "models":
+			// An OpenAI fine-tuned model (models/ft:...) belongs to the key that tuned it.
+			if i+1 < len(segments) && strings.HasPrefix(strings.ToLower(segments[i+1]), "ft:") {
+				return true
+			}
 		}
 	}
 	return false

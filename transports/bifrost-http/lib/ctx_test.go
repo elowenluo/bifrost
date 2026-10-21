@@ -140,6 +140,9 @@ func TestConvertToBifrostContext_StarAllowlistSecurityHeadersBlocked(t *testing.
 	ctx.Request.Header.Set("x-bf-eh-host", "should-be-blocked")
 	ctx.Request.Header.Set("x-bf-eh-connection", "should-be-blocked")
 	ctx.Request.Header.Set("x-bf-eh-proxy-authorization", "should-be-blocked")
+	ctx.Request.Header.Set("x-bf-eh-x-http-method-override", "should-be-blocked")
+	ctx.Request.Header.Set("x-bf-eh-x-http-method", "should-be-blocked")
+	ctx.Request.Header.Set("x-bf-eh-x-method-override", "should-be-blocked")
 
 	bifrostCtx, cancel := ConvertToBifrostContext(ctx, testHandlerStore{matcher: matcher})
 	defer cancel()
@@ -152,7 +155,7 @@ func TestConvertToBifrostContext_StarAllowlistSecurityHeadersBlocked(t *testing.
 	}
 
 	// Security headers should be blocked even with * allowlist
-	securityHeaders := []string{"cookie", "x-api-key", "host", "connection", "proxy-authorization"}
+	securityHeaders := []string{"cookie", "x-api-key", "host", "connection", "proxy-authorization", "x-http-method-override", "x-http-method", "x-method-override"}
 	for _, h := range securityHeaders {
 		if _, ok := extraHeaders[h]; ok {
 			t.Errorf("expected security header %q to be blocked even with * allowlist", h)

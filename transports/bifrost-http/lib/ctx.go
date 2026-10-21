@@ -420,6 +420,12 @@ func ConvertToBifrostContext(ctx *fasthttp.RequestCtx, store HandlerStore) (*sch
 		"x-bf-api-key-id": true,
 		"x-bf-vk":         true,
 		"x-bf-direct-key": true,
+
+		// prevent method overrides: governance judges a request by its method,
+		// which an upstream honouring an override would not act on
+		"x-http-method-override": true,
+		"x-http-method":          true,
+		"x-method-override":      true,
 	}
 
 	// Debug: Log header matcher state
