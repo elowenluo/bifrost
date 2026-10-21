@@ -90,7 +90,7 @@ func TestAnnotationsFor(t *testing.T) {
 
 	put := annotationsFor("PUT")
 	assert.False(t, *put.ReadOnlyHint)
-	assert.False(t, *put.DestructiveHint)
+	assert.True(t, *put.DestructiveHint, "a replacement can overwrite data: not additive-only")
 	assert.True(t, *put.IdempotentHint)
 
 	del := annotationsFor("DELETE")
