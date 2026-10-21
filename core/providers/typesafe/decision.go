@@ -413,8 +413,21 @@ func isJSONNull(value any) bool {
 // request was sent under and keeping the questions' order. Every requested
 // question must produce an answer of its declared type. A boolean choice is
 // answered with its boolean, and probabilities follow the question's choice or
-// level order.
+// level order. A response it rejects was still answered and billed, so the
+// error carries that usage for governance and logging to charge.
 func ToBifrostDecisionResponse(resp *TypesafeDecisionResponse, request *schemas.BifrostDecisionRequest) (*schemas.BifrostDecisionResponse, *schemas.BifrostError) {
+	response, bifrostErr := toBifrostDecisionResponse(resp, request)
+	if bifrostErr != nil {
+		bifrostErr.ExtraFields.BilledUsage = decisionUsage(resp.Usage)
+		if resp.Model != "" {
+			bifrostErr.ExtraFields.ResolvedModelUsed = resp.Model
+		}
+		return nil, bifrostErr
+	}
+	return response, nil
+}
+
+func toBifrostDecisionResponse(resp *TypesafeDecisionResponse, request *schemas.BifrostDecisionRequest) (*schemas.BifrostDecisionResponse, *schemas.BifrostError) {
 	names, err := schemas.DecisionQuestionNames(request.Questions)
 	if err != nil {
 		return nil, providerUtils.NewBifrostOperationError(err.Error(), nil)
@@ -476,18 +489,24 @@ func ToBifrostDecisionResponse(resp *TypesafeDecisionResponse, request *schemas.
 		Answers: answers,
 		Routing: resp.Routing,
 	}
-	if resp.Usage != nil {
-		response.Usage = &schemas.BifrostLLMUsage{
-			PromptTokens:       resp.Usage.InputTokens,
-			CompletionTokens:   resp.Usage.OutputTokens,
-			TotalTokens:        resp.Usage.InputTokens + resp.Usage.OutputTokens,
-			StateTokens:        resp.Usage.StateTokens,
-			StateTokensDropped: resp.Usage.StateTokensDropped,
-			Truncated:          resp.Usage.Truncated,
-			TruncatedQuestions: resp.Usage.TruncatedQuestions,
-		}
-	}
+	response.Usage = decisionUsage(resp.Usage)
 	return response, nil
+}
+
+// decisionUsage converts systemone usage into Bifrost's, or nil when none was reported.
+func decisionUsage(usage *TypesafeUsage) *schemas.BifrostLLMUsage {
+	if usage == nil {
+		return nil
+	}
+	return &schemas.BifrostLLMUsage{
+		PromptTokens:       usage.InputTokens,
+		CompletionTokens:   usage.OutputTokens,
+		TotalTokens:        usage.InputTokens + usage.OutputTokens,
+		StateTokens:        usage.StateTokens,
+		StateTokensDropped: usage.StateTokensDropped,
+		Truncated:          usage.Truncated,
+		TruncatedQuestions: usage.TruncatedQuestions,
+	}
 }
 
 // unwrapResultEnvelope returns the systemone body inside a Cloudflare Workers AI

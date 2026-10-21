@@ -2337,3 +2337,28 @@ func TestTypesafeMultipartBodyPartNames(t *testing.T) {
 		}
 	}
 }
+
+// TestToBifrostDecisionResponseRejectionKeepsBilledUsage pins that an answer the
+// conversion rejects still reports the tokens the provider consumed producing
+// it, so governance and logging charge the call instead of recording it free.
+func TestToBifrostDecisionResponseRejectionKeepsBilledUsage(t *testing.T) {
+	req := decisionRequest(t, "state", map[string]TypesafeQuestion{
+		"is_spam": {Type: TypesafeQuestionTypeNoul, Instructions: "d"},
+	})
+	native := &TypesafeDecisionResponse{
+		Model:   "jev-1.13.0",
+		Answers: map[string]TypesafeAnswer{},
+		Usage:   &TypesafeUsage{InputTokens: 40, OutputTokens: 5},
+	}
+	_, bifrostErr := ToBifrostDecisionResponse(native, req)
+	if bifrostErr == nil {
+		t.Fatal("expected error for missing answer")
+	}
+	billed := bifrostErr.ExtraFields.BilledUsage
+	if billed == nil || billed.PromptTokens != 40 || billed.CompletionTokens != 5 || billed.TotalTokens != 45 {
+		t.Fatalf("billed usage = %+v, want 40/5/45", billed)
+	}
+	if bifrostErr.ExtraFields.ResolvedModelUsed != "jev-1.13.0" {
+		t.Errorf("resolved model = %q", bifrostErr.ExtraFields.ResolvedModelUsed)
+	}
+}
