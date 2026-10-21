@@ -152,6 +152,7 @@ NOT_DIALLED_HOSTS = {
     "example.com": "MCP server_url and web_fetch targets - dereferenced by the provider",
     "www.youtube.com": "Gemini video input - Google fetches the URL server-side",
     "en.wikipedia.org": "googleSearch excludeDomains filter value, not a URL anyone fetches",
+    "upload.wikimedia.org": "Volcengine multimodal embedding image_url - fetched by the provider",
     "placeholder.search.windows.net": "Azure AI Search placeholder in a request body; never resolved",
     # Deliberately unresolvable - negative tests assert the failure path.
     "bifrost.invalid": "reserved .invalid TLD; negative-path tests assert it fails to resolve",
