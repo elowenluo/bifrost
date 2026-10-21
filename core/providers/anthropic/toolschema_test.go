@@ -341,3 +341,41 @@ func equalStringSlices(left, right []string) bool {
 	}
 	return true
 }
+
+// TestNormalizeAnthropicToolInputSchemaResolvesEscapedReferences pins that root
+// alternatives naming definitions through escaped JSON Pointer tokens keep their
+// properties and requirements, and that a reference that resolves to nothing is
+// refused rather than flattened into an empty branch.
+func TestNormalizeAnthropicToolInputSchemaResolvesEscapedReferences(t *testing.T) {
+	var schema schemas.ToolFunctionParameters
+	raw := []byte(`{
+		"type":"object",
+		"properties":{},
+		"$defs":{
+			"a/b":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]},
+			"c~d":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"required":["id","name"]}
+		},
+		"oneOf":[{"$ref":"#/$defs/a~1b"},{"$ref":"#/$defs/c~0d"}]
+	}`)
+	if err := schemas.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unmarshal test schema: %v", err)
+	}
+	normalized, err := NormalizeAnthropicToolInputSchema(&schema)
+	if err != nil {
+		t.Fatalf("normalize schema: %v", err)
+	}
+	if got := normalized.Properties.Keys(); !equalStringSlices(got, []string{"id", "name"}) {
+		t.Fatalf("properties = %v, want both referenced definitions' properties", got)
+	}
+	if got := normalized.Required; !equalStringSlices(got, []string{"id"}) {
+		t.Fatalf("required = %v, want the common requirement", got)
+	}
+
+	var missing schemas.ToolFunctionParameters
+	if err := schemas.Unmarshal([]byte(`{"type":"object","properties":{},"$defs":{},"oneOf":[{"$ref":"#/$defs/absent"},{"type":"object","properties":{"x":{"type":"string"}}}]}`), &missing); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NormalizeAnthropicToolInputSchema(&missing); err == nil || !strings.Contains(err.Error(), "#/$defs/absent") {
+		t.Fatalf("an unresolvable reference must be refused, got %v", err)
+	}
+}

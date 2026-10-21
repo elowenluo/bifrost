@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"net/url"
 	"reflect"
 	"strings"
 
@@ -217,26 +218,46 @@ func resolveAnthropicSchemaRootRef(schema *schemas.OrderedMap, defs, definitions
 	seen[ref] = true
 
 	var collection *schemas.OrderedMap
-	var name string
+	var pointer string
 	switch {
 	case strings.HasPrefix(ref, "#/$defs/"):
 		collection = defs
-		name = strings.TrimPrefix(ref, "#/$defs/")
+		pointer = strings.TrimPrefix(ref, "#/$defs/")
 	case strings.HasPrefix(ref, "#/definitions/"):
 		collection = definitions
-		name = strings.TrimPrefix(ref, "#/definitions/")
-	default:
-		return schema, nil
+		pointer = strings.TrimPrefix(ref, "#/definitions/")
 	}
-	value, ok := collection.Get(name)
-	if !ok {
-		return schema, nil
-	}
-	resolved := anthropicOrderedMap(value)
+	resolved := resolveAnthropicSchemaPointer(collection, pointer)
 	if resolved == nil {
-		return schema, nil
+		// Flattening a branch it cannot read would silently drop its properties
+		// and requirements, so the schema is refused instead.
+		return nil, providerUtils.InvalidRequestErrorf("anthropic tool input schema reference %q cannot be resolved", ref)
 	}
 	return resolveAnthropicSchemaRootRef(resolved, defs, definitions, seen, depth+1)
+}
+
+// resolveAnthropicSchemaPointer follows a JSON Pointer (RFC 6901, as written in a
+// URI fragment) below collection, or returns nil when it names no schema object.
+func resolveAnthropicSchemaPointer(collection *schemas.OrderedMap, pointer string) *schemas.OrderedMap {
+	if collection == nil || pointer == "" {
+		return nil
+	}
+	current := collection
+	for _, token := range strings.Split(pointer, "/") {
+		unescaped, err := url.PathUnescape(token)
+		if err != nil {
+			return nil
+		}
+		unescaped = strings.ReplaceAll(strings.ReplaceAll(unescaped, "~1", "/"), "~0", "~")
+		value, ok := current.Get(unescaped)
+		if !ok {
+			return nil
+		}
+		if current = anthropicOrderedMap(value); current == nil {
+			return nil
+		}
+	}
+	return current
 }
 
 // combineAnthropicSchemaBranches computes the combinations imposed by two
