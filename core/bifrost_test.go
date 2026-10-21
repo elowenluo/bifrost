@@ -8016,3 +8016,29 @@ func TestResponsesRequest_GatewayToolSearch(t *testing.T) {
 		t.Errorf("want usage summed across both calls, got %+v", resp.Usage)
 	}
 }
+
+// A primary attempt that already ran a provider-injected tool is not handed to
+// fallbacks: a fallback restarts from the original request without the tool
+// results and would repeat the tool's side effects, the same reason
+// executeRequestWithRetries stops retrying such an attempt.
+func TestShouldTryFallbacks_StopsAfterInjectedToolRan(t *testing.T) {
+	bifrost := &Bifrost{logger: NewDefaultLogger(schemas.LogLevelError)}
+	status := http.StatusServiceUnavailable
+	primaryErr := &schemas.BifrostError{StatusCode: &status, Error: &schemas.ErrorField{Message: "service unavailable"}}
+	req := &schemas.BifrostRequest{
+		RequestType: schemas.ChatCompletionRequest,
+		ChatRequest: &schemas.BifrostChatRequest{
+			Provider: schemas.OpenAI, Model: "gpt-4o",
+			Fallbacks: []schemas.Fallback{{Provider: schemas.Anthropic, Model: "claude-sonnet-4-5"}},
+		},
+	}
+
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	if !bifrost.shouldTryFallbacks(ctx, req, primaryErr) {
+		t.Fatal("a 503 with configured fallbacks should fall back")
+	}
+	ctx.SetValue(schemas.BifrostContextKeyInjectedToolsExecuted, true)
+	if bifrost.shouldTryFallbacks(ctx, req, primaryErr) {
+		t.Fatal("an attempt that ran an injected tool must not fall back")
+	}
+}
