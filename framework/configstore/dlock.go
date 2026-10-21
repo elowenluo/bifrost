@@ -224,10 +224,17 @@ func (m *DistributedLockManager) Acquire(ctx context.Context, key string) (conte
 		once.Do(func() {
 			close(stop)
 			<-renewed
-			// ErrLockNotHeld here means the lease was already lost, which the
-			// held context has reported; there is nothing left to release.
-			if err := lock.Unlock(detached); err != nil && !errors.Is(err, ErrLockNotHeld) && m.logger != nil {
-				m.logger.Warn("failed to release distributed lock %s: %v", key, err)
+			// Bounded by the confirmed lease, like a renewal: past it the row is any
+			// holder's to take, so a store blocked on row contention must not hold
+			// the caller beyond it.
+			if time.Now().Before(lock.expiresAt) {
+				unlockCtx, cancel := context.WithDeadline(detached, lock.expiresAt)
+				// ErrLockNotHeld here means the lease was already lost, which the
+				// held context has reported; there is nothing left to release.
+				if err := lock.Unlock(unlockCtx); err != nil && !errors.Is(err, ErrLockNotHeld) && m.logger != nil {
+					m.logger.Warn("failed to release distributed lock %s: %v", key, err)
+				}
+				cancel()
 			}
 			lose(context.Canceled)
 		})

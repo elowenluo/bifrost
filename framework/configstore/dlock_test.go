@@ -1349,3 +1349,37 @@ func TestDistributedLockManager_AcquireCancelsAtConfirmedLeaseExpiry(t *testing.
 		})
 	}
 }
+
+// contendedReleaseStore blocks every release until its context ends, the way a
+// PostgreSQL DELETE waits on a row another transaction holds.
+type contendedReleaseStore struct {
+	LockStore
+}
+
+func (s *contendedReleaseStore) ReleaseLock(ctx context.Context, lockKey, holderID string) (bool, error) {
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+// A release whose DELETE is blocked must return by the end of the confirmed lease,
+// past which the row is any holder's to take, instead of hanging its caller.
+func TestDistributedLockManager_ReleaseIsBoundedByTheLease(t *testing.T) {
+	store := &contendedReleaseStore{LockStore: setupLockTestStore(t)}
+	ttl := 200 * time.Millisecond
+	manager := NewDistributedLockManager(store, newMockLogger(), WithDefaultTTL(ttl), WithRetryInterval(10*time.Millisecond))
+
+	_, release, err := manager.Acquire(context.Background(), "contended-key")
+	require.NoError(t, err)
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		release()
+		close(done)
+	}()
+	select {
+	case <-done:
+		require.LessOrEqual(t, time.Since(start), ttl+200*time.Millisecond)
+	case <-time.After(3 * time.Second):
+		t.Fatal("a release blocked in the store outlived the lease")
+	}
+}
