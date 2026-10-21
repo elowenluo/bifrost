@@ -176,3 +176,28 @@ func TestToVertexGeminiEmbeddingRequestForwardsEmbedContentConfig(t *testing.T) 
 		require.Contains(t, extra, "documentOcr", "caller's ExtraParams must not be mutated")
 	})
 }
+
+// TestToVertexEmbeddingRequestHonorsLegacyAutoTruncate pins that the legacy
+// extra_params autoTruncate=false still disables truncation when the typed field is
+// absent, is not also forwarded as an extra, and leaves the caller's map untouched.
+func TestToVertexEmbeddingRequestHonorsLegacyAutoTruncate(t *testing.T) {
+	text := "long document"
+	extras := map[string]interface{}{"autoTruncate": false, "other": "kept"}
+	req, err := ToVertexEmbeddingRequest(&schemas.BifrostEmbeddingRequest{
+		Input:  []schemas.EmbeddingInputItem{{Content: schemas.EmbeddingContent{{Type: schemas.EmbeddingContentPartTypeText, Text: &text}}}},
+		Params: &schemas.EmbeddingParameters{ExtraParams: extras},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, req.Parameters.AutoTruncate)
+	require.False(t, *req.Parameters.AutoTruncate, "the legacy autoTruncate=false was ignored")
+	require.NotContains(t, req.ExtraParams, "autoTruncate")
+	require.Equal(t, "kept", req.ExtraParams["other"])
+	require.Contains(t, extras, "autoTruncate", "the caller's extra params were mutated")
+
+	req, err = ToVertexEmbeddingRequest(&schemas.BifrostEmbeddingRequest{
+		Input:  []schemas.EmbeddingInputItem{{Content: schemas.EmbeddingContent{{Type: schemas.EmbeddingContentPartTypeText, Text: &text}}}},
+		Params: &schemas.EmbeddingParameters{AutoTruncate: schemas.Ptr(true), ExtraParams: map[string]interface{}{"autoTruncate": false}},
+	})
+	require.NoError(t, err)
+	require.True(t, *req.Parameters.AutoTruncate, "the typed field must win over the legacy one")
+}

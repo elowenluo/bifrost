@@ -59,6 +59,20 @@ func ToVertexEmbeddingRequest(bifrostReq *schemas.BifrostEmbeddingRequest) (*Ver
 		if bifrostReq.Params.AutoTruncate != nil {
 			autoTruncate = *bifrostReq.Params.AutoTruncate
 		}
+		// The legacy extra_params spelling still decides when the typed field is absent,
+		// and is consumed (from a copy) so it is not also sent as a top-level field.
+		if legacy, ok := schemas.SafeExtractBool(bifrostReq.Params.ExtraParams["autoTruncate"]); ok {
+			if bifrostReq.Params.AutoTruncate == nil {
+				autoTruncate = legacy
+			}
+			extras := make(map[string]interface{}, len(bifrostReq.Params.ExtraParams)-1)
+			for k, v := range bifrostReq.Params.ExtraParams {
+				if k != "autoTruncate" {
+					extras[k] = v
+				}
+			}
+			vertexReq.ExtraParams = extras
+		}
 		vertexReq.Parameters = &VertexEmbeddingParameters{
 			AutoTruncate:         &autoTruncate,
 			OutputDimensionality: bifrostReq.Params.Dimensions,
