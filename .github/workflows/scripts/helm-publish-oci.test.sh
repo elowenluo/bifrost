@@ -7,11 +7,15 @@ set -uo pipefail
 # What went wrong before: the OCI push only ran when the GitHub release did not
 # exist at the start of the run and tolerated every error. A run that created
 # the release and then failed (Pages, login, push) could never publish the OCI
-# artifact on a rerun, and a failed push looked like success.
+# artifact on a rerun, and a failed push looked like success. A first fix then
+# read any "not found" in a failed `helm pull` as absence, although that pull
+# also downloads content: a manifest that exists with a blob that cannot be
+# fetched would have been pushed over.
 #
-# The registry is faked: a `helm` shim first on PATH scripts the answers to
+# The registry is faked twice over: a curl shim (PR #6's testdata/fake-ghcr-curl)
+# answers the token exchange and the manifest lookup, and a helm shim scripts
 # `helm pull` and records every `helm push`; every other helm subcommand goes
-# to the real binary. Nothing reaches a registry.
+# to the real binary. Nothing reaches a registry and no credential is real.
 #
 # Usage: ./helm-publish-oci.test.sh
 
@@ -19,10 +23,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="${SCRIPT_DIR}/helm-publish-oci.sh"
 WORKFLOW="${SCRIPT_DIR}/../helm-release.yml"
 
-if ! command -v helm >/dev/null 2>&1; then
-  echo "FAIL: required tool not installed: helm" >&2
-  exit 1
-fi
+for tool in helm jq; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "FAIL: required tool not installed: $tool" >&2
+    exit 1
+  fi
+done
 if [ ! -x "$TARGET" ]; then
   echo "FAIL: $TARGET is missing or not executable" >&2
   exit 1
@@ -94,14 +100,28 @@ if [ "$(sha256_of "$CANON")" = "$(sha256_of "$OTHER")" ]; then
   exit 1
 fi
 
-# The helm shim. `pull` answers come from $FAKE_DIR/pull, one per line, in order
-# (the last line repeats): "notfound", "denied", "file:<path>" (deliver that
-# tarball) or "pushed" (deliver whatever the last push sent). `push` is logged
-# and fails when $FAKE_DIR/push.fail exists.
+# Sentinels: a scenario fails if either shows up in a push or pull argv.
+JOB_TOKEN="ghs_SENTINELjobtoken0123456789"
+BEARER="SENTINELbearer456+/="
+export GITHUB_TOKEN="$JOB_TOKEN"
+
 REAL_HELM="$(command -v helm)"
 export REAL_HELM
 FAKE_BIN="$ROOT/bin"
 mkdir -p "$FAKE_BIN"
+
+# The registry's HTTP side: PR #6's fake curl, answering from $FAKE_DIR/token
+# and $FAKE_DIR/manifest ("<http status> <curl exit code> <body>" per line).
+cp "$SCRIPT_DIR/testdata/fake-ghcr-curl" "$FAKE_BIN/curl"
+cat >"$FAKE_BIN/sleep" <<'FAKE'
+#!/usr/bin/env bash
+echo "sleep $*" >>"$FAKE_DIR/sleep.log"
+FAKE
+
+# The registry's content side. `pull` answers come from $FAKE_DIR/pull, one per
+# line, in order (the last line repeats): "bloberror", "file:<path>" (deliver
+# that tarball) or "pushed" (deliver whatever the last push sent). `push` is
+# logged and fails when $FAKE_DIR/push.fail exists.
 cat >"$FAKE_BIN/helm" <<'FAKE'
 #!/usr/bin/env bash
 case "${1:-}" in
@@ -117,11 +137,8 @@ case "${1:-}" in
       case "$1" in -d|--destination) dest="$2"; shift 2 ;; *) shift ;; esac
     done
     case "$answer" in
-      notfound)
-        echo 'Error: failed to perform "FetchReference" on source: ghcr.io/fake/helm-charts/bifrost:1.2.0: not found' >&2
-        exit 1 ;;
-      denied)
-        echo 'Error: failed to authorize: failed to fetch anonymous token: unexpected status from GET request to https://ghcr.io/token?scope=repository%3Afake%2Fhelm-charts%2Fbifrost%3Apull&service=ghcr.io: 401 Unauthorized' >&2
+      bloberror)
+        echo 'Error: failed to perform "Copy" on source: ghcr.io/fake/helm-charts/bifrost@sha256:0000: not found' >&2
         exit 1 ;;
       file:*)
         mkdir -p "$dest" && cp "${answer#file:}" "$dest/" && echo "Pulled: fake" ;;
@@ -144,15 +161,28 @@ case "${1:-}" in
     exec "$REAL_HELM" "$@" ;;
 esac
 FAKE
-chmod +x "$FAKE_BIN/helm"
+chmod +x "$FAKE_BIN/curl" "$FAKE_BIN/sleep" "$FAKE_BIN/helm"
 
-# run_oci NAME CANONICAL PULL-ANSWERS [push-fail]
+TOKEN_OK="200 0 {\"token\":\"${BEARER}\"}"
+TOKEN_REFUSED='401 0 {"errors":[{"code":"UNAUTHORIZED","message":"authentication required"}]}'
+MANIFEST_OK='200 0 {"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","layers":[]}'
+MANIFEST_UNKNOWN='404 0 {"errors":[{"code":"MANIFEST_UNKNOWN","message":"manifest unknown"}]}'
+NAME_UNKNOWN='404 0 {"errors":[{"code":"NAME_UNKNOWN","message":"repository name not known to registry"}]}'
+MANIFEST_DENIED='403 0 {"errors":[{"code":"DENIED","message":"denied"}]}'
+MANIFEST_404_HTML='404 0 <html>not json</html>'
+MANIFEST_NETWORK='000 7 '
+
+# run_oci NAME CANONICAL TOKEN-ANSWER MANIFEST-ANSWER PULL-ANSWERS [push-fail]
 run_oci() {
-  local name="$1" canonical="$2" answers="$3"
+  local name="$1" canonical="$2" token="$3" manifest="$4" pulls="$5"
   FAKE_DIR="$ROOT/fake-$name"
   mkdir -p "$FAKE_DIR"
-  printf '%s\n' "$answers" >"$FAKE_DIR/pull"
-  if [ "${4:-}" = "push-fail" ]; then : >"$FAKE_DIR/push.fail"; fi
+  : >"$FAKE_DIR/calls.log"
+  : >"$FAKE_DIR/argv.log"
+  printf '%s\n' "$token" >"$FAKE_DIR/token"
+  printf '%s\n' "$manifest" >"$FAKE_DIR/manifest"
+  printf '%s\n' "$pulls" >"$FAKE_DIR/pull"
+  if [ "${6:-}" = "push-fail" ]; then : >"$FAKE_DIR/push.fail"; fi
   LOG="$ROOT/log-$name.txt"
   FAKE_DIR="$FAKE_DIR" PATH="$FAKE_BIN:$PATH" "$TARGET" \
     --chart-name bifrost \
@@ -169,51 +199,84 @@ run_oci() {
   PULLS=${PULLS:-0}
 }
 
+content_untouched() { [ "$PULLS" -eq 0 ] && [ "$PUSHES" -eq 0 ]; }
+registry_untouched() { content_untouched && [ ! -s "$FAKE_DIR/calls.log" ]; }
+owner_lookup_lowercased() {
+  grep -q 'manifests/1.2.0' "$FAKE_DIR/calls.log" && grep -q '/v2/txehq/helm-charts/bifrost/' "$FAKE_DIR/calls.log"
+}
+no_secret_in_argv() {
+  not grep -qF "$JOB_TOKEN" "$FAKE_DIR/argv.log" "$FAKE_DIR/pull.log" "$FAKE_DIR/push.log" "$LOG" 2>/dev/null &&
+    not grep -qF "$BEARER" "$FAKE_DIR/argv.log" "$FAKE_DIR/pull.log" "$FAKE_DIR/push.log" "$LOG" 2>/dev/null
+}
+
 # ---------------------------------------------------------------------------
 echo "# missing version is published from the canonical asset and verified"
-run_oci absent "$CANON" $'notfound\npushed'
+run_oci absent "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" pushed
 check "exits 0" [ "$RC" -eq 0 ]
+check "looks the requested version's manifest up" \
+  grep -q 'manifest https://ghcr.io/v2/txehq/helm-charts/bifrost/manifests/1.2.0' "$FAKE_DIR/calls.log"
 check "pushes exactly once" [ "$PUSHES" -eq 1 ]
 check "pushes the canonical asset" grep -qF -- "$CANON" "$FAKE_DIR/push.log"
 check "pushes into the owner's namespace" grep -qF -- "oci://ghcr.io/txehq/helm-charts" "$FAKE_DIR/push.log"
+check "reads the published artifact back" [ "$PULLS" -eq 1 ]
 check "pulls the chart reference with the released version" \
   grep -qE -- 'oci://ghcr.io/txehq/helm-charts/bifrost .*--version 1\.2\.0' "$FAKE_DIR/pull.log"
-check "verifies the published artifact after pushing" [ "$PULLS" -eq 2 ]
+check "no credential reaches argv or the log" no_secret_in_argv
+
+echo "# a repository that does not exist yet is a first publication"
+run_oci firstrepo "$CANON" "$TOKEN_OK" "$NAME_UNKNOWN" pushed
+check "exits 0" [ "$RC" -eq 0 ]
+check "pushes exactly once" [ "$PUSHES" -eq 1 ]
 
 echo "# an identical published version is left alone"
-run_oci identical "$CANON" "file:$CANON"
+run_oci identical "$CANON" "$TOKEN_OK" "$MANIFEST_OK" "file:$CANON"
 check "exits 0" [ "$RC" -eq 0 ]
 check "does not push" [ "$PUSHES" -eq 0 ]
 
 echo "# a published version with different content is a conflict"
-run_oci conflict "$CANON" "file:$OTHER"
+run_oci conflict "$CANON" "$TOKEN_OK" "$MANIFEST_OK" "file:$OTHER"
 check "fails" [ "$RC" -ne 0 ]
 check "does not push" [ "$PUSHES" -eq 0 ]
 
-echo "# anything but a definite 'not found' is a failure, never absence"
-run_oci denied "$CANON" denied
-check "a refused lookup fails" [ "$RC" -ne 0 ]
+echo "# a manifest that exists whose content cannot be fetched is never pushed over"
+run_oci blobmissing "$CANON" "$TOKEN_OK" "$MANIFEST_OK" bloberror
+check "fails" [ "$RC" -ne 0 ]
 check "does not push" [ "$PUSHES" -eq 0 ]
 
+echo "# anything but a definite answer about the manifest is a failure, never absence"
+run_oci denied "$CANON" "$TOKEN_OK" "$MANIFEST_DENIED" pushed
+check "a refused manifest lookup fails" [ "$RC" -ne 0 ]
+check "touches the content side not at all" content_untouched
+run_oci notjson "$CANON" "$TOKEN_OK" "$MANIFEST_404_HTML" pushed
+check "a 404 without a registry error code fails" [ "$RC" -ne 0 ]
+check "touches the content side not at all" content_untouched
+run_oci network "$CANON" "$TOKEN_OK" "$MANIFEST_NETWORK" pushed
+check "a network failure fails" [ "$RC" -ne 0 ]
+check "touches the content side not at all" content_untouched
+run_oci tokenrefused "$CANON" "$TOKEN_REFUSED" "$MANIFEST_UNKNOWN" pushed
+check "a refused token exchange fails" [ "$RC" -ne 0 ]
+check "touches the content side not at all" content_untouched
+GITHUB_TOKEN="" run_oci notoken "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" pushed
+check "a missing job token fails" [ "$RC" -ne 0 ]
+check "touches the registry not at all" registry_untouched
+
 echo "# publication errors fail the step"
-run_oci pushfail "$CANON" notfound push-fail
+run_oci pushfail "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" pushed push-fail
 check "a failed push fails" [ "$RC" -ne 0 ]
-
-run_oci verifyfail "$CANON" $'notfound\nfile:'"$OTHER"
+run_oci verifyfail "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" "file:$OTHER"
 check "a push whose readback differs from the asset fails" [ "$RC" -ne 0 ]
-
-run_oci verifygone "$CANON" $'notfound\nnotfound'
-check "a push whose readback is missing fails" [ "$RC" -ne 0 ]
+run_oci verifygone "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" bloberror
+check "a push whose readback fails fails" [ "$RC" -ne 0 ]
 
 echo "# the asset must be the version being published"
-run_oci wrongasset "$WRONG" "file:$CANON"
+run_oci wrongasset "$WRONG" "$TOKEN_OK" "$MANIFEST_OK" "file:$CANON"
 check "asset/version mismatch fails" [ "$RC" -ne 0 ]
-registry_untouched() { [ "$PULLS" -eq 0 ] && [ "$PUSHES" -eq 0 ]; }
 check "touches the registry not at all" registry_untouched
 
 echo "# the namespace follows the repository owner, lowercased"
-OWNER=TxEhq run_oci owner "$CANON" $'notfound\npushed'
+OWNER=TxEhq run_oci owner "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" pushed
 check "exits 0" [ "$RC" -eq 0 ]
+check "looks the manifest up under the lowercased owner" owner_lookup_lowercased
 check "pushes into the lowercased owner's namespace" \
   grep -qF -- "oci://ghcr.io/txehq/helm-charts" "$FAKE_DIR/push.log"
 
@@ -225,6 +288,7 @@ check "workflow runs the OCI publication script" grep -q 'helm-publish-oci.sh' "
 check "OCI publication does not depend on whether the GitHub release pre-existed" \
   not grep -q 'check-release' <(oci_step)
 check "OCI publication errors are not tolerated" not grep -q 'continue-on-error' <(oci_step)
+check "OCI publication gets the job token for the manifest lookup" grep -q 'GITHUB_TOKEN' <(oci_step)
 check "registry login is not skipped or tolerated" \
   not grep -qE 'continue-on-error|check-release' <(login_step)
 check "egress allows GHCR blob downloads" grep -q 'pkg-containers.githubusercontent.com:443' "$WORKFLOW"

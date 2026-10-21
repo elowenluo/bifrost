@@ -78,6 +78,35 @@ sha256_of() {
   fi
 }
 
+# A git shim for failure injection, first on PATH only where a case asks for
+# it. FAKE_GIT_FAIL_LS_TREE makes `git ls-tree` fail after everything before it
+# succeeded; FAKE_GIT_BEFORE_PUSH runs a script right before a `git push` is
+# forwarded, which lands an external write in the narrowest possible window
+# (git forbids ref updates from inside a pre-receive hook, so a hook cannot do
+# this). Everything else goes to the real git.
+REAL_GIT="$(command -v git)"
+export REAL_GIT
+FAKE_BIN="$ROOT/bin"
+mkdir -p "$FAKE_BIN"
+cat >"$FAKE_BIN/git" <<'FAKE'
+#!/usr/bin/env bash
+case "${1:-}" in
+  ls-tree)
+    if [ -n "${FAKE_GIT_FAIL_LS_TREE:-}" ]; then
+      echo "fatal: unable to read tree (injected failure)" >&2
+      exit 128
+    fi ;;
+  push)
+    if [ -n "${FAKE_GIT_BEFORE_PUSH:-}" ]; then
+      hook="$FAKE_GIT_BEFORE_PUSH"
+      unset FAKE_GIT_BEFORE_PUSH
+      bash "$hook" || exit 99
+    fi ;;
+esac
+exec "$REAL_GIT" "$@"
+FAKE
+chmod +x "$FAKE_BIN/git"
+
 # make_chart VERSION MARKER OUTDIR -> path of the packaged tarball.
 # MARKER lands in a template so two packages of the same version can differ in
 # content, which is what a forgotten Chart.yaml bump looks like.
@@ -345,6 +374,12 @@ run_case emptyfile "$ORIGIN" 1.4.0 "$NEW" "$NEW"
 check "an empty index file fails rather than passing as a first release" [ "$RC" -ne 0 ]
 check "no index is written on failure" [ ! -e "$OUT" ]
 
+echo "# a failed tree lookup is never read as an absent index"
+ORIGIN=$(make_origin lstree index "$FORK_INDEX") || exit 1
+FAKE_GIT_FAIL_LS_TREE=1 PATH="$FAKE_BIN:$PATH" run_case lstree "$ORIGIN" 1.4.0 "$NEW" "$NEW"
+check "an unreadable tree after a successful fetch fails" [ "$RC" -ne 0 ]
+check "no index is written on failure" [ ! -e "$OUT" ]
+
 # ---------------------------------------------------------------------------
 echo "# published entries are preserved whole, not as a projection"
 # A field helm's typed load re-emits differently: an empty value is omitted on
@@ -387,46 +422,153 @@ check "index holds exactly the new release" \
   [ "$(index_versions "$OUT" | tr '\n' ' ')" = "1.4.0 " ]
 
 # ---------------------------------------------------------------------------
-echo "# pre-deploy check: the publish branch must not have moved since the index was read"
-VERIFY="${SCRIPT_DIR}/helm-publish-index-verify.sh"
-check "verify script exists and is executable" [ -x "$VERIFY" ]
-run_verify() { # NAME ORIGIN BASE-RECORD
-  local work="$ROOT/verify-$1"
+echo "# publication is a compare-and-swap on the recorded revision"
+PUBLISH="${SCRIPT_DIR}/helm-publish-pages.sh"
+check "publish script exists and is executable" [ -x "$PUBLISH" ]
+
+origin_head() { git --git-dir="$1" rev-parse --verify --quiet refs/heads/gh-pages; }
+origin_show() { git --git-dir="$1" show "refs/heads/gh-pages:$2" 2>/dev/null; }
+origin_has() { [ -n "$(git --git-dir="$1" ls-tree --name-only refs/heads/gh-pages -- "$2" 2>/dev/null)" ]; }
+
+# run_publish NAME ORIGIN BASE-RECORD PUBLISH-DIR -> RC, PLOG
+run_publish() {
+  local name="$1" origin="$2" base="$3" dir="$4"
+  local work="$ROOT/publish-$name"
   git init -q "$work" || return 1
-  git -C "$work" remote add origin "$2"
-  printf '%s\n' "$3" >"$ROOT/verify-base-$1"
-  (cd "$work" && "$VERIFY" --remote origin --publish-branch gh-pages --base-sha-file "$ROOT/verify-base-$1") \
-    >"$ROOT/verify-log-$1.txt" 2>&1
+  git -C "$work" remote add origin "$origin"
+  printf '%s\n' "$base" >"$ROOT/publish-base-$name"
+  PLOG="$ROOT/publish-log-$name.txt"
+  (
+    cd "$work" || exit 1
+    "$PUBLISH" \
+      --remote origin \
+      --publish-branch gh-pages \
+      --base-sha-file "$ROOT/publish-base-$name" \
+      --publish-dir "$dir" \
+      --destination-dir helm-charts \
+      --message "deploy: test $name"
+  ) >"$PLOG" 2>&1
   RC=$?
 }
-ORIGIN=$(make_origin verify-same index "$FORK_INDEX") || exit 1
-SAME_SHA=$(git -C "$ROOT/seed-verify-same" rev-parse gh-pages)
-run_verify same "$ORIGIN" "$SAME_SHA"
-check "unchanged publish branch passes" [ "$RC" -eq 0 ]
-(cd "$ROOT/seed-verify-same" && echo moved >>.nojekyll && git commit -qam moved && git push -q "$ORIGIN" gh-pages) || exit 1
-run_verify moved "$ORIGIN" "$SAME_SHA"
-check "a publish branch that moved fails" [ "$RC" -ne 0 ]
-ORIGIN=$(make_origin verify-absent absent) || exit 1
-run_verify absent "$ORIGIN" none
-check "a publish branch still absent passes" [ "$RC" -eq 0 ]
-ORIGIN=$(make_origin verify-appeared empty) || exit 1
-run_verify appeared "$ORIGIN" none
-check "a publish branch that appeared fails" [ "$RC" -ne 0 ]
-run_verify unreachable "$ROOT/does-not-exist.git" "$SAME_SHA"
+
+# What the release job publishes: the chart sources, the local package and the
+# built index, mirroring publish_dir: ./helm-charts.
+PUBDIR="$ROOT/pubdir"
+mkdir -p "$PUBDIR/bifrost"
+cp "$ROOT/out-new-release.yaml" "$PUBDIR/index.yaml"
+cp "$ROOT/src/1.4.0-new/Chart.yaml" "$PUBDIR/bifrost/Chart.yaml"
+cp "$NEW" "$PUBDIR/"
+
+ORIGIN=$(make_origin publish index "$FORK_INDEX") || exit 1
+(cd "$ROOT/seed-publish" && echo stale >helm-charts/stale.tgz && git add -A && git commit -qm stale && git push -q "$ORIGIN" gh-pages) || exit 1
+BASE=$(origin_head "$ORIGIN")
+run_publish normal "$ORIGIN" "$BASE" "$PUBDIR"
+check "exits 0" [ "$RC" -eq 0 ]
+check "publish branch advanced by one commit whose parent is the recorded revision" \
+  [ "$(git --git-dir="$ORIGIN" rev-parse "refs/heads/gh-pages^" 2>/dev/null)" = "$BASE" ]
+check "published index is the built one" cmp -s <(origin_show "$ORIGIN" helm-charts/index.yaml) "$PUBDIR/index.yaml"
+check "chart sources are published under the destination" origin_has "$ORIGIN" helm-charts/bifrost/Chart.yaml
+check "the package is published under the destination" origin_has "$ORIGIN" helm-charts/bifrost-1.4.0.tgz
+check "stale files under the destination are removed" not origin_has "$ORIGIN" helm-charts/stale.tgz
+check "content outside the destination is preserved" [ "$(origin_show "$ORIGIN" unrelated/page.html)" = "keep me" ]
+check ".nojekyll at the root is preserved" origin_has "$ORIGIN" .nojekyll
+
+echo "# publishing the same content again is a no-op"
+run_publish again "$ORIGIN" "$(origin_head "$ORIGIN")" "$PUBDIR"
+check "exits 0" [ "$RC" -eq 0 ]
+check "no commit is pushed when nothing changed" \
+  [ "$(git --git-dir="$ORIGIN" rev-parse "refs/heads/gh-pages^")" = "$BASE" ]
+
+echo "# first publication creates the branch"
+ORIGIN=$(make_origin publish-first absent) || exit 1
+run_publish first "$ORIGIN" none "$PUBDIR"
+check "exits 0" [ "$RC" -eq 0 ]
+check "creates the publish branch with a single root commit" \
+  [ "$(git --git-dir="$ORIGIN" rev-list --count refs/heads/gh-pages 2>/dev/null)" = "1" ]
+check "published index is the built one" cmp -s <(origin_show "$ORIGIN" helm-charts/index.yaml) "$PUBDIR/index.yaml"
+check "adds .nojekyll at the root" origin_has "$ORIGIN" .nojekyll
+
+echo "# an external write after the index read is never overwritten"
+ORIGIN=$(make_origin publish-moved index "$FORK_INDEX") || exit 1
+BASE=$(origin_head "$ORIGIN")
+(cd "$ROOT/seed-publish-moved" && echo corrected >helm-charts/index.yaml && git commit -qam external && git push -q "$ORIGIN" gh-pages) || exit 1
+J=$(origin_head "$ORIGIN")
+run_publish moved "$ORIGIN" "$BASE" "$PUBDIR"
+check "a publish branch that moved after the read fails" [ "$RC" -ne 0 ]
+check "the external change is untouched" [ "$(origin_head "$ORIGIN")" = "$J" ]
+check "the failure tells the operator to re-run" grep -qi 're-run' "$PLOG"
+
+echo "# an external write landing right before the push is never overwritten"
+ORIGIN=$(make_origin publish-race index "$FORK_INDEX") || exit 1
+BASE=$(origin_head "$ORIGIN")
+cat >"$ROOT/race-hook.sh" <<EOF
+cd "$ROOT/seed-publish-race" && echo corrected >helm-charts/index.yaml && git commit -qam external && git push -q "$ORIGIN" gh-pages
+EOF
+FAKE_GIT_BEFORE_PUSH="$ROOT/race-hook.sh" PATH="$FAKE_BIN:$PATH" run_publish race "$ORIGIN" "$BASE" "$PUBDIR"
+check "the push is rejected" [ "$RC" -ne 0 ]
+check "the external change is untouched" [ "$(origin_show "$ORIGIN" helm-charts/index.yaml)" = "corrected" ]
+check "the failure tells the operator to re-run" grep -qi 're-run' "$PLOG"
+
+echo "# a branch created by another writer during a first publication is never overwritten"
+ORIGIN=$(make_origin publish-appear absent) || exit 1
+cat >"$ROOT/appear-hook.sh" <<EOF
+git init -q "$ROOT/appear-seed" && cd "$ROOT/appear-seed" && git checkout -q -b gh-pages && echo external >README && git add -A && git commit -qm external && git push -q "$ORIGIN" gh-pages
+EOF
+FAKE_GIT_BEFORE_PUSH="$ROOT/appear-hook.sh" PATH="$FAKE_BIN:$PATH" run_publish appear "$ORIGIN" none "$PUBDIR"
+check "the push is rejected" [ "$RC" -ne 0 ]
+check "the other writer's branch is untouched" [ "$(origin_show "$ORIGIN" README)" = "external" ]
+
+echo "# failures to ask the remote or a bad record never publish"
+run_publish unreachable "$ROOT/does-not-exist.git" "$BASE" "$PUBDIR"
 check "unreachable origin fails" [ "$RC" -ne 0 ]
-run_verify garbage "$ORIGIN" "not-a-revision"
+ORIGIN=$(make_origin publish-record index "$FORK_INDEX") || exit 1
+K=$(origin_head "$ORIGIN")
+run_publish garbage "$ORIGIN" "not-a-revision" "$PUBDIR"
 check "a malformed base record fails" [ "$RC" -ne 0 ]
-run_verify empty "$ORIGIN" ""
+run_publish empty "$ORIGIN" "" "$PUBDIR"
 check "an empty base record fails" [ "$RC" -ne 0 ]
+check "nothing was published by the failed attempts" [ "$(origin_head "$ORIGIN")" = "$K" ]
 
 # ---------------------------------------------------------------------------
-echo "# the release job is serialized and gated"
-check "workflow serializes publication runs" grep -qE '^concurrency:' "$WORKFLOW"
-check "workflow never cancels an in-progress publication" grep -qE '^  cancel-in-progress: false' "$WORKFLOW"
+echo "# three successive releases: a stale attempt fails, nothing is lost"
+# Two runs read the index at the same revision; the second to publish must fail
+# rather than drop the first's version, and its rebuilt attempt must carry it.
+B=$(make_chart 1.5.0 second "$ROOT/pkg/1.5.0") || exit 1
+C=$(make_chart 1.6.0 third "$ROOT/pkg/1.6.0") || exit 1
+ORIGIN=$(make_origin publish-three index "$FORK_INDEX") || exit 1
+run_case three-a "$ORIGIN" 1.4.0 "$NEW" "$NEW" --base-sha-output "$ROOT/base-three-a"
+OUT_A="$OUT"
+run_case three-b "$ORIGIN" 1.5.0 "$B" "$B" --base-sha-output "$ROOT/base-three-b"
+OUT_B="$OUT"
+mkdir -p "$ROOT/pub-a" "$ROOT/pub-b" "$ROOT/pub-b2" "$ROOT/pub-c"
+cp "$OUT_A" "$ROOT/pub-a/index.yaml"
+run_publish three-a "$ORIGIN" "$(cat "$ROOT/base-three-a")" "$ROOT/pub-a"
+check "first release publishes" [ "$RC" -eq 0 ]
+cp "$OUT_B" "$ROOT/pub-b/index.yaml"
+run_publish three-b-stale "$ORIGIN" "$(cat "$ROOT/base-three-b")" "$ROOT/pub-b"
+check "a release built on the stale revision fails instead of dropping 1.4.0" [ "$RC" -ne 0 ]
+origin_show "$ORIGIN" helm-charts/index.yaml >"$ROOT/three-after-a.yaml"
+check "1.4.0 is still published" [ -n "$(index_field "$ROOT/three-after-a.yaml" 1.4.0 digest)" ]
+run_case three-b2 "$ORIGIN" 1.5.0 "$B" "$B" --base-sha-output "$ROOT/base-three-b2"
+cp "$OUT" "$ROOT/pub-b2/index.yaml"
+run_publish three-b2 "$ORIGIN" "$(cat "$ROOT/base-three-b2")" "$ROOT/pub-b2"
+check "the rebuilt second release publishes" [ "$RC" -eq 0 ]
+run_case three-c "$ORIGIN" 1.6.0 "$C" "$C" --base-sha-output "$ROOT/base-three-c"
+cp "$OUT" "$ROOT/pub-c/index.yaml"
+run_publish three-c "$ORIGIN" "$(cat "$ROOT/base-three-c")" "$ROOT/pub-c"
+check "the third release publishes" [ "$RC" -eq 0 ]
+origin_show "$ORIGIN" helm-charts/index.yaml >"$ROOT/three-final.yaml"
+check "all three releases and the history are published" \
+  [ "$(index_versions "$ROOT/three-final.yaml" | tr '\n' ' ')" = "1.0.0 1.1.0 1.2.0 1.4.0 1.5.0 1.6.0 " ]
+
+# ---------------------------------------------------------------------------
+echo "# the release job is gated and publishes by compare-and-swap"
 check "release job is gated on the release refs before any write" \
   grep -qE "^    if: github\.ref == 'refs/heads/main'" "$WORKFLOW"
-check "workflow re-checks the publish branch right before deploying" \
-  grep -q 'helm-publish-index-verify.sh' "$WORKFLOW"
+check "workflow publishes through the compare-and-swap script" grep -q 'helm-publish-pages.sh' "$WORKFLOW"
+check "workflow no longer deploys through a clone-and-replace action" not grep -q 'actions-gh-pages' "$WORKFLOW"
+check "workflow has no concurrency group that could cancel a queued release" \
+  not grep -qE '^concurrency:' "$WORKFLOW"
 
 # ---------------------------------------------------------------------------
 echo "# publication stays with the repository owner"
