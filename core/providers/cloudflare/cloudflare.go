@@ -280,6 +280,15 @@ func (provider *CloudflareProvider) Decision(ctx *schemas.BifrostContext, key sc
 	if bifrostErr != nil {
 		return nil, bifrostErr
 	}
+	// The model is joined into the authenticated request path, so it must be one
+	// plain resource name: anything else could leave the decision endpoint.
+	if !isClefModelName(clefModelName(request.Model)) {
+		return nil, &schemas.BifrostError{
+			IsBifrostError: true,
+			StatusCode:     schemas.Ptr(fasthttp.StatusBadRequest),
+			Error:          &schemas.ErrorField{Message: fmt.Sprintf("invalid Cloudflare decision model %q", request.Model)},
+		}
+	}
 
 	jsonData, bifrostErr := providerUtils.CheckContextAndGetRequestBody(
 		ctx,
