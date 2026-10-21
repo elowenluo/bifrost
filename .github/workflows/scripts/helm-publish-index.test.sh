@@ -231,9 +231,11 @@ entry_preserved() { # VERSION: the output entry matches the fixture entry exactl
 echo "# new release on top of existing fork history"
 NEW=$(make_chart 1.4.0 new "$ROOT/pkg/1.4.0") || exit 1
 ORIGIN=$(make_origin history index "$FORK_INDEX") || exit 1
-run_case new-release "$ORIGIN" 1.4.0 "$NEW" "$NEW"
+run_case new-release "$ORIGIN" 1.4.0 "$NEW" "$NEW" --base-sha-output "$ROOT/base-new-release"
 check "exits 0" [ "$RC" -eq 0 ]
 check "writes the index" [ -s "$OUT" ]
+check "records the publish branch revision the index was read from" \
+  [ "$(cat "$ROOT/base-new-release" 2>/dev/null)" = "$(git -C "$ROOT/seed-history" rev-parse gh-pages)" ]
 check "fork-only 1.0.0 survives untouched" entry_preserved 1.0.0
 check "overlapping 1.1.0 keeps its original (upstream) entry" entry_preserved 1.1.0
 check "pre-transfer 1.2.0 keeps its original URL and digest" entry_preserved 1.2.0
@@ -259,8 +261,9 @@ check "URL follows --server-url and --repository" \
 # ---------------------------------------------------------------------------
 echo "# first release: no publish branch yet"
 ORIGIN=$(make_origin first-absent absent) || exit 1
-run_case first-absent "$ORIGIN" 1.4.0 "$NEW" "$NEW"
+run_case first-absent "$ORIGIN" 1.4.0 "$NEW" "$NEW" --base-sha-output "$ROOT/base-first-absent"
 check "exits 0" [ "$RC" -eq 0 ]
+check "records that no publish branch existed" [ "$(cat "$ROOT/base-first-absent" 2>/dev/null)" = "none" ]
 check "index holds exactly the new release" \
   [ "$(index_versions "$OUT" | tr '\n' ' ')" = "1.4.0 " ]
 check "new entry digest is the release asset's sha256" \
@@ -268,8 +271,10 @@ check "new entry digest is the release asset's sha256" \
 
 echo "# first release: publish branch exists but has no index yet"
 ORIGIN=$(make_origin first-empty empty) || exit 1
-run_case first-empty "$ORIGIN" 1.4.0 "$NEW" "$NEW"
+run_case first-empty "$ORIGIN" 1.4.0 "$NEW" "$NEW" --base-sha-output "$ROOT/base-first-empty"
 check "exits 0" [ "$RC" -eq 0 ]
+check "records the publish branch revision even without an index" \
+  [ "$(cat "$ROOT/base-first-empty" 2>/dev/null)" = "$(git -C "$ROOT/seed-first-empty" rev-parse gh-pages)" ]
 check "index holds exactly the new release" \
   [ "$(index_versions "$OUT" | tr '\n' ' ')" = "1.4.0 " ]
 
@@ -339,6 +344,89 @@ ORIGIN=$(make_origin emptyfile index "$ROOT/index-empty.yaml") || exit 1
 run_case emptyfile "$ORIGIN" 1.4.0 "$NEW" "$NEW"
 check "an empty index file fails rather than passing as a first release" [ "$RC" -ne 0 ]
 check "no index is written on failure" [ ! -e "$OUT" ]
+
+# ---------------------------------------------------------------------------
+echo "# published entries are preserved whole, not as a projection"
+# A field helm's typed load re-emits differently: an empty value is omitted on
+# the way out, so a merge through helm drops it while name, version, digest and
+# urls all still match. (Unknown fields are rejected by helm's strict loader;
+# that case is below.)
+awk '/^    version: 1\.0\.0$/ { print "    home: \"\"" } { print }' "$FORK_INDEX" >"$ROOT/fork-index-extra.yaml"
+check "fixture sanity: the extra field sits inside the 1.0.0 entry" \
+  grep -q '^    home: ""$' "$ROOT/fork-index-extra.yaml"
+check "fixture sanity: helm loads the index but drops the field on re-emission" \
+  not grep -q '^    home: ""$' <(mkdir -p "$ROOT/reemit" && helm repo index "$ROOT/reemit" --merge "$ROOT/fork-index-extra.yaml" >/dev/null 2>&1 && cat "$ROOT/reemit/index.yaml")
+ORIGIN=$(make_origin extra-add index "$ROOT/fork-index-extra.yaml") || exit 1
+run_case extra-add "$ORIGIN" 1.4.0 "$NEW" "$NEW"
+check "adding a release cannot silently drop a published entry's field" [ "$RC" -ne 0 ]
+check "no index is written on failure" [ ! -e "$OUT" ]
+ORIGIN=$(make_origin extra-rerun index "$ROOT/fork-index-extra.yaml") || exit 1
+run_case extra-rerun "$ORIGIN" 1.2.0 "$PRE_TRANSFER" "$PRE_TRANSFER"
+check "rerun of a published version keeps the index byte for byte, extra field included" \
+  cmp -s "$OUT" "$ROOT/fork-index-extra.yaml"
+
+awk '/^    version: 1\.0\.0$/ { print "    x-fork-note: keep" } { print }' "$FORK_INDEX" >"$ROOT/fork-index-unknown.yaml"
+ORIGIN=$(make_origin unknown index "$ROOT/fork-index-unknown.yaml") || exit 1
+run_case unknown "$ORIGIN" 1.4.0 "$NEW" "$NEW"
+check "an entry field helm cannot load fails rather than being guessed around" [ "$RC" -ne 0 ]
+check "no index is written on failure" [ ! -e "$OUT" ]
+
+echo "# index structure is validated explicitly"
+awk -v d="$(index_field "$FORK_INDEX" 1.1.0 digest)" '$0 == "    digest: " d { next } { print }' \
+  "$FORK_INDEX" >"$ROOT/fork-index-nodigest.yaml"
+check "fixture sanity: 1.1.0 has no digest" [ -z "$(index_field "$ROOT/fork-index-nodigest.yaml" 1.1.0 digest)" ]
+ORIGIN=$(make_origin nodigest index "$ROOT/fork-index-nodigest.yaml") || exit 1
+run_case nodigest "$ORIGIN" 1.4.0 "$NEW" "$NEW"
+check "a published entry without a digest fails" [ "$RC" -ne 0 ]
+check "no index is written on failure" [ ! -e "$OUT" ]
+printf 'apiVersion: v1\nentries: {}\n' >"$ROOT/index-noentries.yaml"
+ORIGIN=$(make_origin noentries index "$ROOT/index-noentries.yaml") || exit 1
+run_case noentries "$ORIGIN" 1.4.0 "$NEW" "$NEW"
+check "a valid index with no entries yet is accepted" [ "$RC" -eq 0 ]
+check "index holds exactly the new release" \
+  [ "$(index_versions "$OUT" | tr '\n' ' ')" = "1.4.0 " ]
+
+# ---------------------------------------------------------------------------
+echo "# pre-deploy check: the publish branch must not have moved since the index was read"
+VERIFY="${SCRIPT_DIR}/helm-publish-index-verify.sh"
+check "verify script exists and is executable" [ -x "$VERIFY" ]
+run_verify() { # NAME ORIGIN BASE-RECORD
+  local work="$ROOT/verify-$1"
+  git init -q "$work" || return 1
+  git -C "$work" remote add origin "$2"
+  printf '%s\n' "$3" >"$ROOT/verify-base-$1"
+  (cd "$work" && "$VERIFY" --remote origin --publish-branch gh-pages --base-sha-file "$ROOT/verify-base-$1") \
+    >"$ROOT/verify-log-$1.txt" 2>&1
+  RC=$?
+}
+ORIGIN=$(make_origin verify-same index "$FORK_INDEX") || exit 1
+SAME_SHA=$(git -C "$ROOT/seed-verify-same" rev-parse gh-pages)
+run_verify same "$ORIGIN" "$SAME_SHA"
+check "unchanged publish branch passes" [ "$RC" -eq 0 ]
+(cd "$ROOT/seed-verify-same" && echo moved >>.nojekyll && git commit -qam moved && git push -q "$ORIGIN" gh-pages) || exit 1
+run_verify moved "$ORIGIN" "$SAME_SHA"
+check "a publish branch that moved fails" [ "$RC" -ne 0 ]
+ORIGIN=$(make_origin verify-absent absent) || exit 1
+run_verify absent "$ORIGIN" none
+check "a publish branch still absent passes" [ "$RC" -eq 0 ]
+ORIGIN=$(make_origin verify-appeared empty) || exit 1
+run_verify appeared "$ORIGIN" none
+check "a publish branch that appeared fails" [ "$RC" -ne 0 ]
+run_verify unreachable "$ROOT/does-not-exist.git" "$SAME_SHA"
+check "unreachable origin fails" [ "$RC" -ne 0 ]
+run_verify garbage "$ORIGIN" "not-a-revision"
+check "a malformed base record fails" [ "$RC" -ne 0 ]
+run_verify empty "$ORIGIN" ""
+check "an empty base record fails" [ "$RC" -ne 0 ]
+
+# ---------------------------------------------------------------------------
+echo "# the release job is serialized and gated"
+check "workflow serializes publication runs" grep -qE '^concurrency:' "$WORKFLOW"
+check "workflow never cancels an in-progress publication" grep -qE '^  cancel-in-progress: false' "$WORKFLOW"
+check "release job is gated on the release refs before any write" \
+  grep -qE "^    if: github\.ref == 'refs/heads/main'" "$WORKFLOW"
+check "workflow re-checks the publish branch right before deploying" \
+  grep -q 'helm-publish-index-verify.sh' "$WORKFLOW"
 
 # ---------------------------------------------------------------------------
 echo "# publication stays with the repository owner"
