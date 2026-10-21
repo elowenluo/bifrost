@@ -1274,6 +1274,8 @@ type LoggerPlugin struct {
 	deferredUsageSem             chan struct{}                  // Limits concurrent deferred usage DB updates
 	deferredUsageWatchSem        chan struct{}                  // Caps goroutines parked on a deferred-usage channel (see scheduleDeferredUsageUpdate)
 	heldGuardrailRows            sync.Map                       // Maps log ID -> *writeQueueEntry held until its output-monitor guardrail result lands (see holdForDeferredGuardrail)
+	heldGuardrailMu              sync.RWMutex                   // Read side: parking a row and a result's claim-then-queue; write side: Cleanup's release
+	heldGuardrailReleased        bool                           // Set by releaseHeldGuardrailRows under heldGuardrailMu; later rows are written, not held
 	droppedDeferredUsage         atomic.Int64                   // Deferred usage updates dropped because a semaphore was full
 	clusterNodeID                atomic.Value                   // Cluster node ID (string) for log attribution in clustered deployments
 	batchCtx                     context.Context                // Cancelled by Cleanup to stop the batchWriter goroutine before any further DB work
