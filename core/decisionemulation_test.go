@@ -429,3 +429,32 @@ func TestEmulateDecisionRejectsNonTextInput(t *testing.T) {
 		}
 	}
 }
+
+// An answer that fails extraction or validation still consumed a billable
+// inference, so the error must carry that turn's usage and resolved model for
+// governance and logging to charge it.
+func TestEmulateDecisionErrorsCarryConsumedUsage(t *testing.T) {
+	for name, response := range map[string]*schemas.BifrostResponsesResponse{
+		"invalid answer": emulationFunctionCallResponse(`{"approve": {"value": 0.9, "confidence": 0.8}}`),
+		"no tool call":   {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resolved := "gpt-5-resolved"
+			response.Model = resolved
+			response.Usage = &schemas.ResponsesResponseUsage{InputTokens: 120, OutputTokens: 30, TotalTokens: 150}
+			provider := &decisionEmulationProvider{response: response}
+			var b Bifrost
+			_, bifrostErr := b.emulateDecisionViaResponses(nil, provider, schemas.Key{}, structuredDecisionRequest())
+			if bifrostErr == nil {
+				t.Fatal("expected the answer to be rejected")
+			}
+			billed := bifrostErr.ExtraFields.BilledUsage
+			if billed == nil || billed.PromptTokens != 120 || billed.CompletionTokens != 30 || billed.TotalTokens != 150 {
+				t.Fatalf("billed usage = %+v, want 120/30/150", billed)
+			}
+			if bifrostErr.ExtraFields.ResolvedModelUsed != resolved {
+				t.Fatalf("resolved model = %q, want %q", bifrostErr.ExtraFields.ResolvedModelUsed, resolved)
+			}
+		})
+	}
+}

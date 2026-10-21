@@ -102,12 +102,12 @@ func (bifrost *Bifrost) emulateDecisionViaResponses(
 
 	argsJSON, extractErr := extractDecisionToolArguments(resp)
 	if extractErr != nil {
-		return nil, providerUtils.NewBifrostOperationError(extractErr.Error(), nil)
+		return nil, decisionAnswerError(extractErr, resp)
 	}
 
 	answers, parseErr := providerUtils.ParseDecisionAnswers([]byte(argsJSON), req.Questions, names)
 	if parseErr != nil {
-		return nil, providerUtils.NewBifrostOperationError(parseErr.Error(), nil)
+		return nil, decisionAnswerError(parseErr, resp)
 	}
 
 	decision := &schemas.BifrostDecisionResponse{
@@ -132,6 +132,20 @@ func (bifrost *Bifrost) emulateDecisionViaResponses(
 	decision.ExtraFields.Provider = req.Provider
 	decision.ExtraFields.OriginalModelRequested = req.Model
 	return decision, nil
+}
+
+// decisionAnswerError reports an answer that could not be read or validated. The
+// inference that produced it already ran, so the error carries that turn's usage and
+// resolved model for governance and logging to charge it.
+func decisionAnswerError(cause error, resp *schemas.BifrostResponsesResponse) *schemas.BifrostError {
+	bifrostErr := providerUtils.NewBifrostOperationError(cause.Error(), nil)
+	if resp != nil {
+		bifrostErr.ExtraFields.ResolvedModelUsed = resp.Model
+		if resp.Usage != nil {
+			bifrostErr.ExtraFields.BilledUsage = resp.Usage.ToBifrostLLMUsage()
+		}
+	}
+	return bifrostErr
 }
 
 // decisionToolChoice picks the tool_choice that forces the emit_decision call.
