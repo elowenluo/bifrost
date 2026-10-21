@@ -742,9 +742,20 @@ func prependChatText(resp *schemas.BifrostChatResponse, prior []string) {
 func (bifrost *Bifrost) injectedToolsForAttempt(ctx *schemas.BifrostContext, config *schemas.ProviderConfig, req *schemas.BifrostRequest, baseProvider schemas.ModelProvider, model string) *injectedToolSet {
 	var set *injectedToolSet
 	if bifrost.MCPManager != nil {
-		set = resolveInjectedTools(bifrost.MCPManager, config, req.RequestType, bifrost.logger)
+		set = injectedToolsFor(bifrost.MCPManager, config, req, bifrost.logger)
 	}
 	return withGatewayToolSearch(set, req, baseProvider, schemas.ResolveCanonicalModel(ctx, model))
+}
+
+// injectedToolsFor resolves the provider's injected MCP tools for req. The loop
+// that runs them drives a single choice, so a chat request asking for several (n
+// > 1) is served without them rather than having injected calls on its other
+// choices dropped unexecuted.
+func injectedToolsFor(src injectedToolSource, config *schemas.ProviderConfig, req *schemas.BifrostRequest, logger schemas.Logger) *injectedToolSet {
+	if chat := req.ChatRequest; chat != nil && chat.Params != nil && chat.Params.N != nil && *chat.Params.N > 1 {
+		return nil
+	}
+	return resolveInjectedTools(src, config, req.RequestType, logger)
 }
 
 // withGatewayToolSearch adds the gateway tool search to set when the attempt needs it.

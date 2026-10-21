@@ -1063,3 +1063,16 @@ func BenchmarkWithGatewayToolSearch_NoDeferredTools(b *testing.B) {
 		}
 	}
 }
+
+// TestInjectedToolsSkipMultiChoiceChatRequests: the injected-tool loop drives one
+// choice, so a chat request asking for several would get injected calls on the
+// others dropped unexecuted. Such a request is served without injected tools.
+func TestInjectedToolsSkipMultiChoiceChatRequests(t *testing.T) {
+	src := fakeInjectedToolSource{tools: map[string]schemas.ChatTool{"tavily-search": tavilySearchTool()}, maxDepth: 4}
+	chat := func(n *int) *schemas.BifrostRequest {
+		return &schemas.BifrostRequest{RequestType: schemas.ChatCompletionRequest, ChatRequest: &schemas.BifrostChatRequest{Params: &schemas.ChatParameters{N: n}}}
+	}
+	require.NotNil(t, injectedToolsFor(src, webSearchConfig(), chat(nil), nil), "a single-choice request gets the injected tool")
+	require.NotNil(t, injectedToolsFor(src, webSearchConfig(), chat(schemas.Ptr(1)), nil))
+	require.Nil(t, injectedToolsFor(src, webSearchConfig(), chat(schemas.Ptr(2)), nil), "a multi-choice request must not be driven by the single-choice loop")
+}
