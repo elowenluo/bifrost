@@ -115,36 +115,49 @@ func claudeTierModelEnvMap(model string) map[string]string {
 	}
 }
 
-// codexPreLaunch creates an isolated Codex home with a Bifrost Responses provider.
-// Isolation prevents a launcher session from overwriting the user's persistent
-// Codex authentication, configuration, or session history.
+// codexPreLaunch points Codex at the Bifrost launcher's own Codex home with a
+// Bifrost Responses provider. Keeping it separate from the user's Codex home
+// prevents a launcher session from overwriting the user's authentication or
+// configuration; keeping it persistent keeps the launcher's session history, so a
+// launcher session can be resumed by the next launch. The user's config.toml is
+// copied in on every launch, so later preference changes still apply.
 func codexPreLaunch(baseURL, _ string, model string) ([]string, func(), error) {
-	temporaryHome, err := os.MkdirTemp("", "bifrost-codex-home-*")
+	launcherHome, err := codexLauncherHome()
 	if err != nil {
-		return nil, nil, fmt.Errorf("create temporary Codex home: %w", err)
+		return nil, nil, err
 	}
-	cleanup := func() { _ = os.RemoveAll(temporaryHome) }
+	if err := os.MkdirAll(launcherHome, 0o700); err != nil {
+		return nil, nil, fmt.Errorf("create launcher Codex home: %w", err)
+	}
 	sourceHome, err := codexUserHome()
 	if err != nil {
-		cleanup()
 		return nil, nil, err
 	}
-	sourceConfig := filepath.Join(sourceHome, "config.toml")
-	targetConfig := filepath.Join(temporaryHome, "config.toml")
-	if existing, readErr := os.ReadFile(sourceConfig); readErr == nil {
-		if writeErr := config.WriteAtomic(targetConfig, existing, 0o600); writeErr != nil {
-			cleanup()
-			return nil, nil, fmt.Errorf("copy Codex config into temporary home: %w", writeErr)
+	targetConfig := filepath.Join(launcherHome, "config.toml")
+	if filepath.Clean(sourceHome) != filepath.Clean(launcherHome) {
+		sourceConfig := filepath.Join(sourceHome, "config.toml")
+		if existing, readErr := os.ReadFile(sourceConfig); readErr == nil {
+			if writeErr := config.WriteAtomic(targetConfig, existing, 0o600); writeErr != nil {
+				return nil, nil, fmt.Errorf("copy Codex config into launcher home: %w", writeErr)
+			}
+		} else if !errors.Is(readErr, os.ErrNotExist) {
+			return nil, nil, fmt.Errorf("read Codex config: %w", readErr)
 		}
-	} else if !errors.Is(readErr, os.ErrNotExist) {
-		cleanup()
-		return nil, nil, fmt.Errorf("read Codex config: %w", readErr)
 	}
 	if err := codexWriteConfigTOML(targetConfig, baseURL, model, codexAuthEnvironment); err != nil {
-		cleanup()
 		return nil, nil, err
 	}
-	return []string{"CODEX_HOME=" + temporaryHome}, cleanup, nil
+	return []string{"CODEX_HOME=" + launcherHome}, func() {}, nil
+}
+
+// codexLauncherHome is the Codex home the launcher owns, next to the Bifrost CLI's
+// own state (~/.bifrost/codex-home).
+func codexLauncherHome() (string, error) {
+	statePath, err := config.DefaultStatePath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(statePath), "codex-home"), nil
 }
 
 func codexUserHome() (string, error) {

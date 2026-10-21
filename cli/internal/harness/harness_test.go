@@ -429,42 +429,63 @@ func TestCodexWriteNativeConfigSkipsAuthForDummyKey(t *testing.T) {
 	}
 }
 
-func TestCodexPreLaunchUsesTemporaryHome(t *testing.T) {
+func TestCodexPreLaunchUsesPersistentLauncherHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CODEX_HOME", "")
 
-	environment, cleanup, err := codexPreLaunch("http://localhost:8080/openai", "sk-bf-test", "gpt-test")
-	if err != nil {
-		t.Fatalf("codexPreLaunch() error = %v", err)
-	}
-	if cleanup == nil {
-		t.Fatal("codexPreLaunch() returned no cleanup")
-	}
-	defer cleanup()
-	var codexHome string
-	for _, entry := range environment {
-		if strings.HasPrefix(entry, "CODEX_HOME=") {
-			codexHome = strings.TrimPrefix(entry, "CODEX_HOME=")
+	launch := func() string {
+		t.Helper()
+		environment, cleanup, err := codexPreLaunch("http://localhost:8080/openai", "sk-bf-test", "gpt-test")
+		if err != nil {
+			t.Fatalf("codexPreLaunch() error = %v", err)
 		}
+		if cleanup == nil {
+			t.Fatal("codexPreLaunch() returned no cleanup")
+		}
+		defer cleanup()
+		var codexHome string
+		for _, entry := range environment {
+			if strings.HasPrefix(entry, "CODEX_HOME=") {
+				codexHome = strings.TrimPrefix(entry, "CODEX_HOME=")
+			}
+		}
+		if codexHome == "" || codexHome == filepath.Join(home, ".codex") {
+			t.Fatalf("CODEX_HOME = %q, want a Bifrost launcher home separate from the user's", codexHome)
+		}
+		return codexHome
 	}
-	if codexHome == "" || codexHome == filepath.Join(home, ".codex") {
-		t.Fatalf("CODEX_HOME = %q, want an isolated temporary directory", codexHome)
-	}
+
+	codexHome := launch()
 	configured, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
 	if err != nil {
-		t.Fatalf("read temporary config.toml: %v", err)
+		t.Fatalf("read launcher config.toml: %v", err)
 	}
 	if !strings.Contains(string(configured), `model_provider = "bifrost"`) {
-		t.Fatalf("temporary config missing Bifrost provider:\n%s", configured)
+		t.Fatalf("launcher config missing Bifrost provider:\n%s", configured)
 	}
 	// The launcher supplies OPENAI_API_KEY, so the wrapped session reads it
 	// from the environment rather than from any saved auth.json.
 	if !strings.Contains(string(configured), `env_key = "OPENAI_API_KEY"`) || !strings.Contains(string(configured), `requires_openai_auth = false`) {
-		t.Fatalf("temporary config must read the launcher-supplied key:\n%s", configured)
+		t.Fatalf("launcher config must read the launcher-supplied key:\n%s", configured)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex", "config.toml")); !os.IsNotExist(err) {
 		t.Fatalf("pre-launch mutated the real Codex config: %v", err)
+	}
+
+	// A session written by the launched Codex survives its exit, so it can be resumed.
+	history := filepath.Join(codexHome, "sessions", "rollout.jsonl")
+	if err := os.MkdirAll(filepath.Dir(history), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(history, []byte(`{"turn":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if again := launch(); again != codexHome {
+		t.Fatalf("second launch used %q, want the same launcher home %q", again, codexHome)
+	}
+	if _, err := os.Stat(history); err != nil {
+		t.Fatalf("launcher session history was lost across launches: %v", err)
 	}
 }
 
