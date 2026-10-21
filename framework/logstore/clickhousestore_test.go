@@ -1767,3 +1767,21 @@ func TestClickHouseBatchUpdate(t *testing.T) {
 	_, err = store.FindByID(ctx, "ch-upd-missing")
 	require.ErrorIs(t, err, ErrNotFound)
 }
+
+// TestClickHouseBatchUpdateHidingALogClearsItsContent mirrors
+// TestBatchUpdateHidingALogClearsItsContent on ClickHouse's read-modify-write
+// update, whose overlay also skips zero values.
+func TestClickHouseBatchUpdateHidingALogClearsItsContent(t *testing.T) {
+	store := trySetupClickHouseStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	require.NoError(t, store.CreateIfNotExists(ctx, hiddenUpdateTestLog("ch-hide", now)))
+	before, err := store.FindByID(ctx, "ch-hide")
+	require.NoError(t, err)
+	require.NotEmpty(t, before.InputHistory, "fixture must start with stored content")
+
+	require.NoError(t, store.BatchUpdate(ctx, []*Log{{ID: "ch-hide", Status: "success", ContentHidden: true}}))
+	found, err := store.FindByID(ctx, "ch-hide")
+	require.NoError(t, err)
+	assertHiddenContentCleared(t, found)
+}

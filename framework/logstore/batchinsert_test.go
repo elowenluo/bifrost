@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/capsohq/bifrost/core/schemas"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -206,4 +208,49 @@ func TestBatchUpdateWritesFinalVisibility(t *testing.T) {
 	hidden, err := store.FindByID(ctx, "to-hidden")
 	require.NoError(t, err)
 	require.True(t, hidden.ContentHidden, "a final hidden decision sets the flag")
+}
+
+// hiddenUpdateTestLog is a visible log row that carries content and pricing
+// metadata, for the tests that hide it with an update.
+func hiddenUpdateTestLog(id string, now time.Time) *Log {
+	question, answer := "what is my balance?", "your balance is 42"
+	return &Log{
+		ID: id, Timestamp: now, CreatedAt: now, Object: "chat.completion", Provider: "openai", Model: "gpt-4o",
+		Status: "processing", ContentSummary: question,
+		InputHistoryParsed:  []schemas.ChatMessage{{Role: schemas.ChatMessageRoleUser, Content: &schemas.ChatMessageContent{ContentStr: &question}}},
+		OutputMessageParsed: &schemas.ChatMessage{Role: schemas.ChatMessageRoleAssistant, Content: &schemas.ChatMessageContent{ContentStr: &answer}},
+		TokenUsageParsed:    &schemas.BifrostLLMUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+	}
+}
+
+// assertHiddenContentCleared checks a log a hidden update reached: none of its
+// content (payload columns, summary) survives, while pricing metadata does.
+func assertHiddenContentCleared(t *testing.T, found *Log) {
+	t.Helper()
+	require.True(t, found.ContentHidden)
+	assert.Empty(t, found.InputHistory, "input history survived the hidden update")
+	assert.Empty(t, found.OutputMessage, "output survived the hidden update")
+	assert.Empty(t, found.ContentSummary, "the content summary survived the hidden update")
+	assert.NotEmpty(t, found.TokenUsage, "pricing metadata is not content and stays")
+}
+
+// TestBatchUpdateHidingALogClearsItsContent: an update that makes a log hidden
+// must remove the content the row already holds. Updates skip zero values, so
+// clearing only the update entry would leave the stored content in place.
+func TestBatchUpdateHidingALogClearsItsContent(t *testing.T) {
+	ctx := context.Background()
+	store, err := newSqliteLogStore(ctx, &SQLiteConfig{Path: filepath.Join(t.TempDir(), "hide.db")}, testLogger{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close(ctx) })
+
+	now := time.Now().UTC()
+	require.NoError(t, store.CreateIfNotExists(ctx, hiddenUpdateTestLog("to-hide", now)))
+	before, err := store.FindByID(ctx, "to-hide")
+	require.NoError(t, err)
+	require.NotEmpty(t, before.InputHistory, "fixture must start with stored content")
+
+	require.NoError(t, store.BatchUpdate(ctx, []*Log{{ID: "to-hide", Status: "success", ContentHidden: true}}))
+	found, err := store.FindByID(ctx, "to-hide")
+	require.NoError(t, err)
+	assertHiddenContentCleared(t, found)
 }

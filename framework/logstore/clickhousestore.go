@@ -729,6 +729,10 @@ func (s *ClickHouseLogStore) BatchUpdate(ctx context.Context, entries []*Log) er
 				// The overlay skips zero values; the final visibility is always written.
 				r.ContentHidden = src.ContentHidden
 			}
+			// A row that becomes hidden must not keep the content it was saved with.
+			if r.ContentHidden {
+				clearHiddenContent(r)
+			}
 		}
 		return s.chReinsert(ctx, &rows)
 	})
