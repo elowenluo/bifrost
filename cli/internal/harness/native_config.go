@@ -140,7 +140,7 @@ func codexPreLaunch(baseURL, _ string, model string) ([]string, func(), error) {
 		cleanup()
 		return nil, nil, fmt.Errorf("read Codex config: %w", readErr)
 	}
-	if err := codexWriteConfigTOML(targetConfig, baseURL, model); err != nil {
+	if err := codexWriteConfigTOML(targetConfig, baseURL, model, codexAuthEnvironment); err != nil {
 		cleanup()
 		return nil, nil, err
 	}
@@ -175,13 +175,29 @@ func codexWriteNativeConfig(baseURL, apiKey, model string) error {
 		return fmt.Errorf("create codex config dir: %w", err)
 	}
 
+	// A direct launch has no launcher-supplied OPENAI_API_KEY, so the
+	// provider reads the key saved in auth.json, or sends none at all.
+	auth := codexAuthNone
 	if apiKey = strings.TrimSpace(apiKey); apiKey != "" && apiKey != "dummy-key" {
 		if err := codexWriteAuth(filepath.Join(dir, "auth.json"), apiKey); err != nil {
 			return err
 		}
+		auth = codexAuthStored
 	}
-	return codexWriteConfigTOML(filepath.Join(dir, "config.toml"), baseURL, model)
+	return codexWriteConfigTOML(filepath.Join(dir, "config.toml"), baseURL, model, auth)
 }
+
+// codexProviderAuth selects where the Bifrost provider obtains its key.
+type codexProviderAuth int
+
+const (
+	// codexAuthEnvironment reads the OPENAI_API_KEY a wrapped launch supplies.
+	codexAuthEnvironment codexProviderAuth = iota
+	// codexAuthStored reads the API key saved in Codex's auth.json.
+	codexAuthStored
+	// codexAuthNone sends no credential, for keyless gateways.
+	codexAuthNone
+)
 
 // codexWriteAuth merges the bifrost virtual key into Codex's auth.json,
 // preserving any other fields the user (or Codex itself) may have written.
@@ -210,7 +226,9 @@ func codexWriteAuth(path, apiKey string) error {
 // codexWriteConfigTOML declares Bifrost as a custom Responses provider.
 // Current Codex versions ignore OPENAI_BASE_URL and require a custom provider
 // to disable OpenAI OAuth, so the provider table is part of the routing contract.
-func codexWriteConfigTOML(path, baseURL, model string) error {
+// With codexAuthStored, requires_openai_auth makes Codex send the API key
+// saved in auth.json (auth_mode "apikey"), which needs no OAuth login.
+func codexWriteConfigTOML(path, baseURL, model string, auth codexProviderAuth) error {
 	var existing []byte
 	if b, err := os.ReadFile(path); err == nil {
 		existing = b
@@ -235,10 +253,16 @@ func codexWriteConfigTOML(path, baseURL, model string) error {
 		`name = "Bifrost"`,
 		"base_url = " + tomlQuote(providerURL),
 		`wire_api = "responses"`,
-		`env_key = "OPENAI_API_KEY"`,
-		`requires_openai_auth = false`,
-		`supports_websockets = false`,
 	}
+	switch auth {
+	case codexAuthEnvironment:
+		providerBody = append(providerBody, `env_key = "OPENAI_API_KEY"`, `requires_openai_auth = false`)
+	case codexAuthStored:
+		providerBody = append(providerBody, `requires_openai_auth = true`)
+	default:
+		providerBody = append(providerBody, `requires_openai_auth = false`)
+	}
+	providerBody = append(providerBody, `supports_websockets = false`)
 	configured = replaceTOMLTable(configured, "model_providers.bifrost", providerBody)
 	return config.WriteAtomic(path, configured, 0o600)
 }

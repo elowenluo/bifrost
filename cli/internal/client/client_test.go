@@ -96,6 +96,37 @@ func TestClientRejectsCrossHostRedirectToLoopback(t *testing.T) {
 	}
 }
 
+// TestClientRejectsCrossPortRedirect verifies a same-host, same-scheme
+// redirect to a different port is refused: another port is another service,
+// and the client's custom credential headers would otherwise reach it.
+func TestClientRejectsCrossPortRedirect(t *testing.T) {
+	for _, location := range []string{"https://gateway.example:8443/api/providers", "https://gateway.example:443/api/providers/new"} {
+		api := New("https://gateway.example", Credentials{VirtualKey: "sk-bf-test"}, time.Second)
+		requestCount := 0
+		api.HTTPClient.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			requestCount++
+			if requestCount == 1 {
+				return &http.Response{
+					StatusCode: http.StatusFound, Header: http.Header{"Location": {location}},
+					Body: io.NopCloser(strings.NewReader("")), Request: request,
+				}, nil
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: request}, nil
+		})
+		_, err := api.Do(context.Background(), Request{Path: "/api/providers"})
+		if strings.HasSuffix(location, ":8443/api/providers") {
+			if err == nil || requestCount != 1 {
+				t.Fatalf("redirect to %s: err = %v, request count = %d; want rejection before a second request", location, err, requestCount)
+			}
+			continue
+		}
+		// An explicit default port is the same origin and stays allowed.
+		if err != nil || requestCount != 2 {
+			t.Fatalf("redirect to %s: err = %v, request count = %d; want it followed", location, err, requestCount)
+		}
+	}
+}
+
 // TestClientStreamRejectsCrossHostRedirect verifies the streaming client
 // (which uses a copy of the base http.Client) enforces the same redirect
 // policy as the buffered client.

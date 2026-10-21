@@ -337,8 +337,7 @@ trust_level = "trusted"
 		`name = "Bifrost"`,
 		`base_url = "http://localhost:8080/openai/v1"`,
 		`wire_api = "responses"`,
-		`env_key = "OPENAI_API_KEY"`,
-		`requires_openai_auth = false`,
+		`requires_openai_auth = true`,
 		`supports_websockets = false`,
 		`[projects."/Users/me/proj"]`,
 		`trust_level = "trusted"`,
@@ -352,6 +351,9 @@ trust_level = "trusted"
 		`"stale-literal-key"`,
 		`"gpt-old"`,
 		`openai_base_url=`,
+		// A direct launch has no OPENAI_API_KEY in its environment; the
+		// provider must read the key saved in auth.json instead.
+		`env_key`,
 	} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("expected config.toml to no longer contain %q, got:\n%s", unwanted, got)
@@ -389,13 +391,15 @@ func TestCodexWriteNativeConfigCreatesFilesWhenMissing(t *testing.T) {
 		`[model_providers.bifrost]`,
 		`base_url = "http://localhost:8080/openai/v1"`,
 		`wire_api = "responses"`,
-		`env_key = "OPENAI_API_KEY"`,
-		`requires_openai_auth = false`,
+		`requires_openai_auth = true`,
 		`supports_websockets = false`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected config.toml to contain %q, got:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, `env_key`) {
+		t.Fatalf("persistent config must not require an environment key, got:\n%s", got)
 	}
 	if strings.Contains(got, `model =`) {
 		t.Fatalf("did not expect model line when model is empty, got:\n%s", got)
@@ -413,8 +417,15 @@ func TestCodexWriteNativeConfigSkipsAuthForDummyKey(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".codex", "auth.json")); !os.IsNotExist(err) {
 		t.Fatalf("expected no auth.json for dummy key, stat err=%v", err)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".codex", "config.toml")); err != nil {
-		t.Fatalf("expected config.toml to still be written, stat err=%v", err)
+	configured, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatalf("expected config.toml to still be written, err=%v", err)
+	}
+	// A keyless gateway needs no credential: neither an environment key a
+	// direct launch lacks, nor OpenAI auth that would prompt for a login.
+	got := string(configured)
+	if strings.Contains(got, `env_key`) || !strings.Contains(got, `requires_openai_auth = false`) {
+		t.Fatalf("keyless config must require no credential, got:\n%s", got)
 	}
 }
 
@@ -446,6 +457,11 @@ func TestCodexPreLaunchUsesTemporaryHome(t *testing.T) {
 	}
 	if !strings.Contains(string(configured), `model_provider = "bifrost"`) {
 		t.Fatalf("temporary config missing Bifrost provider:\n%s", configured)
+	}
+	// The launcher supplies OPENAI_API_KEY, so the wrapped session reads it
+	// from the environment rather than from any saved auth.json.
+	if !strings.Contains(string(configured), `env_key = "OPENAI_API_KEY"`) || !strings.Contains(string(configured), `requires_openai_auth = false`) {
+		t.Fatalf("temporary config must read the launcher-supplied key:\n%s", configured)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex", "config.toml")); !os.IsNotExist(err) {
 		t.Fatalf("pre-launch mutated the real Codex config: %v", err)
