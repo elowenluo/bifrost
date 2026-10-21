@@ -1382,6 +1382,11 @@ func computeDecisionCost(pricing *configstoreTables.TableModelPricing, usage *sc
 	if inputRate < 0 || outputRate < 0 {
 		return nil
 	}
+	// Without native decision rates the decision was answered by emulation, which
+	// is the text call it made: price it as one, with its cache read and write rates.
+	if pricing.InputCostPerTokenDecisions == nil && pricing.OutputCostPerTokenDecisions == nil {
+		return computeTextCost(pricing, usage, tier)
+	}
 	inputCost := float64(usage.PromptTokens) * inputRate
 	outputCost := float64(usage.CompletionTokens) * outputRate
 	return newInputOutputCost(inputCost, outputCost)
@@ -2403,6 +2408,18 @@ func (s *Store) getBasePricing(model, provider string, requestType schemas.Reque
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	pricing, ok := s.getBasePricingLocked(model, provider, requestType)
+	// An emulated decision is a Responses or chat call; a model priced only in
+	// responses mode is still priced, rather than billed at zero.
+	if !ok && requestType == schemas.DecisionRequest {
+		pricing, ok = s.getBasePricingLocked(model, provider, schemas.ResponsesRequest)
+	}
+	return pricing, ok
+}
+
+// getBasePricingLocked is getBasePricing's lookup for one request type; the caller
+// holds s.mu for reading.
+func (s *Store) getBasePricingLocked(model, provider string, requestType schemas.RequestType) (*configstoreTables.TableModelPricing, bool) {
 	mode := normalizeRequestType(requestType)
 	fallbackMode, hasFallbackMode := chatResponsesFallbackMode(requestType)
 

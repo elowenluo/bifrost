@@ -6211,14 +6211,15 @@ func TestDecisionPricing_NegativeRateIsUnpriced(t *testing.T) {
 	assert.Equal(t, 0.0, s.CalculateCost(resp, nil))
 }
 
-// TestDecisionPricing_ResponsesOnlyRowStaysUnpriced pins the known gap: a model
-// with only a responses row is not priced for decisions.
-func TestDecisionPricing_ResponsesOnlyRowStaysUnpriced(t *testing.T) {
+// TestDecisionPricing_ResponsesOnlyRowIsPriced: a model with only a responses row
+// is priced for decisions from that row, as it is with only a chat row.
+func TestDecisionPricing_ResponsesOnlyRowIsPriced(t *testing.T) {
 	row := lunaChatRow(true)
 	row.Mode = "responses"
-	s := lunaStore(row)
+	chat := lunaChatRow(true)
 
-	assert.Equal(t, 0.0, lunaDecisionCost(s, 1000, 50))
+	assert.Equal(t, lunaDecisionCost(lunaStore(chat), 1000, 50), lunaDecisionCost(lunaStore(row), 1000, 50))
+	assert.Positive(t, lunaDecisionCost(lunaStore(row), 1000, 50))
 }
 
 // TestDecisionPricing_ProviderFallbacksReachChatRow pins that the Bedrock vendor
@@ -6956,4 +6957,44 @@ func TestCalculateCost_BillingTurnsKeepPerCallThresholds(t *testing.T) {
 		},
 	}}
 	assert.InDelta(t, want, s.CalculateCost(responsesResult, nil), 1e-12)
+}
+
+// TestDecisionCost_EmulatedDecisionsUseTextCacheRates: a model without native
+// decision rates answers decisions by emulation, which is the chat call it makes,
+// so cached input is priced at the cache rate, not the ordinary input rate.
+func TestDecisionCost_EmulatedDecisionsUseTextCacheRates(t *testing.T) {
+	p := chatPricing(0.000003, 0.000015)
+	p.CacheReadInputTokenCost = bifrost.Ptr(0.0000003)
+	p.CacheCreationInputTokenCost = bifrost.Ptr(0.00000375)
+	usage := &schemas.BifrostLLMUsage{
+		PromptTokens: 1000, CompletionTokens: 10, TotalTokens: 1010,
+		PromptTokensDetails: &schemas.ChatPromptTokensDetails{CachedReadTokens: 800},
+	}
+	got := computeDecisionCost(&p, usage, serviceTier{})
+	require.NotNil(t, got)
+	assert.InDelta(t, computeTextCostTotal(&p, usage, serviceTier{}), got.TotalCost, 1e-12)
+	assert.InDelta(t, 0.00084, got.InputCost, 1e-12, "200 uncached at $3/M + 800 cached at $0.30/M")
+
+	// Native decision rates keep their own pricing.
+	native := p
+	native.InputCostPerTokenDecisions = bifrost.Ptr(0.000001)
+	native.OutputCostPerTokenDecisions = bifrost.Ptr(0.000002)
+	nativeCost := computeDecisionCost(&native, usage, serviceTier{})
+	require.NotNil(t, nativeCost)
+	assert.InDelta(t, 1000*0.000001+10*0.000002, nativeCost.TotalCost, 1e-12)
+}
+
+// TestDecisionCost_ResponsesOnlyModelIsPriced: an emulated decision on a model
+// whose only datasheet row is in responses mode is still the paid inference it
+// is, so the decision lookup falls back to that row instead of pricing at zero.
+func TestDecisionCost_ResponsesOnlyModelIsPriced(t *testing.T) {
+	p := chatPricing(0.000003, 0.000015)
+	p.Mode = "responses"
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey(p.Model, p.Provider, p.Mode): p,
+	})
+	usage := &schemas.BifrostLLMUsage{PromptTokens: 1000, CompletionTokens: 10, TotalTokens: 1010}
+	got := s.CalculateCostForUsage(usage, schemas.ModelProvider(p.Provider), p.Model, schemas.DecisionRequest, nil)
+	assert.InDelta(t, computeTextCostTotal(&p, usage, serviceTier{}), got, 1e-12)
+	assert.Positive(t, got)
 }
