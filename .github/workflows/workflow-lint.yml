@@ -15,7 +15,7 @@ permissions:
 jobs:
   check-egress-allowlist:
     name: Egress allowlist covers apt + provider-harness hosts
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Harden Runner
@@ -49,3 +49,17 @@ jobs:
 
       - name: Check version-format guard
         run: ./.github/workflows/scripts/version-format.test.sh
+
+      # Release image publication guards. Fake curl/docker only: nothing reaches a registry.
+      # They run even when an earlier guard failed, so their own results are always reported.
+      - name: Check GHCR tag probe fails closed
+        if: ${{ !cancelled() }}
+        run: ./.github/workflows/scripts/ghcr-tag-probe.test.sh
+
+      - name: Check manifest scripts never re-push a published version tag
+        if: ${{ !cancelled() }}
+        run: ./.github/workflows/scripts/docker-manifest-publish.test.sh
+
+      - name: Check every image publication re-checks the registry on each attempt
+        if: ${{ !cancelled() }}
+        run: python3 .github/workflows/scripts/test-docker-publish-gates.py

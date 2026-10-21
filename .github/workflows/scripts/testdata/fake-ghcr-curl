@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Fake curl standing in for ghcr.io in the release-image tests. Nothing leaves the machine.
+#
+# Responses come from $FAKE_DIR/<key>, one line per request, "<http status> <curl exit code>
+# <body>"; the last line repeats once exhausted. The key is "token", "tags", or for a
+# manifest "manifest:<tag>" when that file exists, else "manifest". Every call is logged to
+# $FAKE_DIR/calls.log and argv.log, and a config read from stdin (--config -) to stdin.log.
+out="" fmt="" url="" fail=0
+printf '%s\n' "$*" >> "$FAKE_DIR/argv.log"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o|--output) out="$2"; shift 2 ;;
+    -w|--write-out) fmt="$2"; shift 2 ;;
+    -K|--config)
+      if [ "$2" = "-" ]; then cat >> "$FAKE_DIR/stdin.log"; fi
+      shift 2 ;;
+    -H|--header|--connect-timeout|--max-time|-u|--user) shift 2 ;;
+    --fail) fail=1; shift ;;
+    --*) shift ;;
+    -*) case "$1" in *f*) fail=1 ;; esac; shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
+  "https://ghcr.io/token?"*) kind=token key=token ;;
+  "https://ghcr.io/v2/"*"/manifests/"*)
+    kind=manifest key=manifest
+    [ -f "$FAKE_DIR/manifest:${url##*/manifests/}" ] && key="manifest:${url##*/manifests/}" ;;
+  "https://ghcr.io/v2/"*"/tags/list"*) kind=tags key=tags ;;
+  *) echo "fake curl: unexpected URL: $url" >&2; exit 99 ;;
+esac
+echo "$kind $url" >> "$FAKE_DIR/calls.log"
+n=$(( $(cat "$FAKE_DIR/$key.n" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$FAKE_DIR/$key.n"
+total=$(wc -l < "$FAKE_DIR/$key")
+[ "$n" -gt "$total" ] && n="$total"
+read -r status code body < <(sed -n "${n}p" "$FAKE_DIR/$key")
+if [ "$code" != "0" ]; then
+  [ -n "$fmt" ] && printf '000'
+  echo "curl: ($code) Failed to connect to ghcr.io" >&2
+  exit "$code"
+fi
+if [ "$fail" = "1" ] && [ "$status" -ge 400 ]; then
+  [ -n "$fmt" ] && printf '%s' "$status"
+  echo "curl: (22) The requested URL returned error: $status" >&2
+  exit 22
+fi
+if [ -n "$out" ]; then printf '%s' "$body" > "$out"; else printf '%s' "$body"; fi
+[ -n "$fmt" ] && printf '%s' "$status"
+exit 0
