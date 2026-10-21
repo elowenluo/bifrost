@@ -10,7 +10,11 @@ set -uo pipefail
 # artifact on a rerun, and a failed push looked like success. A first fix then
 # read any "not found" in a failed `helm pull` as absence, although that pull
 # also downloads content: a manifest that exists with a blob that cannot be
-# fetched would have been pushed over.
+# fetched would have been pushed over. A second fix read a manifest 404 as
+# absence, although GHCR answers the same way for a repository the token
+# cannot see: absence needs the repository's authenticated tag listing to
+# confirm visibility, exactly as PR #6 decided for image tags, and a package
+# that does not exist yet is bootstrapped deliberately, never by this script.
 #
 # The registry is faked twice over: a curl shim (PR #6's testdata/fake-ghcr-curl)
 # answers the token exchange and the manifest lookup, and a helm shim scripts
@@ -171,18 +175,24 @@ NAME_UNKNOWN='404 0 {"errors":[{"code":"NAME_UNKNOWN","message":"repository name
 MANIFEST_DENIED='403 0 {"errors":[{"code":"DENIED","message":"denied"}]}'
 MANIFEST_404_HTML='404 0 <html>not json</html>'
 MANIFEST_NETWORK='000 7 '
+TAGS_OK='200 0 {"name":"txehq/helm-charts/bifrost","tags":["1.0.0"]}'
+TAGS_NAME_UNKNOWN='404 0 {"errors":[{"code":"NAME_UNKNOWN","message":"repository name not known to registry"}]}'
+TAGS_OTHER_NAME='200 0 {"name":"txehq/helm-charts/other","tags":[]}'
+TAGS_DENIED='403 0 {"errors":[{"code":"DENIED","message":"denied"}]}'
+TAGS_NETWORK='000 7 '
 
-# run_oci NAME CANONICAL TOKEN-ANSWER MANIFEST-ANSWER PULL-ANSWERS [push-fail]
+# run_oci NAME CANONICAL TOKEN-ANSWER MANIFEST-ANSWER TAGS-ANSWER PULL-ANSWERS [push-fail]
 run_oci() {
-  local name="$1" canonical="$2" token="$3" manifest="$4" pulls="$5"
+  local name="$1" canonical="$2" token="$3" manifest="$4" tags="$5" pulls="$6"
   FAKE_DIR="$ROOT/fake-$name"
   mkdir -p "$FAKE_DIR"
   : >"$FAKE_DIR/calls.log"
   : >"$FAKE_DIR/argv.log"
   printf '%s\n' "$token" >"$FAKE_DIR/token"
   printf '%s\n' "$manifest" >"$FAKE_DIR/manifest"
+  printf '%s\n' "$tags" >"$FAKE_DIR/tags"
   printf '%s\n' "$pulls" >"$FAKE_DIR/pull"
-  if [ "${6:-}" = "push-fail" ]; then : >"$FAKE_DIR/push.fail"; fi
+  if [ "${7:-}" = "push-fail" ]; then : >"$FAKE_DIR/push.fail"; fi
   LOG="$ROOT/log-$name.txt"
   FAKE_DIR="$FAKE_DIR" PATH="$FAKE_BIN:$PATH" "$TARGET" \
     --chart-name bifrost \
@@ -211,70 +221,89 @@ no_secret_in_argv() {
 
 # ---------------------------------------------------------------------------
 echo "# missing version is published from the canonical asset and verified"
-run_oci absent "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" pushed
+run_oci absent "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" "$TAGS_OK" pushed
 check "exits 0" [ "$RC" -eq 0 ]
 check "looks the requested version's manifest up" \
   grep -q 'manifest https://ghcr.io/v2/txehq/helm-charts/bifrost/manifests/1.2.0' "$FAKE_DIR/calls.log"
 check "pushes exactly once" [ "$PUSHES" -eq 1 ]
 check "pushes the canonical asset" grep -qF -- "$CANON" "$FAKE_DIR/push.log"
 check "pushes into the owner's namespace" grep -qF -- "oci://ghcr.io/txehq/helm-charts" "$FAKE_DIR/push.log"
+check "confirms the repository is visible to the token before publishing" \
+  grep -q 'tags https://ghcr.io/v2/txehq/helm-charts/bifrost/tags/list' "$FAKE_DIR/calls.log"
 check "reads the published artifact back" [ "$PULLS" -eq 1 ]
 check "pulls the chart reference with the released version" \
   grep -qE -- 'oci://ghcr.io/txehq/helm-charts/bifrost .*--version 1\.2\.0' "$FAKE_DIR/pull.log"
 check "no credential reaches argv or the log" no_secret_in_argv
 
-echo "# a repository that does not exist yet is a first publication"
-run_oci firstrepo "$CANON" "$TOKEN_OK" "$NAME_UNKNOWN" pushed
-check "exits 0" [ "$RC" -eq 0 ]
-check "pushes exactly once" [ "$PUSHES" -eq 1 ]
+echo "# a repository the token cannot see is never published into"
+# GHCR answers a manifest lookup the same way for a version that is absent and
+# for a repository the token cannot see; only the authenticated tag listing
+# tells them apart. A package that does not exist yet looks exactly like an
+# invisible one and is bootstrapped deliberately, never here.
+run_oci invisible "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" "$TAGS_NAME_UNKNOWN" pushed
+check "fails" [ "$RC" -ne 0 ]
+check "does not push" [ "$PUSHES" -eq 0 ]
+check "names the bootstrap requirement" grep -qi 'bootstrap' "$LOG"
+run_oci unknownrepo "$CANON" "$TOKEN_OK" "$NAME_UNKNOWN" "$TAGS_NAME_UNKNOWN" pushed
+check "a repository the registry does not know fails" [ "$RC" -ne 0 ]
+check "does not push" [ "$PUSHES" -eq 0 ]
+run_oci othername "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" "$TAGS_OTHER_NAME" pushed
+check "a tag listing for a different repository fails" [ "$RC" -ne 0 ]
+check "does not push" [ "$PUSHES" -eq 0 ]
+run_oci tagsdenied "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" "$TAGS_DENIED" pushed
+check "a refused tag listing fails" [ "$RC" -ne 0 ]
+check "does not push" [ "$PUSHES" -eq 0 ]
+run_oci tagsnetwork "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" "$TAGS_NETWORK" pushed
+check "an unreachable tag listing fails" [ "$RC" -ne 0 ]
+check "does not push" [ "$PUSHES" -eq 0 ]
 
 echo "# an identical published version is left alone"
-run_oci identical "$CANON" "$TOKEN_OK" "$MANIFEST_OK" "file:$CANON"
+run_oci identical "$CANON" "$TOKEN_OK" "$MANIFEST_OK" "$TAGS_OK" "file:$CANON"
 check "exits 0" [ "$RC" -eq 0 ]
 check "does not push" [ "$PUSHES" -eq 0 ]
 
 echo "# a published version with different content is a conflict"
-run_oci conflict "$CANON" "$TOKEN_OK" "$MANIFEST_OK" "file:$OTHER"
+run_oci conflict "$CANON" "$TOKEN_OK" "$MANIFEST_OK" "$TAGS_OK" "file:$OTHER"
 check "fails" [ "$RC" -ne 0 ]
 check "does not push" [ "$PUSHES" -eq 0 ]
 
 echo "# a manifest that exists whose content cannot be fetched is never pushed over"
-run_oci blobmissing "$CANON" "$TOKEN_OK" "$MANIFEST_OK" bloberror
+run_oci blobmissing "$CANON" "$TOKEN_OK" "$MANIFEST_OK" "$TAGS_OK" bloberror
 check "fails" [ "$RC" -ne 0 ]
 check "does not push" [ "$PUSHES" -eq 0 ]
 
 echo "# anything but a definite answer about the manifest is a failure, never absence"
-run_oci denied "$CANON" "$TOKEN_OK" "$MANIFEST_DENIED" pushed
+run_oci denied "$CANON" "$TOKEN_OK" "$MANIFEST_DENIED" "$TAGS_OK" pushed
 check "a refused manifest lookup fails" [ "$RC" -ne 0 ]
 check "touches the content side not at all" content_untouched
-run_oci notjson "$CANON" "$TOKEN_OK" "$MANIFEST_404_HTML" pushed
+run_oci notjson "$CANON" "$TOKEN_OK" "$MANIFEST_404_HTML" "$TAGS_OK" pushed
 check "a 404 without a registry error code fails" [ "$RC" -ne 0 ]
 check "touches the content side not at all" content_untouched
-run_oci network "$CANON" "$TOKEN_OK" "$MANIFEST_NETWORK" pushed
+run_oci network "$CANON" "$TOKEN_OK" "$MANIFEST_NETWORK" "$TAGS_OK" pushed
 check "a network failure fails" [ "$RC" -ne 0 ]
 check "touches the content side not at all" content_untouched
-run_oci tokenrefused "$CANON" "$TOKEN_REFUSED" "$MANIFEST_UNKNOWN" pushed
+run_oci tokenrefused "$CANON" "$TOKEN_REFUSED" "$MANIFEST_UNKNOWN" "$TAGS_OK" pushed
 check "a refused token exchange fails" [ "$RC" -ne 0 ]
 check "touches the content side not at all" content_untouched
-GITHUB_TOKEN="" run_oci notoken "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" pushed
+GITHUB_TOKEN="" run_oci notoken "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" "$TAGS_OK" pushed
 check "a missing job token fails" [ "$RC" -ne 0 ]
 check "touches the registry not at all" registry_untouched
 
 echo "# publication errors fail the step"
-run_oci pushfail "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" pushed push-fail
+run_oci pushfail "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" "$TAGS_OK" pushed push-fail
 check "a failed push fails" [ "$RC" -ne 0 ]
-run_oci verifyfail "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" "file:$OTHER"
+run_oci verifyfail "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" "$TAGS_OK" "file:$OTHER"
 check "a push whose readback differs from the asset fails" [ "$RC" -ne 0 ]
-run_oci verifygone "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" bloberror
+run_oci verifygone "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" "$TAGS_OK" bloberror
 check "a push whose readback fails fails" [ "$RC" -ne 0 ]
 
 echo "# the asset must be the version being published"
-run_oci wrongasset "$WRONG" "$TOKEN_OK" "$MANIFEST_OK" "file:$CANON"
+run_oci wrongasset "$WRONG" "$TOKEN_OK" "$MANIFEST_OK" "$TAGS_OK" "file:$CANON"
 check "asset/version mismatch fails" [ "$RC" -ne 0 ]
 check "touches the registry not at all" registry_untouched
 
 echo "# the namespace follows the repository owner, lowercased"
-OWNER=TxEhq run_oci owner "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" pushed
+OWNER=TxEhq run_oci owner "$CANON" "$TOKEN_OK" "$MANIFEST_UNKNOWN" "$TAGS_OK" pushed
 check "exits 0" [ "$RC" -eq 0 ]
 check "looks the manifest up under the lowercased owner" owner_lookup_lowercased
 check "pushes into the lowercased owner's namespace" \

@@ -569,6 +569,11 @@ check "workflow publishes through the compare-and-swap script" grep -q 'helm-pub
 check "workflow no longer deploys through a clone-and-replace action" not grep -q 'actions-gh-pages' "$WORKFLOW"
 check "workflow has no concurrency group that could cancel a queued release" \
   not grep -qE '^concurrency:' "$WORKFLOW"
+EXCEPTIONS="${SCRIPT_DIR}/../../action-runtime-exceptions.json"
+check "no stale runtime exception remains for the removed deploy action" \
+  not grep -q 'actions-gh-pages' "$EXCEPTIONS"
+check "workflow carries no runtime override for the removed deploy action" \
+  not grep -q 'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24' "$WORKFLOW"
 
 # ---------------------------------------------------------------------------
 echo "# publication stays with the repository owner"
