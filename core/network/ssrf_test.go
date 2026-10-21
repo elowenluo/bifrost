@@ -1117,25 +1117,31 @@ func TestPublicTargetCheck_UnresolvableTargetIsRefused(t *testing.T) {
 	}
 }
 
-// rebindingResolver answers first with a public address and then with a private
-// one, the shape of a DNS rebinding attack against a check-then-resolve guard.
+// rebindingResolver answers first with a public address and then with later
+// (or laterErr), the shape of a DNS rebinding attack against a check-then-resolve
+// guard.
 type rebindingResolver struct {
-	calls atomic.Int32
-	first net.IP
-	later net.IP
+	calls    atomic.Int32
+	first    net.IP
+	later    net.IP
+	laterErr error
 }
 
 func (r *rebindingResolver) LookupIP(context.Context, string, string) ([]net.IP, error) {
 	if r.calls.Add(1) == 1 {
 		return []net.IP{r.first}, nil
 	}
+	if r.laterErr != nil {
+		return nil, r.laterErr
+	}
 	return []net.IP{r.later}, nil
 }
 
 // TestGuardedProxyPinsTheCheckedAddress: a proxied request must reach the proxy as
-// the address that was checked, never as the hostname for the proxy to resolve
-// again. Otherwise a name that answers public to the check and private to the proxy
-// (DNS rebinding) carries the request to a private or metadata address.
+// the address the routing check approved, never as the hostname for the proxy to
+// resolve again and never as a later answer. Otherwise a name that answers public
+// to the check and then private, or not at all (so it would be deferred to the
+// proxy by name), carries the request to a private or metadata address.
 func TestGuardedProxyPinsTheCheckedAddress(t *testing.T) {
 	var seen, host atomic.Value
 	proxy := proxytest.ForwardProxy(t, func(w http.ResponseWriter, r *http.Request) {
@@ -1143,40 +1149,77 @@ func TestGuardedProxyPinsTheCheckedAddress(t *testing.T) {
 		host.Store(r.Host)
 		w.WriteHeader(http.StatusOK)
 	})
-	proxyURL, err := url.Parse(proxy.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
 	strictCheck := func(ip net.IP, host string) error {
 		if !IsPublicIP(ip) {
 			return fmt.Errorf("blocked redirect to non-public address %s (host %s)", ip, host)
 		}
 		return nil
 	}
+	cases := []struct {
+		name     string
+		checkIP  func(net.IP, string) error
+		strict   bool
+		resolver *rebindingResolver
+	}{
+		{"strict, later answer is metadata", strictCheck, true, &rebindingResolver{first: net.ParseIP("93.184.216.34"), later: net.ParseIP("169.254.169.254")}},
+		{"strict, later answer is loopback", strictCheck, true, &rebindingResolver{first: net.ParseIP("93.184.216.34"), later: net.ParseIP("127.0.0.1")}},
+		{"private-network, later answer is metadata", checkPrivateNetworkPolicy, false, &rebindingResolver{first: net.ParseIP("93.184.216.34"), later: net.ParseIP("169.254.169.254")}},
+		{"private-network, later lookup fails", checkPrivateNetworkPolicy, false, &rebindingResolver{first: net.ParseIP("93.184.216.34"), laterErr: errors.New("SERVFAIL")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			seen.Store("")
+			host.Store("")
+			client := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, tc.checkIP, fixedProxy(t, proxy.URL), tc.resolver, tc.strict)
+			resp, err := client.Get("http://rebind.example/latest/meta-data/")
+			if err != nil {
+				t.Fatalf("a destination that passed the routing check must be reachable at the checked address, got %v", err)
+			}
+			resp.Body.Close()
+			if got, _ := seen.Load().(string); got != "93.184.216.34" {
+				t.Fatalf("proxy was asked for %q, want the address the routing check approved (93.184.216.34)", got)
+			}
+			if got, _ := host.Load().(string); got != "rebind.example" {
+				t.Fatalf("target Host header %q, want rebind.example", got)
+			}
+			if calls := tc.resolver.calls.Load(); calls != 1 {
+				t.Fatalf("destination resolved %d times, want once: a second answer must not pick the address", calls)
+			}
+		})
+	}
+}
 
-	resolver := &rebindingResolver{first: net.ParseIP("93.184.216.34"), later: net.ParseIP("93.184.216.35")}
-	client := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, strictCheck, fixedProxy(t, proxyURL.String()), resolver, true)
-	resp, err := client.Get("http://catalog.example/models.json")
-	if err != nil {
-		t.Fatalf("a public destination must be reachable through the proxy, got %v", err)
+// TestPinnedProxyDialRechecksAddressesItResolves: when the routing check could not
+// resolve the name (so it deferred), the dialer's own answer is checked before it
+// is used, and a blocked one is refused before the proxy is asked for anything.
+func TestPinnedProxyDialRechecksAddressesItResolves(t *testing.T) {
+	var tunnels atomic.Int32
+	proxy := proxytest.ForwardProxy(t, func(w http.ResponseWriter, _ *http.Request) {
+		tunnels.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
+	resolver := &flakyThenResolver{err: errors.New("SERVFAIL"), then: net.ParseIP("169.254.169.254")}
+	client := newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, checkPrivateNetworkPolicy, fixedProxy(t, proxy.URL), resolver, false)
+	if _, err := client.Get("http://rebind.example/latest/meta-data/"); err == nil {
+		t.Fatal("a metadata answer at dial time must be refused")
 	}
-	resp.Body.Close()
-	if got, _ := seen.Load().(string); got != "93.184.216.35" {
-		t.Fatalf("proxy was asked for %q, want the address the dialer checked (93.184.216.35)", got)
+	if n := tunnels.Load(); n != 0 {
+		t.Fatalf("the refused request reached the proxy %d times", n)
 	}
-	if got, _ := host.Load().(string); got != "catalog.example" {
-		t.Fatalf("target Host header %q, want catalog.example", got)
-	}
+}
 
-	seen.Store("")
-	rebinding := &rebindingResolver{first: net.ParseIP("93.184.216.34"), later: net.ParseIP("169.254.169.254")}
-	client = newGuardedHTTPClientWith(5*time.Second, (&net.Dialer{}).DialContext, strictCheck, fixedProxy(t, proxyURL.String()), rebinding, true)
-	if _, err := client.Get("http://rebind.example/latest/meta-data/"); err == nil || !strings.Contains(err.Error(), "non-public") {
-		t.Fatalf("a name that rebinds to metadata after the routing check must be refused, got %v", err)
+// flakyThenResolver fails its first lookup and answers then afterwards.
+type flakyThenResolver struct {
+	calls atomic.Int32
+	err   error
+	then  net.IP
+}
+
+func (r *flakyThenResolver) LookupIP(context.Context, string, string) ([]net.IP, error) {
+	if r.calls.Add(1) == 1 {
+		return nil, r.err
 	}
-	if got, _ := seen.Load().(string); got != "" {
-		t.Fatalf("the rebinding request reached the proxy as %q", got)
-	}
+	return []net.IP{r.then}, nil
 }
 
 // TestStrictGuardedProxyRefusesUnresolvedNames: the strict client must not hand a

@@ -1840,29 +1840,36 @@ func TestUnmatchedToolSelections(t *testing.T) {
 }
 
 // flippingResolver answers the first lookup with first and every later one with
-// later, a DNS rebinding between the routing check and the dial.
+// later, or laterErr: a DNS rebinding between the routing check and the dial.
 type flippingResolver struct {
-	calls atomic.Int32
-	first net.IP
-	later net.IP
+	calls    atomic.Int32
+	first    net.IP
+	later    net.IP
+	laterErr error
 }
 
 func (r *flippingResolver) LookupIP(context.Context, string, string) ([]net.IP, error) {
 	if r.calls.Add(1) == 1 {
 		return []net.IP{r.first}, nil
 	}
+	if r.laterErr != nil {
+		return nil, r.laterErr
+	}
 	return []net.IP{r.later}, nil
 }
 
 // TestBuildTLSHTTPClientProxyPinsAgainstRebinding: a proxied MCP request is tunnelled
-// to the address the dialer checked. A name that answered public to the routing check
-// and then a private or metadata address must be refused before the proxy is asked
-// for anything, for the strict client and the private-network one alike, and a strict
+// to the address the routing check approved. A name that answers public to that
+// check and then a private or metadata address, or nothing at all (which would
+// defer it to the proxy by name), must still reach the proxy only as the approved
+// address, for the strict client and the private-network one alike; and a strict
 // client must not defer a name the local resolver cannot answer to the proxy.
 func TestBuildTLSHTTPClientProxyPinsAgainstRebinding(t *testing.T) {
 	var tunnels atomic.Int32
-	proxy := proxytest.ForwardProxy(t, func(w http.ResponseWriter, _ *http.Request) {
+	var target atomic.Value
+	proxy := proxytest.ForwardProxy(t, func(w http.ResponseWriter, r *http.Request) {
 		tunnels.Add(1)
+		target.Store(r.URL.Host)
 		w.WriteHeader(http.StatusOK)
 	})
 	proxyURL, err := url.Parse(proxy.URL)
@@ -1870,26 +1877,27 @@ func TestBuildTLSHTTPClientProxyPinsAgainstRebinding(t *testing.T) {
 	selector := func(*http.Request) (*url.URL, error) { return proxyURL, nil }
 
 	for _, tc := range []struct {
-		name   string
-		strict bool
-		later  string
+		name     string
+		strict   bool
+		resolver *flippingResolver
 	}{
-		{"strict to loopback", true, "127.0.0.1"},
-		{"strict to metadata", true, "169.254.169.254"},
-		{"private-network to metadata", false, "169.254.169.254"},
+		{"strict to loopback", true, &flippingResolver{first: net.ParseIP("93.184.216.34"), later: net.ParseIP("127.0.0.1")}},
+		{"strict to metadata", true, &flippingResolver{first: net.ParseIP("93.184.216.34"), later: net.ParseIP("169.254.169.254")}},
+		{"private-network to metadata", false, &flippingResolver{first: net.ParseIP("93.184.216.34"), later: net.ParseIP("169.254.169.254")}},
+		{"private-network, later lookup fails", false, &flippingResolver{first: net.ParseIP("93.184.216.34"), laterErr: errors.New("SERVFAIL")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tunnels.Store(0)
-			resolver := &flippingResolver{first: net.ParseIP("93.184.216.34"), later: net.ParseIP(tc.later)}
+			target.Store("")
 			httpClient, err := (&MCPManager{logger: &MockLogger{}}).buildTLSHTTPClientWithProxyAndResolver(
-				&schemas.MCPClientConfig{Name: "rebind", RequirePublicTarget: tc.strict}, selector, resolver)
+				&schemas.MCPClientConfig{Name: "rebind", RequirePublicTarget: tc.strict}, selector, tc.resolver)
 			require.NoError(t, err)
 			resp, err := httpClient.Get("http://rebind.example/mcp")
-			if resp != nil {
-				resp.Body.Close()
-			}
-			require.Error(t, err, "the rebound answer must be refused")
-			require.Zero(t, tunnels.Load(), "nothing may reach the proxy for a rebound name")
+			require.NoError(t, err)
+			require.NoError(t, resp.Body.Close())
+			require.EqualValues(t, 1, tunnels.Load())
+			require.Equal(t, "93.184.216.34", target.Load(), "the proxy is asked only for the approved address")
+			require.EqualValues(t, 1, tc.resolver.calls.Load(), "a second answer must not pick the address")
 		})
 	}
 

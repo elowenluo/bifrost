@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -817,7 +819,40 @@ func vetGuardedDestination(ctx context.Context, host string, deferUnresolved boo
 			return err
 		}
 	}
+	if record, ok := ctx.Value(routedResolutionKey{}).(*routedResolution); ok {
+		record.set(host, ips)
+	}
 	return nil
+}
+
+type routedResolutionKey struct{}
+
+// routedResolution carries the addresses a routing-time check resolved and
+// approved for a request to PinnedProxyDialContext, which tunnels to them
+// instead of resolving again. A second lookup is a second answer: one that
+// differs (DNS rebinding) or fails (so the name would be deferred to the proxy
+// unchecked) must not decide where the connection goes.
+type routedResolution struct {
+	mu  sync.Mutex
+	ips map[string][]net.IP
+}
+
+func (r *routedResolution) set(host string, ips []net.IP) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ips == nil {
+		r.ips = make(map[string][]net.IP)
+	}
+	r.ips[host] = slices.Clone(ips)
+}
+
+func (r *routedResolution) get(host string) []net.IP {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ips[host]
 }
 
 // CheckProxiedDestination applies the dial-time destination policy to a
@@ -853,15 +888,26 @@ func ProxiedDestinationPolicy(strict bool) func(ip net.IP, host string) error {
 type pinnedProxyURLKey struct{}
 
 // pinnedDestination resolves host for a proxied request and requires checkIP to
-// pass for every address. It returns the checked addresses, or none when host
-// is an IP literal that passed or a name the resolver cannot answer and
-// deferUnresolved allows handing it to the proxy by name.
+// pass for every address. Addresses the routing-time check already resolved for
+// this request are used as they are, rechecked, rather than looked up again. It
+// returns the checked addresses, or none when host is an IP literal that passed or
+// a name neither lookup could answer and deferUnresolved allows handing it to the
+// proxy by name.
 func pinnedDestination(ctx context.Context, host string, checkIP func(ip net.IP, host string) error, resolver IPLookuper, deferUnresolved bool) ([]net.IP, error) {
 	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
 		if err := checkIP(ip, host); err != nil {
 			return nil, err
 		}
 		return nil, nil
+	}
+	if routed, _ := ctx.Value(routedResolutionKey{}).(*routedResolution); routed.get(host) != nil {
+		ips := routed.get(host)
+		for _, ip := range ips {
+			if err := checkIP(ip, host); err != nil {
+				return nil, err
+			}
+		}
+		return ips, nil
 	}
 	ips, err := resolver.LookupIP(ctx, "ip", host)
 	if err != nil {
@@ -882,8 +928,10 @@ func pinnedDestination(ctx context.Context, host string, checkIP func(ip net.IP,
 }
 
 // PinnedProxyDialContext is the dialer for a ProxyAwareTransport's ViaProxy
-// transport, which then carries no Proxy selector of its own. It resolves the
-// destination itself, requires checkIP to pass for every address, and opens the
+// transport, which then carries no Proxy selector of its own. It takes the
+// addresses the selector's destination check resolved for the request (resolving
+// itself only when that check could not), requires checkIP to pass for every
+// address, and opens the
 // tunnel to a checked address (CONNECT ip:port, or SOCKS5 to the IP) through the
 // proxy ProxyAwareTransport selected for the request, for plain-http requests as
 // well as TLS ones. The proxy never resolves the
@@ -949,6 +997,9 @@ type ProxyAwareTransport struct {
 // RoundTrip implements http.RoundTripper.
 func (t *ProxyAwareTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.Proxy != nil {
+		// A destination check in the selector records what it resolved here, for
+		// a pinned ViaProxy dialer to tunnel to.
+		req = req.WithContext(context.WithValue(req.Context(), routedResolutionKey{}, &routedResolution{}))
 		proxyURL, err := t.Proxy(req)
 		if err != nil {
 			return nil, err
