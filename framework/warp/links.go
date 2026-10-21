@@ -240,7 +240,7 @@ func openableHost(hostname string) bool {
 // labelled "github issue link placeholder", and the dashboard rendered a code
 // viewer with a scrollbar where a link belonged. A fence holding anything else
 // - real code that happens to contain the URL - does not match.
-var fencedIssueLink = regexp.MustCompile(`\x60{3}[^\n\x60]*\n\s*(https://github\.com/maximhq/bifrost/issues/new\S*)\s*\n\x60{3}\n?`)
+var fencedIssueLink = regexp.MustCompile(`\x60{3}[^\n\x60]*\n\s*(https://github\.com/capsohq/bifrost/issues/new\S*)\s*\n\x60{3}\n?`)
 
 // logsViewPath is the dashboard's Logs page. Links are built here rather than
 // left to the model so the URL scheme lives in one place and the model only
