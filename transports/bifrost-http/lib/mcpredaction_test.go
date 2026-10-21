@@ -59,6 +59,30 @@ func TestRedactMCPClientConfig_SurfacesLiteralConnectionString(t *testing.T) {
 		"redacted copy must not alias the live connection string")
 }
 
+// TestRedactMCPClientConfig_MasksLiteralConnectionStringCredentials covers a
+// literal connection URL that carries a credential in its query or userinfo:
+// the address stays readable, the credential does not, and the live config
+// keeps the value the runtime dials.
+func TestRedactMCPClientConfig_MasksLiteralConnectionStringCredentials(t *testing.T) {
+	c := &Config{}
+	stored := "https://token-user:pass-secret@mcp.example.com/mcp?api_key=query-secret"
+	config := &schemas.MCPClientConfig{
+		ID:               "mcp-1",
+		Name:             "keyed",
+		ConnectionType:   schemas.MCPConnectionTypeHTTP,
+		ConnectionString: schemas.NewSecretVar(stored),
+	}
+
+	redacted := c.RedactMCPClientConfig(config)
+	require.NotNil(t, redacted)
+	got := redacted.ConnectionString.GetValue()
+	assert.NotContains(t, got, "query-secret", "a query credential in a literal connection URL leaked")
+	assert.NotContains(t, got, "pass-secret", "a userinfo password in a literal connection URL leaked")
+	assert.NotContains(t, got, "token-user", "a userinfo username in a literal connection URL leaked")
+	assert.Contains(t, got, "mcp.example.com/mcp", "the connection address stays readable")
+	assert.Equal(t, stored, config.ConnectionString.GetValue(), "the live config must keep the stored URL")
+}
+
 // TestRedactMCPClientConfig_MasksSecretBackedConnectionString covers the other
 // half: a connection string sourced from env/vault keeps its resolved value
 // hidden and its reference intact for the UI to render.
