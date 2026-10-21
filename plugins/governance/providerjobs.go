@@ -408,30 +408,24 @@ var passthroughCollections = map[string]string{
 	"cachedContents": configstoreTables.ProviderObjectKindCachedContent,
 }
 
-// passthroughManagesFineTuning reports whether a passthrough request reaches an
-// existing tuning job, tuned model or checkpoint (a list, read, cancel, delete,
-// events or permissions call) on any provider, as opposed to creating one. Tuning
-// jobs carry no creator record on any of them. The path is matched as it will be
-// sent, as in passthroughObjectRefs: BuildPassthroughURL re-encodes every literal %,
-// so the provider reads exactly these segments and an escape left in one is not the
-// collection name there. Segments are folded, which can only refuse more.
-func passthroughManagesFineTuning(r *schemas.BifrostPassthroughRequest) bool {
+// passthroughReachesTuning reports whether a passthrough request reaches a
+// tuning collection on any provider (OpenAI fine_tuning, Gemini tunedModels,
+// Vertex tuningJobs, Bedrock model-customization-jobs). None records which key
+// created a job or tuned model, so a virtual key can neither manage its own nor be
+// kept from another's: a list, read or cancel would reach other keys' jobs, and a
+// create may name another key's tuned model as its base. The path is matched as it
+// will be sent, as in passthroughObjectRefs: BuildPassthroughURL re-encodes every
+// literal %, so the provider reads exactly these segments. Segments are folded,
+// which can only refuse more.
+func passthroughReachesTuning(r *schemas.BifrostPassthroughRequest) bool {
 	sent := r.Path
 	if strings.Contains(sent, "/.") || strings.Contains(sent, "//") || strings.HasPrefix(sent, ".") {
 		sent = path.Clean("/" + sent)
 	}
-	segments := strings.Split(strings.Trim(sent, "/"), "/")
-	for i := range segments {
-		segments[i] = strings.ToLower(segments[i])
-	}
-	creating := strings.EqualFold(r.Method, "POST")
-	for i, segment := range segments {
-		rest := segments[i+1:]
-		switch segment {
-		case "fine_tuning": // OpenAI: POST fine_tuning/jobs creates
-			return !(creating && len(rest) == 1 && rest[0] == "jobs")
-		case "tunedmodels", "tuningjobs", "model-customization-jobs": // Gemini, Vertex, Bedrock: POST on the collection creates
-			return !(creating && len(rest) == 0)
+	for _, segment := range strings.Split(strings.Trim(sent, "/"), "/") {
+		switch strings.ToLower(segment) {
+		case "fine_tuning", "tunedmodels", "tuningjobs", "model-customization-jobs":
+			return true
 		}
 	}
 	return false
@@ -1107,14 +1101,13 @@ func (p *GovernancePlugin) enforceProviderObjectOwnership(ctx *schemas.BifrostCo
 	if !enforced {
 		return nil
 	}
-	// Fine-tuning jobs carry no creator record, so under the shared provider key a
-	// list, read or cancel through passthrough would reach other keys' jobs.
-	if r := req.PassthroughRequest; r != nil && passthroughManagesFineTuning(r) {
+	// Tuning jobs and tuned models carry no creator record (see passthroughReachesTuning).
+	if r := req.PassthroughRequest; r != nil && passthroughReachesTuning(r) {
 		ctx.SetValue(governanceRejectedContextKey, true)
 		return &schemas.LLMPluginShortCircuit{Error: &schemas.BifrostError{
 			Type:       bifrost.Ptr(string(DecisionAccessBlocked)),
 			StatusCode: bifrost.Ptr(403),
-			Error:      &schemas.ErrorField{Message: "managing fine-tuning jobs through a passthrough route is not available to virtual keys: jobs carry no per-key ownership, so a list, read or cancel could reach another key's job"},
+			Error:      &schemas.ErrorField{Message: "fine-tuning through a passthrough route is not available to virtual keys: tuning jobs and tuned models carry no per-key ownership, so a request could reach another key's job or model"},
 		}}
 	}
 	for _, ref := range refs {

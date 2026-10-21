@@ -3698,9 +3698,12 @@ func applyPassthroughCallerAuth(bifrostCtx *schemas.BifrostContext, safeHeaders 
 	bifrostCtx.SetValue(schemas.BifrostContextKeySkipKeySelection, true)
 }
 
-func (g *GenericRouter) handlePassthrough(ctx *fasthttp.RequestCtx) {
-	cfg := g.passthroughCfg
-
+// genericPassthroughHeaders returns the caller headers a passthrough request may
+// forward upstream, and the caller's Authorization, which is applied separately.
+// Credentials, hop-by-hop and internal gateway headers are dropped, and so are
+// method overrides: governance and ownership checks judge the request by its
+// method, which an upstream honouring an override would not act on.
+func genericPassthroughHeaders(ctx *fasthttp.RequestCtx) (map[string]string, string) {
 	safeHeaders := make(map[string]string)
 	var callerAuth string
 	ctx.Request.Header.All()(func(key, value []byte) bool {
@@ -3709,7 +3712,8 @@ func (g *GenericRouter) handlePassthrough(ctx *fasthttp.RequestCtx) {
 		case "authorization":
 			callerAuth = string(value)
 		case "api-key", "x-api-key", "x-goog-api-key",
-			"host", "connection", "transfer-encoding", "cookie", "set-cookie", "proxy-authorization", "accept-encoding":
+			"host", "connection", "transfer-encoding", "cookie", "set-cookie", "proxy-authorization", "accept-encoding",
+			"x-http-method-override", "x-http-method", "x-method-override":
 		default:
 			if strings.HasPrefix(keyStr, "x-bf-") {
 				return true // drop internal gateway headers
@@ -3718,6 +3722,13 @@ func (g *GenericRouter) handlePassthrough(ctx *fasthttp.RequestCtx) {
 		}
 		return true
 	})
+	return safeHeaders, callerAuth
+}
+
+func (g *GenericRouter) handlePassthrough(ctx *fasthttp.RequestCtx) {
+	cfg := g.passthroughCfg
+
+	safeHeaders, callerAuth := genericPassthroughHeaders(ctx)
 
 	passthroughErr := func(_ *schemas.BifrostContext, err *schemas.BifrostError) interface{} {
 		return err

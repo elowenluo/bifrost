@@ -1762,3 +1762,25 @@ func BenchmarkChatGPTPassthroughStreamDecision(b *testing.B) {
 		_ = cfg.streams("POST", "/backend-api/codex/responses", false)
 	}
 }
+
+// TestPassthroughSafeHeadersDropMethodOverrides: governance judges a passthrough
+// request by its method, so a header that makes the upstream treat it as another
+// method (Google APIs honour X-HTTP-Method-Override) must not be forwarded.
+func TestPassthroughSafeHeadersDropMethodOverrides(t *testing.T) {
+	ctx := &fasthttp.RequestCtx{}
+	ctx.Request.Header.SetMethod(fasthttp.MethodPost)
+	ctx.Request.Header.Set("Authorization", "Bearer caller")
+	ctx.Request.Header.Set("X-HTTP-Method-Override", "DELETE")
+	ctx.Request.Header.Set("X-HTTP-Method", "GET")
+	ctx.Request.Header.Set("X-Method-Override", "PATCH")
+	ctx.Request.Header.Set("X-Bf-Vk", "sk-bf-internal")
+	ctx.Request.Header.Set("Anthropic-Version", "2023-06-01")
+
+	safe, callerAuth := genericPassthroughHeaders(ctx)
+	require.Equal(t, "Bearer caller", callerAuth)
+	for _, name := range []string{"x-http-method-override", "x-http-method", "x-method-override", "x-bf-vk", "authorization"} {
+		_, present := safe[name]
+		require.False(t, present, "%s must not be forwarded", name)
+	}
+	require.Equal(t, "2023-06-01", safe["anthropic-version"], "ordinary headers still pass")
+}

@@ -1027,11 +1027,9 @@ func TestPreLLMHookBindsObjectsReferencedInsideRequests(t *testing.T) {
 		refused(t, pass(schemas.OpenAI, "GET", "/v1/containers/container-other/files", ""), "container-other")
 		refused(t, pass(schemas.Gemini, "POST", "/v1beta/models/gemini-2.5-flash:generateContent", geminiBody(geminiFiles+"g-other")), "files/g-other")
 		refused(t, pass(schemas.Gemini, "GET", "/v1beta/files/g-other", ""), "files/g-other")
-		// A batch or fine-tune created through passthrough runs on the input file its body names, as the
-		// native batch create runs on InputFileID.
+		// A batch created through passthrough runs on the input file its body names, as the native
+		// batch create runs on InputFileID. (Fine-tuning is refused outright for virtual keys below.)
 		refused(t, pass(schemas.OpenAI, "POST", "/v1/batches", `{"input_file_id":"file-other","endpoint":"/v1/chat/completions","completion_window":"24h"}`), "file-other")
-		refused(t, pass(schemas.OpenAI, "POST", "/v1/fine_tuning/jobs", `{"model":"gpt-4o-mini","training_file":"file-other"}`), "file-other")
-		refused(t, pass(schemas.OpenAI, "POST", "/v1/fine_tuning/jobs", `{"model":"gpt-4o-mini","training_file":"file-own","validation_file":"file-other"}`), "file-other")
 		refused(t, pass(schemas.Gemini, "POST", "/v1beta/models/gemini-2.5-flash:batchGenerateContent", `{"batch":{"displayName":"b","inputConfig":{"fileName":"files/g-other"}}}`), "files/g-other")
 		allowed(t, presentCtx(mcpTestVKValue), pass(schemas.OpenAI, "POST", "/v1/batches", `{"input_file_id":"file-own","endpoint":"/v1/chat/completions","completion_window":"24h"}`), "the creating key batches its own file")
 		// The Go SDK hands a path over as written, and the HTTP client resolves dot segments and
@@ -1066,9 +1064,9 @@ func TestPreLLMHookBindsObjectsReferencedInsideRequests(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, shortCircuit, "a request that presented no key may list")
 
-		// Fine-tuning jobs carry no creator record, so a virtual key cannot list, read or
-		// cancel them through passthrough: under the shared key that would reach other
-		// keys' jobs. Creating one (its files are checked above) stays open.
+		// Tuning jobs and tuned models carry no creator record, so a virtual key cannot
+		// use them through passthrough at all: a list, read or cancel would reach other
+		// keys' jobs, and a create may name another key's tuned model as its base.
 		for _, tc := range []struct{ method, path string }{
 			{"GET", "/v1/fine_tuning/jobs"},
 			{"GET", "/v1/fine_tuning/jobs/ftjob-other"},
@@ -1084,14 +1082,14 @@ func TestPreLLMHookBindsObjectsReferencedInsideRequests(t *testing.T) {
 			{"POST", "/v1/projects/p/locations/us-central1/tuningJobs/123:cancel"},
 			{"GET", "/model-customization-jobs"},
 			{"POST", "/model-customization-jobs/other-job/stop"},
+			{"POST", "/v1/fine_tuning/jobs"},
+			{"POST", "/v1beta/tunedModels"},
 		} {
 			_, shortCircuit, err := plugin.PreLLMHook(presentCtx(mcpTestVKValue), pass(schemas.OpenAI, tc.method, tc.path, ""))
 			require.NoError(t, err)
 			require.NotNil(t, shortCircuit, "%s %s must be refused for a virtual key", tc.method, tc.path)
 			assert.Equal(t, 403, *shortCircuit.Error.StatusCode)
 		}
-		allowed(t, presentCtx(mcpTestVKValue), pass(schemas.OpenAI, "POST", "/v1/fine_tuning/jobs", `{"model":"gpt-4o-mini","training_file":"file-own"}`), "a key creates a fine-tuning job on its own file")
-		allowed(t, presentCtx(mcpTestVKValue), pass(schemas.Gemini, "POST", "/v1beta/tunedModels", `{"baseModel":"models/gemini-1.5-flash-001-tuning"}`), "a key creates a tuned model")
 		allowed(t, emptyCtx(), pass(schemas.OpenAI, "POST", "/v1/fine_tuning/jobs/ftjob-other/cancel", ""), "a request that presented no key is unrestricted")
 	})
 
