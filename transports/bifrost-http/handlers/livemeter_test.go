@@ -716,3 +716,53 @@ func BenchmarkLiveMeterSessionRotationAndClose(b *testing.B) {
 		meter.finish(165)
 	}
 }
+
+// TestLiveMeterRefusedDrainKeepsPerResponseSegments: responses that drain onto one
+// admitted unit after a refused renewal stay separate billing segments, each with its
+// own usage and service tier, so pricing never applies a merged context length or one
+// response's tier to another. A unit that settles one response carries no segments.
+func TestLiveMeterRefusedDrainKeepsPerResponseSegments(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeLiveRunner{}
+	meter := newTestLiveMeter(runner)
+	require.Nil(t, meter.admit("gpt-live-1", "gpt-5.6-luna"))
+	require.Nil(t, meter.onBackendResponse(&schemas.BifrostResponsesResponse{
+		ID: new("resp_0"), Model: "gpt-5.6-luna",
+		Usage: &schemas.ResponsesResponseUsage{InputTokens: 5, OutputTokens: 1, TotalTokens: 6},
+	}, "", 0))
+	runner.setRefuse(true)
+
+	priority := schemas.BifrostServiceTierPriority
+	for _, r := range []struct {
+		id   string
+		tier *schemas.BifrostServiceTier
+	}{{"resp_1", &priority}, {"resp_2", nil}} {
+		require.NotNil(t, meter.onBackendResponse(&schemas.BifrostResponsesResponse{
+			ID: new(r.id), Model: "gpt-5.6-luna", ServiceTier: r.tier,
+			Usage: &schemas.ResponsesResponseUsage{InputTokens: 150000, OutputTokens: 1000, TotalTokens: 151000},
+		}, "", 0))
+	}
+	meter.finish(5)
+
+	_, posts, _ := runner.snapshot()
+	var backends []*schemas.BifrostResponsesResponse
+	for _, post := range posts {
+		if post.model == "gpt-5.6-luna" {
+			backends = append(backends, post.resp)
+		}
+	}
+	require.Len(t, backends, 2)
+	assert.Nil(t, backends[0].BillingSegments, "a unit that settles one response is priced as that response")
+
+	drained := backends[1]
+	assert.Equal(t, 300000, drained.Usage.InputTokens, "usage still reports the totals")
+	require.Len(t, drained.BillingSegments, 2)
+	for i, segment := range drained.BillingSegments {
+		require.NotNil(t, segment.Usage)
+		assert.Equal(t, 150000, segment.Usage.InputTokens, "segment %d keeps its own context length", i)
+	}
+	require.NotNil(t, drained.BillingSegments[0].ServiceTier)
+	assert.Equal(t, schemas.BifrostServiceTierPriority, *drained.BillingSegments[0].ServiceTier)
+	assert.Nil(t, drained.BillingSegments[1].ServiceTier, "a segment keeps its own tier, not the previous one's")
+}

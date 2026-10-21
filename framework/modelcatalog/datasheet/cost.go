@@ -45,7 +45,7 @@ func (s *Store) CalculateCostBreakdown(result *schemas.BifrostResponse, scopes *
 	if extraFields != nil && extraFields.CacheDebug != nil {
 		requestCost = s.calculateCostWithCache(result, extraFields.CacheDebug, lookupScopes)
 	} else {
-		requestCost = s.calculateBaseCost(result, lookupScopes)
+		requestCost = s.calculateRequestCost(result, lookupScopes)
 	}
 	if extraFields == nil {
 		return requestCost
@@ -94,6 +94,88 @@ func (s *Store) CalculateCostBreakdown(result *schemas.BifrostResponse, scopes *
 	merged.AdditionalCostDetails.RoutingCost += routingCost
 	merged.TotalCost += sidecarCost
 	return merged
+}
+
+// calculateRequestCost prices the request itself. A Responses aggregate that carries
+// BillingSegments settles several provider responses on one billing unit; each is
+// priced on its own, under the aggregate's ExtraFields, and the breakdowns are summed,
+// so context-length thresholds, service tiers and per-request fees apply per response
+// rather than to the merged usage.
+func (s *Store) calculateRequestCost(result *schemas.BifrostResponse, scopes LookupScopes) *schemas.BifrostCost {
+	aggregate := result.ResponsesResponse
+	if aggregate == nil || len(aggregate.BillingSegments) == 0 {
+		return s.calculateBaseCost(result, scopes)
+	}
+	var total *schemas.BifrostCost
+	for _, segment := range aggregate.BillingSegments {
+		segment.ExtraFields = aggregate.ExtraFields
+		segment.BillingSegments = nil
+		if segment.Model == "" {
+			segment.Model = aggregate.Model
+		}
+		total = addCostBreakdown(total, s.calculateBaseCost(&schemas.BifrostResponse{ResponsesResponse: &segment}, scopes))
+	}
+	return total
+}
+
+// addCostBreakdown returns the field-wise sum of two breakdowns without mutating
+// either: a breakdown may alias a provider-supplied usage.Cost.
+func addCostBreakdown(total, add *schemas.BifrostCost) *schemas.BifrostCost {
+	if add == nil {
+		return total
+	}
+	sum := &schemas.BifrostCost{}
+	if total != nil {
+		*sum = *total
+	}
+	sum.InputCost += add.InputCost
+	sum.OutputCost += add.OutputCost
+	sum.AdditionalCost += add.AdditionalCost
+	sum.TotalCost += add.TotalCost
+	if total != nil && total.InputCostDetails != nil || add.InputCostDetails != nil {
+		d := schemas.InputCostDetails{}
+		if total != nil && total.InputCostDetails != nil {
+			d = *total.InputCostDetails
+		}
+		if a := add.InputCostDetails; a != nil {
+			d.TextCost += a.TextCost
+			d.AudioCost += a.AudioCost
+			d.ImageCost += a.ImageCost
+			d.CachedReadCost += a.CachedReadCost
+			d.CachedWriteCost += a.CachedWriteCost
+			d.RequestCost += a.RequestCost
+		}
+		sum.InputCostDetails = &d
+	}
+	if total != nil && total.OutputCostDetails != nil || add.OutputCostDetails != nil {
+		d := schemas.OutputCostDetails{}
+		if total != nil && total.OutputCostDetails != nil {
+			d = *total.OutputCostDetails
+		}
+		if a := add.OutputCostDetails; a != nil {
+			d.TextCost += a.TextCost
+			d.AudioCost += a.AudioCost
+			d.ImageCost += a.ImageCost
+			d.ReasoningCost += a.ReasoningCost
+			d.CitationCost += a.CitationCost
+			d.SearchQueriesCost += a.SearchQueriesCost
+		}
+		sum.OutputCostDetails = &d
+	}
+	if total != nil && total.AdditionalCostDetails != nil || add.AdditionalCostDetails != nil {
+		d := schemas.AdditionalCostDetails{}
+		if total != nil && total.AdditionalCostDetails != nil {
+			d = *total.AdditionalCostDetails
+		}
+		if a := add.AdditionalCostDetails; a != nil {
+			d.GuardrailCost += a.GuardrailCost
+			d.MCPCost += a.MCPCost
+			d.SemanticCacheCost += a.SemanticCacheCost
+			d.RoutingCost += a.RoutingCost
+		}
+		sum.AdditionalCostDetails = &d
+	}
+	return sum
 }
 
 // RoutingCallCost calculates the cost of one routing-classification call — a

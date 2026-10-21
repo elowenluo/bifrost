@@ -281,6 +281,13 @@ type BifrostResponsesResponse struct {
 	SearchResults []SearchResult `json:"search_results,omitempty"`
 	Videos        []VideoResult  `json:"videos,omitempty"`
 	Citations     []string       `json:"citations,omitempty"`
+
+	// BillingSegments are the provider responses an aggregate bills when one billing
+	// unit settles several of them (a live session draining after a refused renewal).
+	// When set, pricing sums each segment priced on its own, under this response's
+	// ExtraFields, so per-response context-length thresholds and service tiers hold;
+	// Usage then only reports the totals. Not serialized.
+	BillingSegments []BifrostResponsesResponse `json:"-"`
 }
 
 // CacheDiagnostics is the Anthropic cache-diagnosis response payload

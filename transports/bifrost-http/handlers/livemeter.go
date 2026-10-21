@@ -46,8 +46,9 @@ type liveLane struct {
 	backend       bool   // backend Responses tokens rather than voice seconds
 	current       *liveBillingUnit
 
-	seconds     float64                         // voice: accrued, unbilled seconds
-	usage       *schemas.ResponsesResponseUsage // backend: accrued, unbilled tokens
+	seconds     float64                            // voice: accrued, unbilled seconds
+	usage       *schemas.ResponsesResponseUsage    // backend: accrued, unbilled tokens
+	segments    []schemas.BifrostResponsesResponse // backend: each response's own usage and tier, as accrued on the current unit
 	serviceTier *schemas.BifrostServiceTier
 	status      *string
 	responseErr *schemas.ResponsesResponseError
@@ -257,6 +258,11 @@ func (m *liveMeter) onBackendResponse(response *schemas.BifrostResponsesResponse
 	}
 	if response.Usage != nil {
 		lane.usage = addResponsesUsage(lane.usage, response.Usage)
+		lane.segments = append(lane.segments, schemas.BifrostResponsesResponse{
+			Model:       response.Model,
+			ServiceTier: response.ServiceTier,
+			Usage:       addResponsesUsage(nil, response.Usage),
+		})
 	}
 	lane.status, lane.responseErr = response.Status, response.Error
 	lane.outputs = append(lane.outputs, response.Output...)
@@ -444,6 +450,12 @@ func (m *liveMeter) closeLaneLocked(lane *liveLane) {
 		if lane.responseID != "" {
 			resp.ID = new(lane.responseID)
 		}
+		// Normally a unit settles one response. Once a renewal is refused, responses still
+		// draining settle on the last admitted unit; each is then priced as its own segment
+		// so a merged context length or another response's tier never sets its rate.
+		if len(lane.segments) > 1 {
+			resp.BillingSegments = lane.segments
+		}
 	}
 	result := &schemas.BifrostResponse{ResponsesResponse: resp}
 	postCtx := m.unitContext(unit.requestID, false, kind)
@@ -452,7 +464,7 @@ func (m *liveMeter) closeLaneLocked(lane *liveLane) {
 			postCtx.SetValue(schemas.BifrostContextKeyLiveDelegationID, lane.delegation)
 			postCtx.SetValue(schemas.BifrostContextKeyLiveDelegationStartMs, lane.delegatedMs)
 		}
-		lane.usage, lane.outputs, lane.responseID, lane.delegation, lane.delegatedMs = nil, nil, "", "", 0
+		lane.usage, lane.segments, lane.outputs, lane.responseID, lane.delegation, lane.delegatedMs = nil, nil, nil, "", "", 0
 		lane.status, lane.responseErr, lane.serviceTier = nil, nil, nil
 	} else {
 		seconds := lane.seconds

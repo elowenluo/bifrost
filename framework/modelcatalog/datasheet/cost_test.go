@@ -6879,3 +6879,40 @@ func TestCalculateCostForUsage_LiveVoiceDuration(t *testing.T) {
 			"usage carried on an error is priced the same as successful voice usage")
 	}
 }
+
+// TestCalculateCostBreakdown_BillingSegmentsKeepPerResponseBoundaries: an aggregate
+// that settles several responses on one unit is priced response by response. Two
+// 150k-input responses stay under the 272k threshold each and keep their own service
+// tiers; priced as one 300k-input response they would cross it and take one tier.
+func TestCalculateCostBreakdown_BillingSegmentsKeepPerResponseBoundaries(t *testing.T) {
+	p := gpt56SolPricing()
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey(p.Model, p.Provider, p.Mode): p,
+	})
+	segment := func(tier *schemas.BifrostServiceTier) schemas.BifrostResponsesResponse {
+		return schemas.BifrostResponsesResponse{
+			ServiceTier: tier,
+			Usage:       &schemas.ResponsesResponseUsage{InputTokens: 150000, OutputTokens: 1000, TotalTokens: 151000},
+		}
+	}
+	priority := schemas.BifrostServiceTierPriority
+	resp := &schemas.BifrostResponse{ResponsesResponse: &schemas.BifrostResponsesResponse{
+		Usage: &schemas.ResponsesResponseUsage{InputTokens: 300000, OutputTokens: 2000, TotalTokens: 302000},
+		ExtraFields: schemas.BifrostResponseExtraFields{
+			RequestType: schemas.ResponsesRequest,
+			RoutingInfo: routingInfoFor(schemas.ModelProvider(p.Provider), p.Model),
+		},
+		BillingSegments: []schemas.BifrostResponsesResponse{segment(&priority), segment(nil)},
+	}}
+
+	one := &schemas.BifrostLLMUsage{PromptTokens: 150000, CompletionTokens: 1000, TotalTokens: 151000}
+	want := computeTextCostTotal(&p, one, serviceTier{isPriority: true}) + computeTextCostTotal(&p, one, serviceTier{})
+	merged := computeTextCostTotal(&p, &schemas.BifrostLLMUsage{PromptTokens: 300000, CompletionTokens: 2000, TotalTokens: 302000}, serviceTier{})
+	require.NotEqual(t, want, merged, "fixture must make merged pricing differ")
+
+	breakdown := s.CalculateCostBreakdown(resp, nil)
+	require.NotNil(t, breakdown)
+	assert.InDelta(t, want, breakdown.TotalCost, 1e-12)
+	assert.InDelta(t, breakdown.TotalCost, breakdown.InputCost+breakdown.OutputCost+breakdown.AdditionalCost, 1e-12)
+	assert.InDelta(t, want, s.CalculateCost(resp, nil), 1e-12)
+}
