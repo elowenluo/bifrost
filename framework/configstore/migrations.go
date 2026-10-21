@@ -14407,6 +14407,13 @@ func migrationAddTimeOfDayPricingColumns(ctx context.Context, db *gorm.DB, logge
 //     to the original config.json-created rate limit (the one still on vk.rate_limit_id),
 //     preserving its usage counters. The VK's rate_limit_id column is then cleared
 //     since ownership now lives on the model config.
+//
+// Corrected in place (RPR #5 M47): both INSERTs copy the key's calendar_aligned,
+// which the upstream version dropped. No fork release ran the uncorrected SQL: the
+// migration came in with the upstream v2.3.2 sync, and neither origin/main before it
+// nor any fork release tag (the only published fork images are v2.1.1) contains it.
+// A database that already ran it keeps its result, since the ID is recorded and the
+// migration is skipped.
 func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
 	migrationName := "migrate_vk_standalone_limits_to_model_configs"
 	logger.Info("[configstore] starting migration %s", migrationName)

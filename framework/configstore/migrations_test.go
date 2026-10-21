@@ -4812,7 +4812,41 @@ func TestMigrationMoveConfigJSONVKLimitsToModelConfigs(t *testing.T) {
 // key's all-models tier itself. That tier must carry the key's calendar alignment: the later migration
 // reuses it as found, and the limits it adopted are no longer directly owned, so nothing repairs them.
 func TestMigrationVKStandaloneLimitsKeepCalendarAlignment(t *testing.T) {
-	db := setupTestDB(t)
+	dbs := []namedDB{{"sqlite", setupTestDB(t)}}
+	if pgDB := trySetupPostgresGovernanceDB(t); pgDB != nil {
+		dbs = append(dbs, namedDB{"postgres", pgDB})
+	}
+	for _, backend := range dbs {
+		t.Run(backend.name, func(t *testing.T) { runVKStandaloneLimitsCalendarAlignment(t, backend.db) })
+	}
+}
+
+// trySetupPostgresGovernanceDB returns a fresh Postgres schema of its own for a
+// governance limits migration test, dropped again on cleanup. It returns nil when
+// Postgres is unavailable.
+func trySetupPostgresGovernanceDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	const schema = pgTestSchema + "_vk_limits"
+	dsn := strings.Replace(postgresDSN, "search_path="+pgTestSchema, "search_path="+schema, 1)
+	// Model configs and budgets reference each other, which Postgres cannot create in
+	// one pass; the limits migration reads rows, not constraints.
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger:                                   logger.Default.LogMode(logger.Silent),
+		DisableForeignKeyConstraintWhenMigrating: true,
+	})
+	if err != nil {
+		return nil
+	}
+	if sqlDB, err := db.DB(); err != nil || sqlDB.Ping() != nil {
+		return nil
+	}
+	require.NoError(t, db.Exec("DROP SCHEMA IF EXISTS "+schema+" CASCADE").Error)
+	require.NoError(t, db.Exec("CREATE SCHEMA "+schema).Error)
+	t.Cleanup(func() { db.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE") })
+	return db
+}
+
+func runVKStandaloneLimitsCalendarAlignment(t *testing.T, db *gorm.DB) {
 	ctx := context.Background()
 	require.NoError(t, db.AutoMigrate(&tables.TableVirtualKey{}, &tables.TableVirtualKeyProviderConfig{},
 		&tables.TableBudget{}, &tables.TableRateLimit{}, &tables.TableModelConfig{}))
