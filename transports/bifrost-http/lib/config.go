@@ -2916,6 +2916,7 @@ func mcpClientConfigToTable(clientConfig *schemas.MCPClientConfig) (configstoreT
 		RequirePublicTarget:       clientConfig.RequirePublicTarget,
 		ToolSyncInterval:          int(clientConfig.ToolSyncInterval / time.Second),
 		ToolExecutionTimeout:      int(math.Ceil(clientConfig.ToolExecutionTimeout.Seconds())),
+		MaxInstructionsLength:     clientConfig.MaxInstructionsLength,
 		ToolPricing:               clientConfig.ToolPricing,
 		AllowByDefault:            clientConfig.AllowByDefault,
 		Disabled:                  clientConfig.Disabled,

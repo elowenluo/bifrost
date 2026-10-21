@@ -23652,6 +23652,15 @@ func TestMCPClientConfigToTable_RejectsNegativeToolSyncInterval(t *testing.T) {
 	assert.Contains(t, err.Error(), "tool_sync_interval must be 0")
 }
 
+// TestMCPClientConfigToTable_KeepsMaxInstructionsLength pins that a config.json
+// client's per-client instruction cap reaches the stored row instead of resetting
+// to the global cap.
+func TestMCPClientConfigToTable_KeepsMaxInstructionsLength(t *testing.T) {
+	row, err := mcpClientConfigToTable(&schemas.MCPClientConfig{ID: "cap", Name: "cap", MaxInstructionsLength: 2048})
+	require.NoError(t, err)
+	assert.Equal(t, 2048, row.MaxInstructionsLength)
+}
+
 // TestUpdateMCPClientConfig_RejectsNegativeToolSyncInterval pins the store's
 // update path, which used to let a negative through while create rejected it.
 func TestUpdateMCPClientConfig_RejectsNegativeToolSyncInterval(t *testing.T) {

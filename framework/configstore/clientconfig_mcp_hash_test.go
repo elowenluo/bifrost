@@ -68,6 +68,21 @@ func TestGenerateMCPClientHash_EndpointSlug(t *testing.T) {
 	assert.Equal(t, hash("my-slug"), hash("My Slug"), "spellings of the same slug must hash the same")
 }
 
+// TestGenerateMCPClientHash_MaxInstructionsLength: an unset per-client instruction cap
+// leaves the hash as before the field was hashed, and setting or changing it drifts it,
+// so a limit-only edit in config.json is reconciled.
+func TestGenerateMCPClientHash_MaxInstructionsLength(t *testing.T) {
+	hash := func(limit int) string {
+		h, err := GenerateMCPClientHash(tables.TableMCPClient{Name: "client", ConnectionType: "http", AuthType: "headers", MaxInstructionsLength: limit})
+		require.NoError(t, err)
+		return h
+	}
+	assert.Equal(t, "4e079178fdf0b46b348e3f1b415589e6bd519a73a280faf9200ad204ad389edf", hash(0),
+		"an unset cap must not move existing stored hashes")
+	assert.NotEqual(t, hash(0), hash(512), "declaring a cap must drift the hash")
+	assert.NotEqual(t, hash(512), hash(1024), "changing a cap must drift the hash")
+}
+
 // TestGenerateKeyHash_OAuthKeyConfigIsOrderIndependent pins that an unchanged OAuth key hashes
 // the same on every call. extra_params is a map; an encoder that walks it in iteration order
 // makes the hash differ between restarts, and reconcileProviderKeys then treats the stored key
