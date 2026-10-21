@@ -412,3 +412,34 @@ func TestFetchAndEncodeURL_PreservesPathBytes(t *testing.T) {
 		})
 	}
 }
+
+// TestFetchAndEncodeURL_EnvironmentProxyFollowsTheRequestScheme pins that an https
+// fetch on a port other than 443 uses HTTPS_PROXY: the environment proxy is chosen by
+// the request's scheme, not guessed from its port.
+func TestFetchAndEncodeURL_EnvironmentProxyFollowsTheRequestScheme(t *testing.T) {
+	prev := fetchResolveTarget
+	fetchResolveTarget = func(_ context.Context, host string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("203.0.113.10")}, nil
+	}
+	t.Cleanup(func() { fetchResolveTarget = prev })
+
+	plain := proxytest.NewHTTPRecorder(t, "http-proxy", "tcp4")
+	secure := proxytest.NewHTTPRecorder(t, "https-proxy", "tcp4")
+	for _, name := range []string{"http_proxy", "https_proxy", "no_proxy", "NO_PROXY", "ALL_PROXY", "all_proxy"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:"+plain.Port())
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:"+secure.Port())
+
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	ctx = context.WithValue(ctx, schemas.BifrostContextKeyProviderProxyConfig, &schemas.ProxyConfig{Type: schemas.EnvProxy})
+	_, _, _ = FetchAndEncodeURL(ctx, "https://secure.example:8443/img.png")
+
+	if seen := plain.Seen(); len(seen) != 0 {
+		t.Fatalf("HTTP_PROXY carried the https fetch: %+v", seen)
+	}
+	if seen := secure.Seen(); len(seen) != 1 || seen[0].Target != "203.0.113.10:8443" {
+		t.Fatalf("HTTPS_PROXY saw %+v, want one CONNECT to 203.0.113.10:8443", seen)
+	}
+}
