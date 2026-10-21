@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -222,6 +223,38 @@ func TestBufferRealtimeTranscriptionBootstrapPreservesFrames(t *testing.T) {
 		if buffered[i].messageType != frames[i].messageType || string(buffered[i].data) != string(frames[i].data) {
 			t.Fatalf("buffered[%d] = (%d, %q), want (%d, %q)", i, buffered[i].messageType, buffered[i].data, frames[i].messageType, frames[i].data)
 		}
+	}
+}
+
+// TestBufferRealtimeTranscriptionBootstrapLimitsReads: the bootstrap allowance is
+// enforced while reading, not after a whole message has been buffered, for one
+// oversized message and for frames that exceed it together.
+func TestBufferRealtimeTranscriptionBootstrapLimitsReads(t *testing.T) {
+	appendFrame := func(size int) []byte {
+		return []byte(`{"type":"input_audio_buffer.append","audio":"` + strings.Repeat("A", size) + `"}`)
+	}
+	for _, tc := range []struct {
+		name   string
+		frames [][]byte
+	}{
+		{"one oversized message", [][]byte{appendFrame(4 << 20)}},
+		{"frames exceeding the aggregate", [][]byte{appendFrame(400 << 10), appendFrame(400 << 10), appendFrame(400 << 10)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			serverConn, peerConn, cleanup := dialRealtimeTestConn(t)
+			defer cleanup()
+			go func() {
+				for _, frame := range tc.frames {
+					if peerConn.WriteMessage(ws.TextMessage, frame) != nil {
+						return
+					}
+				}
+			}()
+			_, _, err := bufferRealtimeTranscriptionBootstrap(newRealtimeClientConn(serverConn))
+			if !errors.Is(err, ws.ErrReadLimit) {
+				t.Fatalf("bootstrap error = %v, want the read limit to stop the read", err)
+			}
+		})
 	}
 }
 
