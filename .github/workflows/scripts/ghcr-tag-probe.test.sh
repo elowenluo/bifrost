@@ -165,6 +165,8 @@ expect_fail_closed() {
     fail "emitted docker-needs-release=true on an ambiguous registry answer"
   elif [ "$RC" -eq 0 ]; then
     fail "script exited 0 on an ambiguous registry answer"
+  elif [ -s "$FAKE_DIR/github_output" ]; then
+    fail "wrote GITHUB_OUTPUT on an ambiguous registry answer"
   elif ! grep -q "::error::.*${reason}" "$FAKE_DIR/log"; then
     fail "exited $RC without an ::error:: naming '${reason}' (log: $(grep '::error::' "$FAKE_DIR/log" | tr '\n' ' '))"
   else
@@ -312,6 +314,48 @@ respond token "200 0 {\"token\":\"${BEARER}\"} junk"
 run_detect GITHUB_TOKEN="$JOB_TOKEN"
 expect_fail_closed "no usable token"
 expect_calls manifest 0
+
+# The token is judged on the exact JSON string. Each of these, once printed into a shell
+# variable, loses the offending character - a trailing newline is stripped, a NUL dropped -
+# and would come out looking like a valid token.
+for bad in '\n' '\u0000' '\t' '\u0001' '\r'; do
+  new_scenario "token with ${bad} appended"
+  respond token "200 0 {\"token\":\"${BEARER}${bad}\"}"
+  respond manifest "$MANIFEST_UNKNOWN"
+  respond tags "$TAGS_OK"
+  run_detect GITHUB_TOKEN="$JOB_TOKEN"
+  expect_fail_closed "no usable token"
+  expect_calls manifest 0
+done
+
+new_scenario "token with an embedded NUL"
+respond token "200 0 {\"token\":\"SENTINEL\\u0000bearer\"}"
+respond manifest "$MANIFEST_UNKNOWN"
+respond tags "$TAGS_OK"
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_fail_closed "no usable token"
+expect_calls manifest 0
+
+new_scenario "token with a leading newline"
+respond token "200 0 {\"token\":\"\\n${BEARER}\"}"
+respond manifest "$MANIFEST_UNKNOWN"
+respond tags "$TAGS_OK"
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_fail_closed "no usable token"
+expect_calls manifest 0
+
+new_scenario "empty token"
+respond token '200 0 {"token":""}'
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_fail_closed "no usable token"
+expect_calls manifest 0
+
+new_scenario "token given as access_token"
+respond token "200 0 {\"access_token\":\"${BEARER}\"}"
+respond manifest "$MANIFEST_OK"
+run_detect GITHUB_TOKEN="$JOB_TOKEN"
+expect_release false
+expect_authenticated
 
 new_scenario "token exchange network failure"
 respond token '000 7'

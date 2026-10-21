@@ -125,7 +125,7 @@ class ReplayTest(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.work)
 
-    def attempt(self, job_name, present, registry_error=None, fail_push=None):
+    def attempt(self, job_name, present, registry_error=None, fail_push=None, token=TOKEN_OK):
         """One attempt of a publishing job. `present` is the set of tags the registry holds.
 
         Detection's outputs stay at what a first, all-absent run wrote, as a re-run of a
@@ -135,7 +135,7 @@ class ReplayTest(unittest.TestCase):
         fake = Path(tempfile.mkdtemp(dir=self.work))
         for name in ("calls.log", "argv.log", "stdin.log"):
             (fake / name).touch()
-        (fake / "token").write_text(TOKEN_OK + "\n")
+        (fake / "token").write_text(token + "\n")
         (fake / "manifest").write_text((registry_error or MANIFEST_UNKNOWN) + "\n")
         for tag in present:
             (fake / f"manifest:{tag}").write_text(MANIFEST_OK + "\n")
@@ -252,6 +252,15 @@ class ReplayTest(unittest.TestCase):
                 self.assertFalse(failed)
                 self.assertEqual(second, [f"latest{suffix}"])
                 self.assertEqual((first + second).count(tag), 1)
+
+    def test_malformed_registry_token_blocks_publication(self):
+        # A trailing newline the shell would strip: the gate must refuse the token, not
+        # repair it, even though the registry would then report every tag absent.
+        for job_name in PUBLISHERS:
+            with self.subTest(job=job_name):
+                pushed, failed = self.attempt(job_name, present=set(), token=f'200 0 {{"token":"{BEARER}\\n"}}')
+                self.assertTrue(failed)
+                self.assertEqual(pushed, [])
 
     def test_ambiguous_registry_blocks_publication(self):
         for job_name in PUBLISHERS:

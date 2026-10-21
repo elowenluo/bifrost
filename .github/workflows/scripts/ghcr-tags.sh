@@ -116,8 +116,16 @@ ghcr_tag_states() (
     ghcr_fail "token exchange for ${repository}" "$tmp/token"
     return 1
   fi
-  bearer=$(ghcr_json_string "$tmp/token" '(.token // .access_token)') || bearer=""
-  # RFC 6750 b64token, which also keeps the value inert inside the quoted config line.
+  # RFC 6750 b64token, which also keeps the value inert inside the quoted config line. It is
+  # checked inside jq, on the exact JSON string: once jq -r prints it into a command
+  # substitution, a trailing newline is stripped and a NUL dropped, so a malformed token
+  # would come out looking valid. gsub rather than an anchored test(), whose $ also matches
+  # before a trailing newline.
+  bearer=$(jq -e -r -s '
+      (if length == 1 then .[0] | (.token // .access_token) else null end)
+      | if type == "string" and length > 0 and gsub("[A-Za-z0-9._~+/=-]"; "") == ""
+        then . else error("no usable token") end
+    ' "$tmp/token" 2>/dev/null) || bearer=""
   if [[ ! "$bearer" =~ ^[A-Za-z0-9._~+/=-]+$ ]]; then
     echo "::error::GHCR token exchange for ${repository} answered HTTP 200 with no usable token." >&2
     return 1
