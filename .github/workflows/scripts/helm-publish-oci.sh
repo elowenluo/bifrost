@@ -4,27 +4,39 @@ set -euo pipefail
 # helm-publish-oci.sh - publish the released chart to the repository owner's
 # GHCR namespace, idempotently and fail-closed.
 #
-# The registry is asked on every attempt whether this chart version is already
-# there, using helm itself as the client:
-#   - a definite "not found" means absent: the canonical release asset is
-#     pushed, then pulled back and compared byte for byte;
-#   - a version that is present with the asset's exact bytes is left alone;
-#   - a version that is present with different bytes is a conflict and fails;
-#   - any other answer (refused token, network, registry error) fails. An
-#     unanswered lookup is never read as absence.
-# A push never runs against a version the registry confirmed present, so a
-# published artifact is never overwritten. Note `helm push` itself overwrites
-# an existing tag, which is why the lookup comes first. A misread of "not
-# visible to this token" as "absent" is harmless: the same token cannot push
-# to a package it cannot read, so the push fails rather than overwriting.
+# On every attempt the registry is asked whether the requested version's
+# manifest exists, through the same authenticated, retrying, fail-closed
+# requests PR #6 introduced for image tags (ghcr-tags.sh):
+#   - 200 with a manifest body: present. The chart is pulled and compared
+#     byte for byte with the release asset; identical means nothing to do,
+#     different is a conflict, and a content fetch that fails is a failure,
+#     never a reason to push. Absence is decided here only, not from a failed
+#     download: `helm pull` both resolves and downloads, and a missing blob
+#     under an existing manifest must not be pushed over.
+#   - 404 MANIFEST_UNKNOWN or NAME_UNKNOWN: absent. The canonical release
+#     asset is pushed, then pulled back and compared. A repository the
+#     registry does not know is the chart's first publication; it is not
+#     fail-closed as it is for image tags because the same token cannot push
+#     to a package it cannot read, so a misread of "not visible" as "absent"
+#     fails at the push instead of overwriting anything.
+#   - anything else (refused token, 401/403, 5xx, network, a 404 without a
+#     registry error code): failure. An unanswered lookup is never absence.
+# `helm push` overwrites an existing tag, which is why the lookup comes first
+# and a confirmed-present version is never pushed.
+#
+# Why not ghcr_tag_states from ghcr-tags.sh directly: it accepts only
+# owner/name repositories, while a chart lives at owner/<path>/<chart>, and it
+# fails closed on an unknown repository. Its request, retry, JSON and error
+# helpers are reused; only the lookup itself is restated here.
 #
 # Usage:
 #   helm-publish-oci.sh --chart-name bifrost --chart-version 2.1.45 \
 #     --canonical-chart "$RUNNER_TEMP/helm-release-asset/bifrost-2.1.45.tgz" \
 #     --registry ghcr.io --owner "$GITHUB_REPOSITORY_OWNER" --repository-path helm-charts
 #
-# Publishes to oci://<registry>/<owner, lowercased>/<repository-path>/<chart-name>:<version>.
-# Needs helm (already logged in to the registry) and sha256sum or shasum.
+# Publishes to oci://ghcr.io/<owner, lowercased>/<repository-path>/<chart-name>:<version>.
+# Needs helm (already logged in to ghcr.io), curl, jq, GITHUB_TOKEN (a token
+# that can read and write the package) and sha256sum or shasum.
 
 CHART_NAME=""
 CHART_VERSION=""
@@ -59,12 +71,19 @@ for required in CHART_NAME CHART_VERSION CANONICAL REGISTRY OWNER REPOSITORY_PAT
   fi
 done
 [ -f "$CANONICAL" ] || die "release asset not found: $CANONICAL"
-command -v helm >/dev/null 2>&1 || die "required tool missing: helm"
+[ "$REGISTRY" = "ghcr.io" ] || die "only ghcr.io is supported: the manifest lookup is GHCR-specific (got '$REGISTRY')"
+for tool in helm curl jq; do
+  command -v "$tool" >/dev/null 2>&1 || die "required tool missing: $tool"
+done
+
+# shellcheck source=ghcr-tags.sh
+source "$(dirname "${BASH_SOURCE[0]}")/ghcr-tags.sh"
 
 OWNER_LC="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
 if ! printf '%s' "$OWNER_LC" | grep -qE '^[a-z0-9][a-z0-9-]*$'; then
   die "--owner '$OWNER' is not a registry namespace"
 fi
+CHART_REPO="$OWNER_LC/$REPOSITORY_PATH/$CHART_NAME"
 REPO_URL="oci://$REGISTRY/$OWNER_LC/$REPOSITORY_PATH"
 CHART_URL="$REPO_URL/$CHART_NAME"
 
@@ -83,18 +102,76 @@ chart_meta() {
   helm show chart "$1" | awk -v k="$2:" '$1 == k { v = $2; gsub(/^"|"$/, "", v); print v; exit }'
 }
 
-# pull_version DIR -> 0 present (tarball in DIR), 1 absent, 2 unknown (stderr in DIR.err)
-pull_version() {
-  local dir="$1"
-  mkdir -p "$dir"
-  if helm pull "$CHART_URL" --version "$CHART_VERSION" --destination "$dir" >"$dir.out" 2>"$dir.err"; then
-    [ -f "$dir/$CHART_NAME-$CHART_VERSION.tgz" ] || return 2
-    return 0
-  fi
-  if grep -qE '(: not found$|: not found |manifest unknown|MANIFEST_UNKNOWN|NAME_UNKNOWN)' "$dir.err"; then
+# ghcr_chart_manifest_state <owner/path/name> <tag>: prints "present" or
+# "absent" when the registry answered definitively; otherwise explains on
+# stderr and returns 1. Runs in a subshell so its temporary directory is
+# removed however it returns.
+ghcr_chart_manifest_state() (
+  repository="$1"
+  tag="$2"
+  if [[ ! "$repository" =~ ^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)+$ ]]; then
+    echo "::error::refusing malformed GHCR repository name: '${repository}'" >&2
     return 1
   fi
-  return 2
+  if [[ ! "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
+    echo "::error::refusing malformed GHCR tag: '${tag}'" >&2
+    return 1
+  fi
+  if [ -z "${GITHUB_TOKEN:-}" ]; then
+    echo "::error::GITHUB_TOKEN is not set, so ghcr.io/${repository} cannot be queried and the state of ${tag} is unknown." >&2
+    return 1
+  fi
+  if [[ ! "$GITHUB_TOKEN" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    echo "::error::GITHUB_TOKEN contains characters a GitHub token never has; refusing to use it." >&2
+    return 1
+  fi
+
+  tmp=$(mktemp -d) || return 1
+  trap 'rm -rf "$tmp"' EXIT
+
+  ghcr_request "token exchange" "user = \"token:${GITHUB_TOKEN}\"" "$tmp/token" \
+    "https://ghcr.io/token?service=ghcr.io&scope=repository:${repository}:pull"
+  if [ "$GHCR_STATUS" != "200" ]; then
+    ghcr_fail "token exchange for ${repository}" "$tmp/token"
+    return 1
+  fi
+  bearer=$(jq -e -r -s '
+      (if length == 1 then .[0] | (.token // .access_token) else null end)
+      | if type == "string" and length > 0 and gsub("[A-Za-z0-9._~+/=-]"; "") == ""
+        then . else error("no usable token") end
+    ' "$tmp/token" 2>/dev/null) || bearer=""
+  if [[ ! "$bearer" =~ ^[A-Za-z0-9._~+/=-]+$ ]]; then
+    echo "::error::GHCR token exchange for ${repository} answered HTTP 200 with no usable token." >&2
+    return 1
+  fi
+
+  ghcr_request "manifest lookup" "header = \"Authorization: Bearer ${bearer}\"" "$tmp/manifest" \
+    "https://ghcr.io/v2/${repository}/manifests/${tag}" -H "Accept: ${GHCR_ACCEPT}"
+  case "$GHCR_STATUS" in
+    200)
+      if ! ghcr_json_is "$tmp/manifest" '.schemaVersion == 2'; then
+        echo "::error::GHCR manifest lookup for ${repository}:${tag} answered HTTP 200 without a manifest body; refusing to guess." >&2
+        return 1
+      fi
+      echo present ;;
+    404)
+      if ghcr_json_is "$tmp/manifest" '.errors[0].code == "MANIFEST_UNKNOWN" or .errors[0].code == "NAME_UNKNOWN"'; then
+        echo absent
+      else
+        ghcr_fail "manifest lookup for ${repository}:${tag}" "$tmp/manifest"
+        return 1
+      fi ;;
+    *)
+      ghcr_fail "manifest lookup for ${repository}:${tag}" "$tmp/manifest"
+      return 1 ;;
+  esac
+)
+
+# pull_chart DIR: fetch the published chart into DIR; stderr lands in DIR.err.
+pull_chart() {
+  mkdir -p "$1"
+  helm pull "$CHART_URL" --version "$CHART_VERSION" --destination "$1" >"$1.out" 2>"$1.err" &&
+    [ -f "$1/$CHART_NAME-$CHART_VERSION.tgz" ]
 }
 
 # --- 1. The asset is the version it claims to be ---------------------------
@@ -107,27 +184,29 @@ fi
 CANON_DIGEST="$(sha256_of "$CANONICAL")"
 log "release asset $CANONICAL: $CHART_NAME $CHART_VERSION, sha256 $CANON_DIGEST"
 
-# --- 2. Ask the registry ---------------------------------------------------
+# --- 2. Ask the registry for the requested version's manifest --------------
 
-set +e
-pull_version "$WORK/existing"
-state=$?
-set -e
-case "$state" in
-  0)
+STATE="$(ghcr_chart_manifest_state "$CHART_REPO" "$CHART_VERSION")" ||
+  die "cannot determine whether $CHART_URL:$CHART_VERSION is published; not publishing"
+case "$STATE" in
+  present)
+    log "$CHART_URL:$CHART_VERSION is published; comparing its content with the release asset"
+    if ! pull_chart "$WORK/existing"; then
+      cat "$WORK/existing.err" >&2
+      die "$CHART_URL:$CHART_VERSION is published but its content cannot be fetched; not publishing over it"
+    fi
     existing_digest="$(sha256_of "$WORK/existing/$CHART_NAME-$CHART_VERSION.tgz")"
     if [ "$existing_digest" = "$CANON_DIGEST" ]; then
-      log "$CHART_URL:$CHART_VERSION is already published with the release asset's bytes; leaving it unchanged"
+      log "$CHART_URL:$CHART_VERSION already holds the release asset's bytes; leaving it unchanged"
       exit 0
     fi
     die "conflict: $CHART_URL:$CHART_VERSION is published with sha256 $existing_digest but the release asset has $CANON_DIGEST; refusing to overwrite a published chart"
     ;;
-  1)
+  absent)
     log "$CHART_URL:$CHART_VERSION is not published yet"
     ;;
   *)
-    cat "$WORK/existing.err" >&2
-    die "cannot determine whether $CHART_URL:$CHART_VERSION is published; not publishing"
+    die "unexpected registry state '$STATE' for $CHART_URL:$CHART_VERSION"
     ;;
 esac
 
@@ -139,12 +218,8 @@ if ! helm push "$CANONICAL" "$REPO_URL" >"$WORK/push.out" 2>"$WORK/push.err"; th
 fi
 cat "$WORK/push.out"
 
-set +e
-pull_version "$WORK/verify"
-state=$?
-set -e
-if [ "$state" -ne 0 ]; then
-  cat "$WORK/verify.err" >&2 2>/dev/null || true
+if ! pull_chart "$WORK/verify"; then
+  cat "$WORK/verify.err" >&2
   die "pushed $CHART_NAME $CHART_VERSION to $REPO_URL but cannot read it back; publication unverified"
 fi
 verify_digest="$(sha256_of "$WORK/verify/$CHART_NAME-$CHART_VERSION.tgz")"

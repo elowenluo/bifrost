@@ -47,8 +47,8 @@ set -euo pipefail
 #     --base-sha-output "$RUNNER_TEMP/helm-index-base-sha"
 #
 # --base-sha-output records the publish branch commit the index was read from
-# (or `none` when the branch did not exist) for helm-publish-index-verify.sh,
-# which re-checks the branch right before the deploy step.
+# (or `none` when the branch did not exist) for helm-publish-pages.sh, which
+# publishes on exactly that revision by compare-and-swap.
 #
 # --local-chart is the tarball packaged from this checkout; it is only compared
 # with the release asset (content, not bytes) to catch a version that was
@@ -275,7 +275,13 @@ esac
 if [ "$rc" -eq 0 ]; then
   git fetch --no-tags --quiet "$REMOTE" "refs/heads/$BRANCH" || die "cannot fetch $BRANCH from $REMOTE"
   BRANCH_SHA="$(git rev-parse --verify --quiet FETCH_HEAD)" || die "fetched $BRANCH from $REMOTE but FETCH_HEAD is unreadable"
-  if [ -n "$(git ls-tree "$BRANCH_SHA" -- "$INDEX_PATH")" ]; then
+  # Only a successful, empty lookup means the index is not there. A lookup
+  # that fails (unreadable tree, broken object store) says nothing and must
+  # never turn into a first release that replaces the published history.
+  if ! tree_entry="$(git ls-tree "$BRANCH_SHA" -- "$INDEX_PATH")"; then
+    die "cannot read the tree of $BRANCH@$BRANCH_SHA to look for $INDEX_PATH; refusing to treat an unreadable branch as a first release"
+  fi
+  if [ -n "$tree_entry" ]; then
     git show "$BRANCH_SHA:$INDEX_PATH" >"$WORK/existing.yaml" || die "cannot read $INDEX_PATH from $BRANCH@$BRANCH_SHA"
     EXISTING="$WORK/existing.yaml"
     log "existing index: $BRANCH@${BRANCH_SHA:0:12}:$INDEX_PATH ($(wc -c <"$EXISTING" | tr -d ' ') bytes)"

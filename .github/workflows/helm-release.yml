@@ -13,13 +13,6 @@ env:
   # Temporary exception tracked in .github/action-runtime-exceptions.json.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-# One publication at a time, never cancelled: two runs that both read the
-# published index at the same revision would otherwise let the later Pages
-# push replace the earlier run's entry.
-concurrency:
-  group: helm-chart-publication
-  cancel-in-progress: false
-
 permissions:
   contents: write
 
@@ -167,31 +160,28 @@ jobs:
             --output helm-charts/index.yaml \
             --base-sha-output "$RUNNER_TEMP/helm-index-base-sha"
 
-      # The job is serialized, but a push to gh-pages from outside this workflow
-      # could still land between the index read and the deploy step's own clone.
-      # Refuse to deploy over it; a re-run rebuilds the index from it.
-      - name: Verify publish branch unchanged
+      # Publishes helm-charts/ to the gh-pages branch as one commit on the exact
+      # revision the index was read from, pushed with that revision as the
+      # branch's expected value (compare-and-swap; never a plain force). Only
+      # helm-charts/ in the branch is replaced; everything else is preserved. A
+      # writer that landed in the meantime makes the push fail visibly and a
+      # re-run rebuilds from it, so no concurrency group is needed and a queued
+      # release is never cancelled.
+      - name: Publish to GitHub Pages branch
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
         run: |
-          chmod +x .github/workflows/scripts/helm-publish-index-verify.sh
-          .github/workflows/scripts/helm-publish-index-verify.sh \
+          chmod +x .github/workflows/scripts/helm-publish-pages.sh
+          .github/workflows/scripts/helm-publish-pages.sh \
             --remote origin \
             --publish-branch gh-pages \
-            --base-sha-file "$RUNNER_TEMP/helm-index-base-sha"
-
-      # keep_files: false clears only destination_dir (helm-charts/) in the
-      # publish branch before copying publish_dir in; anything published outside
-      # it stays. The index above carries every previously published version.
-      - name: Deploy to GitHub Pages
-        uses: step-security/actions-gh-pages@db28a5e317d585916043c4acc5a4319ab3da9275 # v4.0.1
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1.5.0'
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./helm-charts
-          destination_dir: helm-charts
-          keep_files: false
-          enable_jekyll: false
-          user_name: "github-actions[bot]"
-          user_email: "github-actions[bot]@users.noreply.github.com"
+            --base-sha-file "$RUNNER_TEMP/helm-index-base-sha" \
+            --publish-dir helm-charts \
+            --destination-dir helm-charts \
+            --message "deploy: $GITHUB_SHA"
 
       - name: Login to GitHub Container Registry
         uses: step-security/docker-login-action@870af644803bf9f204aed474adbad2958fec048b # v4.1.0
@@ -209,13 +199,15 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       # Publishes under the owner this workflow runs in, never a hardcoded
-      # organisation. The registry is asked on every attempt: a missing version
-      # is pushed from the canonical asset and read back, an identical one is
-      # left alone, a different one or any registry error fails the job. This
-      # does not depend on whether the GitHub release pre-existed, so a re-run
-      # after a failed deploy still publishes the artifact.
+      # organisation. The registry is asked on every attempt for this version's
+      # manifest (job token, fail-closed): a missing version is pushed from the
+      # canonical asset and read back, an identical one is left alone, a
+      # different one, an unfetchable one or any registry error fails the job.
+      # This does not depend on whether the GitHub release pre-existed, so a
+      # re-run after a failed publication still publishes the artifact.
       - name: Push Helm chart as OCI artifact to GHCR
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.chart-version.outputs.version }}
           RELEASE_ASSET: ${{ steps.release-asset.outputs.path }}
         run: |
@@ -228,15 +220,6 @@ jobs:
             --owner "$GITHUB_REPOSITORY_OWNER" \
             --repository-path helm-charts
 
-      # - name: Push Helm chart as OCI artifact to Docker Hub
-      #   env:
-      #     VERSION: ${{ steps.chart-version.outputs.version }}
-      #     RELEASE_ASSET: ${{ steps.release-asset.outputs.path }}
-      #   run: |
-      #     .github/workflows/scripts/helm-publish-oci.sh \
-      #       --chart-name bifrost \
-      #       --chart-version "$VERSION" \
-      #       --canonical-chart "$RELEASE_ASSET" \
-      #       --registry registry-1.docker.io \
-      #       --owner "${{ secrets.DOCKER_USERNAME }}" \
-      #       --repository-path helm-charts
+      # Docker Hub publication stays disabled. Re-enabling it needs a Docker Hub
+      # manifest lookup in helm-publish-oci.sh (which is GHCR-specific) so that
+      # it is idempotent and fail-closed there too.
