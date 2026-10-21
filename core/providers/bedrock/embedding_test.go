@@ -16,6 +16,7 @@ import (
 	"github.com/capsohq/bifrost/core/schemas"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestBedrockEmbeddingEncodingInvokeRoundTrip(t *testing.T) {
@@ -1478,6 +1479,32 @@ func TestToBedrockNovaEmbeddingRequestDetailLevel(t *testing.T) {
 			}
 		}`, string(wireBody))
 	})
+}
+
+// TestBedrockNovaInvokeExtrasNeverOverwriteNormalizedParams pins the final wire body
+// with extra-params passthrough on: singleEmbeddingParams is a typed field, so the
+// native copy must not also ride along as an extra that the merge writes back over
+// the normalized one (restoring "3gp", which the API rejects).
+func TestBedrockNovaInvokeExtrasNeverOverwriteNormalizedParams(t *testing.T) {
+	var invokeRequest BedrockInvokeRequest
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"taskType": "SINGLE_EMBEDDING",
+		"singleEmbeddingParams": {
+			"embeddingPurpose": "GENERIC_INDEX",
+			"video": {"format": "3gp", "embeddingMode": "AUDIO_VIDEO_COMBINED", "source": {"bytes": "AA=="}}
+		}
+	}`), &invokeRequest))
+	invokeRequest.ModelID = "bedrock/amazon.nova-2-multimodal-embeddings-v1:0"
+
+	converted, err := invokeRequest.ToBifrostEmbeddingRequest(testBedrockCtx())
+	require.NoError(t, err)
+	outbound, err := ToBedrockNovaEmbeddingRequest(converted)
+	require.NoError(t, err)
+	body, err := providerUtils.MarshalProviderRequest(outbound)
+	require.NoError(t, err)
+	body, err = providerUtils.MergeExtraParamsIntoJSON(body, outbound.GetExtraParams())
+	require.NoError(t, err)
+	assert.Equal(t, "three_gp", gjson.GetBytes(body, "singleEmbeddingParams.video.format").String(), "wire body: %s", body)
 }
 
 // AWS's own reference documents video.format "3gp", which the API rejects in favour of
