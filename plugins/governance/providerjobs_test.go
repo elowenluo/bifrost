@@ -1076,6 +1076,14 @@ func TestPreLLMHookBindsObjectsReferencedInsideRequests(t *testing.T) {
 			{"GET", "/v1/fine_tuning/jobs/ftjob-other/events"},
 			{"GET", "/v1/fine_tuning/jobs/x/../ftjob-other/checkpoints"},
 			{"POST", "/v1/fine_tuning/checkpoints/ft:gpt-4o-mini:other/permissions"},
+			{"GET", "/v1/FINE_TUNING/jobs"},
+			// Other providers' tuning jobs carry no creator record either.
+			{"GET", "/v1beta/tunedModels"},
+			{"DELETE", "/v1beta/tunedModels/other-model"},
+			{"GET", "/v1/projects/p/locations/us-central1/tuningJobs/123"},
+			{"POST", "/v1/projects/p/locations/us-central1/tuningJobs/123:cancel"},
+			{"GET", "/model-customization-jobs"},
+			{"POST", "/model-customization-jobs/other-job/stop"},
 		} {
 			_, shortCircuit, err := plugin.PreLLMHook(presentCtx(mcpTestVKValue), pass(schemas.OpenAI, tc.method, tc.path, ""))
 			require.NoError(t, err)
@@ -1083,6 +1091,7 @@ func TestPreLLMHookBindsObjectsReferencedInsideRequests(t *testing.T) {
 			assert.Equal(t, 403, *shortCircuit.Error.StatusCode)
 		}
 		allowed(t, presentCtx(mcpTestVKValue), pass(schemas.OpenAI, "POST", "/v1/fine_tuning/jobs", `{"model":"gpt-4o-mini","training_file":"file-own"}`), "a key creates a fine-tuning job on its own file")
+		allowed(t, presentCtx(mcpTestVKValue), pass(schemas.Gemini, "POST", "/v1beta/tunedModels", `{"baseModel":"models/gemini-1.5-flash-001-tuning"}`), "a key creates a tuned model")
 		allowed(t, emptyCtx(), pass(schemas.OpenAI, "POST", "/v1/fine_tuning/jobs/ftjob-other/cancel", ""), "a request that presented no key is unrestricted")
 	})
 

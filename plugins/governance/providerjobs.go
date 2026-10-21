@@ -409,22 +409,30 @@ var passthroughCollections = map[string]string{
 }
 
 // passthroughManagesFineTuning reports whether a passthrough request reaches an
-// existing fine-tuning job or checkpoint (a list, read, cancel, events, checkpoints
-// or permissions call), as opposed to creating a job. The path is matched as it
-// will be sent, as in passthroughObjectRefs.
+// existing tuning job, tuned model or checkpoint (a list, read, cancel, delete,
+// events or permissions call) on any provider, as opposed to creating one. Tuning
+// jobs carry no creator record on any of them. The path is matched as it will be
+// sent, as in passthroughObjectRefs: BuildPassthroughURL re-encodes every literal %,
+// so the provider reads exactly these segments and an escape left in one is not the
+// collection name there. Segments are folded, which can only refuse more.
 func passthroughManagesFineTuning(r *schemas.BifrostPassthroughRequest) bool {
 	sent := r.Path
 	if strings.Contains(sent, "/.") || strings.Contains(sent, "//") || strings.HasPrefix(sent, ".") {
 		sent = path.Clean("/" + sent)
 	}
 	segments := strings.Split(strings.Trim(sent, "/"), "/")
+	for i := range segments {
+		segments[i] = strings.ToLower(segments[i])
+	}
+	creating := strings.EqualFold(r.Method, "POST")
 	for i, segment := range segments {
-		if segment != "fine_tuning" {
-			continue
-		}
 		rest := segments[i+1:]
-		creates := strings.EqualFold(r.Method, "POST") && len(rest) == 1 && rest[0] == "jobs"
-		return !creates
+		switch segment {
+		case "fine_tuning": // OpenAI: POST fine_tuning/jobs creates
+			return !(creating && len(rest) == 1 && rest[0] == "jobs")
+		case "tunedmodels", "tuningjobs", "model-customization-jobs": // Gemini, Vertex, Bedrock: POST on the collection creates
+			return !(creating && len(rest) == 0)
+		}
 	}
 	return false
 }
