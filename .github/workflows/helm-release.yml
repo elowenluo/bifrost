@@ -9,10 +9,6 @@ on:
       - ".github/workflows/helm-release.yml"
   workflow_dispatch:
 
-env:
-  # Temporary exception tracked in .github/action-runtime-exceptions.json.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 permissions:
   contents: write
 

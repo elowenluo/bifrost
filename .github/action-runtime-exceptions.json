@@ -1,28 +1,12 @@
 {
   "exceptions": [
     {
-      "workflow": ".github/workflows/release-pipeline.yml",
-      "scope": "workflow",
-      "action": "docker/login-action",
-      "ref": "c94ce9fb468520275223c153574b00df6fe4bcc9",
-      "expected_runtime": "node20",
-      "reason": "docker/login-action v3.7.0 still declares node20"
-    },
-    {
       "workflow": ".github/workflows/dependency-review.yml",
       "scope": "workflow",
       "action": "actions/dependency-review-action",
       "ref": "2031cfc080254a8a887f58cffee85186f0e49e48",
       "expected_runtime": "node20",
       "reason": "dependency-review-action v4.9.0 still declares node20"
-    },
-    {
-      "workflow": ".github/workflows/helm-release.yml",
-      "scope": "workflow",
-      "action": "peaceiris/actions-gh-pages",
-      "ref": "4f9cc6602d3f66b9c108549d475ec49e8ef4d45e",
-      "expected_runtime": "node20",
-      "reason": "peaceiris/actions-gh-pages v4.0.0 still declares node20"
     },
     {
       "workflow": ".github/workflows/scorecards.yml",
