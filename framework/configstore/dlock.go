@@ -168,10 +168,20 @@ func (m *DistributedLockManager) Acquire(ctx context.Context, key string) (conte
 	}
 	detached := context.WithoutCancel(ctx)
 	held, lose := context.WithCancelCause(ctx)
+	if lock.store == nil {
+		// No store, no lease to renew or lose: Lock was a no-op.
+		return held, func() { lose(context.Canceled) }, nil
+	}
 	stop := make(chan struct{})
 	renewed := make(chan struct{})
+	// The lease is only as good as the last expiry the store confirmed. Past
+	// it another holder may have the key whatever a pending renewal later
+	// returns, so it is enforced on its own timer rather than by the result of
+	// a store call that may never come back.
+	expiry := time.AfterFunc(time.Until(lock.expiresAt), func() { lose(ErrLockLost) })
 	go func() {
 		defer close(renewed)
+		defer expiry.Stop()
 		ticker := time.NewTicker(max(lock.ttl/3, time.Millisecond))
 		defer ticker.Stop()
 		for {
@@ -180,19 +190,32 @@ func (m *DistributedLockManager) Acquire(ctx context.Context, key string) (conte
 				return
 			case <-ticker.C:
 			}
-			// Bounded by the TTL: past it the lease is gone whatever this call
-			// returns, and a hung store must not hang the release behind it.
-			extendCtx, cancel := context.WithTimeout(detached, lock.ttl)
+			// Bounded by the confirmed lease: past it the lease is gone whatever
+			// this call returns, and a hung store must not hang the release
+			// behind it.
+			extendCtx, cancel := context.WithDeadline(detached, lock.expiresAt)
 			err := lock.Extend(extendCtx)
 			cancel()
 			if errors.Is(err, ErrLockNotHeld) {
 				lose(ErrLockLost)
 				return
 			}
-			// Anything else is transient: the next tick tries again, and if the
-			// lease expires meanwhile that attempt reports it as lost.
-			if err != nil && m.logger != nil {
+			if err == nil {
+				// A renewal that lands after the expiry timer fired is too late:
+				// the holder has already been told to stop.
+				if !expiry.Reset(time.Until(lock.expiresAt)) {
+					return
+				}
+				continue
+			}
+			// Anything else is transient: the next tick tries again while the
+			// confirmed lease lasts, and the expiry timer reports it lost after.
+			if m.logger != nil {
 				m.logger.Warn("failed to renew distributed lock %s: %v", key, err)
+			}
+			if !time.Now().Before(lock.expiresAt) {
+				lose(ErrLockLost)
+				return
 			}
 		}
 	}()
@@ -229,6 +252,9 @@ type DistributedLock struct {
 	retryInterval time.Duration
 	maxRetries    int
 	acquired      bool
+	// expiresAt is the lease expiry the store last confirmed, computed before
+	// the write that set it, so it never runs past the stored one.
+	expiresAt time.Time
 }
 
 // Lock acquires the lock, blocking until it's available or the context is cancelled.
@@ -330,6 +356,7 @@ func (l *DistributedLock) TryLock(ctx context.Context) (bool, error) {
 
 	if acquired {
 		l.acquired = true
+		l.expiresAt = lock.ExpiresAt
 		l.logger.Debug("acquired lock %s with holder %s", l.lockKey, l.holderID)
 	}
 
@@ -387,6 +414,7 @@ func (l *DistributedLock) Extend(ctx context.Context) error {
 		return fmt.Errorf("error extending lock: %w", err)
 	}
 
+	l.expiresAt = newExpiresAt
 	l.logger.Debug("extended lock %s to %v", l.lockKey, newExpiresAt)
 	return nil
 }

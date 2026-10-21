@@ -4808,6 +4808,57 @@ func TestMigrationMoveConfigJSONVKLimitsToModelConfigs(t *testing.T) {
 	assert.Equal(t, tiersBefore, tiersAfter, "a re-run created another tier")
 }
 
+// The standalone-limits cleanup runs before move_config_json_vk_limits_to_model_configs and mints the
+// key's all-models tier itself. That tier must carry the key's calendar alignment: the later migration
+// reuses it as found, and the limits it adopted are no longer directly owned, so nothing repairs them.
+func TestMigrationVKStandaloneLimitsKeepCalendarAlignment(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+	require.NoError(t, db.AutoMigrate(&tables.TableVirtualKey{}, &tables.TableVirtualKeyProviderConfig{},
+		&tables.TableBudget{}, &tables.TableRateLimit{}, &tables.TableModelConfig{}))
+
+	tokenMax, tokenDur := int64(100), "1d"
+	for _, id := range []string{"rl-budgeted", "rl-only"} {
+		require.NoError(t, db.Create(&tables.TableRateLimit{ID: id, TokenMaxLimit: &tokenMax, TokenResetDuration: &tokenDur}).Error)
+	}
+	// Part 1: a directly owned budget, plus a direct rate limit.
+	require.NoError(t, db.Create(&tables.TableVirtualKey{
+		ID: "vk-budgeted", Name: "vk-budgeted", Value: *schemas.NewSecretVar("sk-bf-budgeted"),
+		CalendarAligned: true, RateLimitID: schemas.Ptr("rl-budgeted"),
+	}).Error)
+	require.NoError(t, db.Create(&tables.TableBudget{
+		ID: "b-budgeted", MaxLimit: 10, ResetDuration: "1M", VirtualKeyID: schemas.Ptr("vk-budgeted"),
+	}).Error)
+	// Part 3: only a direct rate limit.
+	require.NoError(t, db.Create(&tables.TableVirtualKey{
+		ID: "vk-only", Name: "vk-only", Value: *schemas.NewSecretVar("sk-bf-only"),
+		CalendarAligned: true, RateLimitID: schemas.Ptr("rl-only"),
+	}).Error)
+	// A rolling key stays rolling.
+	require.NoError(t, db.Create(&tables.TableVirtualKey{
+		ID: "vk-rolling", Name: "vk-rolling", Value: *schemas.NewSecretVar("sk-bf-rolling"),
+	}).Error)
+	require.NoError(t, db.Create(&tables.TableBudget{
+		ID: "b-rolling", MaxLimit: 10, ResetDuration: "1M", VirtualKeyID: schemas.Ptr("vk-rolling"),
+	}).Error)
+
+	// Registered order.
+	require.NoError(t, migrationMigrateVKStandaloneLimitsToModelConfigs(ctx, db, testMigrationLogger))
+	require.NoError(t, migrationMoveConfigJSONVKLimitsToModelConfigs(ctx, db, testMigrationLogger))
+
+	for vkID, aligned := range map[string]bool{"vk-budgeted": true, "vk-only": true, "vk-rolling": false} {
+		var rows []tables.TableModelConfig
+		require.NoError(t, db.Where("scope = ? AND scope_id = ? AND model_name = ? AND provider IS NULL",
+			tables.ModelConfigScopeVirtualKey, vkID, tables.ModelConfigAllModels).Find(&rows).Error)
+		require.Len(t, rows, 1, "expected exactly one all-models tier for %s", vkID)
+		assert.Equal(t, aligned, rows[0].CalendarAligned, "tier of %s lost the key's calendar alignment", vkID)
+	}
+	var b tables.TableBudget
+	require.NoError(t, db.First(&b, "id = ?", "b-budgeted").Error)
+	require.NotNil(t, b.ModelConfigID)
+	assert.Nil(t, b.VirtualKeyID)
+}
+
 // TestEnsureVKLimitModelConfigSkipsAMissingKey: the tier is scoped to the key by a column with no
 // foreign key, so a key that is gone must yield no tier rather than an orphan the delete cannot reach.
 func TestEnsureVKLimitModelConfigSkipsAMissingKey(t *testing.T) {

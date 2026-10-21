@@ -1303,3 +1303,49 @@ func TestDistributedLockManager_AcquireReportsLeaseLoss(t *testing.T) {
 		t.Fatal("losing the lease did not cancel the held context")
 	}
 }
+
+// outageLockStore passes acquisition through but fails every renewal, the way
+// an unreachable ConfigStore does. With hang set the renewal call also ignores
+// its context and never returns.
+type outageLockStore struct {
+	LockStore
+	hang    bool
+	blocked chan struct{}
+}
+
+func (s *outageLockStore) UpdateLockExpiry(ctx context.Context, lockKey, holderID string, expiresAt time.Time) error {
+	if s.hang {
+		<-s.blocked
+	}
+	return fmt.Errorf("config store unreachable")
+}
+
+// A renewal that keeps failing for a reason other than "not held" cannot
+// confirm the lease. Once the last confirmed lease runs out another replica may
+// hold the key, so the held context must be cancelled then, whether or not the
+// store call ever comes back.
+func TestDistributedLockManager_AcquireCancelsAtConfirmedLeaseExpiry(t *testing.T) {
+	for _, hang := range []bool{false, true} {
+		t.Run(fmt.Sprintf("hang=%v", hang), func(t *testing.T) {
+			blocked := make(chan struct{})
+			defer close(blocked)
+			store := &outageLockStore{LockStore: setupLockTestStore(t), hang: hang, blocked: blocked}
+			ttl := 150 * time.Millisecond
+			manager := NewDistributedLockManager(store, newMockLogger(), WithDefaultTTL(ttl), WithRetryInterval(10*time.Millisecond))
+
+			start := time.Now()
+			held, release, err := manager.Acquire(context.Background(), "outage-key")
+			require.NoError(t, err)
+			select {
+			case <-held.Done():
+				require.ErrorIs(t, context.Cause(held), ErrLockLost)
+				require.LessOrEqual(t, time.Since(start), ttl+100*time.Millisecond, "cancelled well after the lease ran out")
+			case <-time.After(2 * time.Second):
+				t.Fatal("held context outlived the last confirmed lease while renewals failed")
+			}
+			if !hang {
+				release()
+			}
+		})
+	}
+}

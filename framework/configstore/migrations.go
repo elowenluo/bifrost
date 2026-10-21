@@ -14465,10 +14465,12 @@ func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *g
 				if mcID == "" {
 					mcID = uuid.NewString()
 					now := time.Now()
+					// The tier carries the key's calendar alignment, as the limits it adopts did.
 					if err := tx.Exec(`
-						INSERT INTO governance_model_configs (id, model_name, scope, scope_id, created_at, updated_at)
-						VALUES (?, '*', 'virtual_key', ?, ?, ?)
-					`, mcID, vkID, now, now).Error; err != nil {
+						INSERT INTO governance_model_configs (id, model_name, scope, scope_id, calendar_aligned, created_at, updated_at)
+						SELECT ?, '*', 'virtual_key', vk.id, vk.calendar_aligned, ?, ?
+						FROM governance_virtual_keys vk WHERE vk.id = ?
+					`, mcID, now, now, vkID).Error; err != nil {
 						return fmt.Errorf("failed to create model config for VK %s: %w", vkID, err)
 					}
 					logger.Info("[configstore] %s: created model config %s for VK %s", migrationName, mcID, vkID)
@@ -14582,9 +14584,10 @@ func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *g
 				mcID := uuid.NewString()
 				now := time.Now()
 				if err := tx.Exec(`
-					INSERT INTO governance_model_configs (id, model_name, scope, scope_id, rate_limit_id, created_at, updated_at)
-					VALUES (?, '*', 'virtual_key', ?, ?, ?, ?)
-				`, mcID, v.VKID, v.VKRateLimitID, now, now).Error; err != nil {
+					INSERT INTO governance_model_configs (id, model_name, scope, scope_id, rate_limit_id, calendar_aligned, created_at, updated_at)
+					SELECT ?, '*', 'virtual_key', vk.id, ?, vk.calendar_aligned, ?, ?
+					FROM governance_virtual_keys vk WHERE vk.id = ?
+				`, mcID, v.VKRateLimitID, now, now, v.VKID).Error; err != nil {
 					return fmt.Errorf("failed to create model config for VK %s: %w", v.VKID, err)
 				}
 				if err := tx.Exec(`UPDATE governance_virtual_keys SET rate_limit_id = NULL WHERE id = ?`, v.VKID).Error; err != nil {
