@@ -771,6 +771,21 @@ func TestGetAuthTokenSource_AWSFederationSTSUsesAuthHTTPClient(t *testing.T) {
 			},
 			action: "AssumeRole",
 		},
+		{
+			name: "shared profile role_arn",
+			setup: func(t *testing.T) *fakeAWSSTS {
+				isolateAWSEnvironment(t)
+				configFile := filepath.Join(t.TempDir(), "config")
+				require.NoError(t, os.WriteFile(configFile, []byte(
+					"[profile vertex]\nrole_arn = arn:aws:iam::123456789012:role/Shared\nsource_profile = base\nregion = us-east-1\n"+
+						"[profile base]\naws_access_key_id = AKIABASE\naws_secret_access_key = secret\n"), 0o600))
+				t.Setenv("AWS_CONFIG_FILE", configFile)
+				t.Setenv("AWS_PROFILE", "vertex")
+				return newFakeAWSSTS(t, "ASIASHARED")
+			},
+			cfg:    func() *schemas.VertexAWSWorkloadIdentityConfig { return wifConfig(testWIFAudience, testWIFSAEmail) },
+			action: "AssumeRole",
+		},
 	}
 	for _, route := range routes {
 		t.Run(route.name, func(t *testing.T) {

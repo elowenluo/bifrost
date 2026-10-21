@@ -158,6 +158,15 @@ func newAWSSubjectTokenSupplier(ctx context.Context, cfg *schemas.VertexAWSWorkl
 		loadOpts = append(loadOpts, config.WithWebIdentityRoleCredentialOptions(func(o *stscreds.WebIdentityRoleOptions) {
 			o.Client = webIdentitySTS
 		}))
+		// A shared profile's role_arn/source_profile AssumeRole uses an STS client the chain
+		// builds from the source profile's credentials; only its HTTP client is swapped, so
+		// the call keeps that signing and reaches STS through the provider's proxy. Metadata
+		// and container-credential endpoints keep the SDK's own clients.
+		loadOpts = append(loadOpts, config.WithAssumeRoleCredentialOptions(func(o *stscreds.AssumeRoleOptions) {
+			if client, ok := o.Client.(*sts.Client); ok {
+				o.Client = sts.New(client.Options(), func(so *sts.Options) { so.HTTPClient = authClient })
+			}
+		}))
 	}
 	awsCfg, err := config.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
