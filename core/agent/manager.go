@@ -784,6 +784,30 @@ func (m *Manager) Update(ctx context.Context, name string, req UpdateRequest) (s
 				}
 			}
 		}
+		// TLS material is read back redacted too: a masked CA, client certificate or
+		// key keeps the stored one rather than failing PEM validation.
+		if submitted.TLS != nil {
+			tlsConfig := *submitted.TLS
+			for _, field := range []struct {
+				submitted **schemas.SecretVar
+				stored    func(*schemas.UpstreamTLSConfig) *schemas.SecretVar
+				name      string
+			}{
+				{&tlsConfig.CACertPEM, func(c *schemas.UpstreamTLSConfig) *schemas.SecretVar { return c.CACertPEM }, "CA certificate"},
+				{&tlsConfig.ClientCertPEM, func(c *schemas.UpstreamTLSConfig) *schemas.SecretVar { return c.ClientCertPEM }, "client certificate"},
+				{&tlsConfig.ClientKeyPEM, func(c *schemas.UpstreamTLSConfig) *schemas.SecretVar { return c.ClientKeyPEM }, "client key"},
+			} {
+				value := *field.submitted
+				if value == nil || (value.GetValue() != "<REDACTED>" && !value.IsMaskedPlaceholder()) {
+					continue
+				}
+				if stored == nil || stored.TLS == nil || field.stored(stored.TLS) == nil {
+					return nil, fmt.Errorf("cannot preserve missing upstream TLS %s", field.name)
+				}
+				*field.submitted = field.stored(stored.TLS)
+			}
+			submitted.TLS = &tlsConfig
+		}
 		return submitted, nil
 	}
 	discoveryAuth, err := preserveAuth(req.DiscoveryAuth, existing.DiscoveryAuth)

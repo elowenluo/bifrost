@@ -3,7 +3,9 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -3074,4 +3076,38 @@ func TestWrapJSONStreamErrorRefusesRepliesItCannotFrame(t *testing.T) {
 	framed, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, "data: {\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32603,\"message\":\"boom\"}}\n\n", string(framed))
+}
+
+// TestUpdatePreservesMaskedTLSCredentials: reads return TLS material redacted, so
+// an edit (or a disable) that echoes it back keeps the stored PEM instead of
+// failing PEM validation on the placeholder.
+func TestUpdatePreservesMaskedTLSCredentials(t *testing.T) {
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer tlsServer.Close()
+	certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: tlsServer.Certificate().Raw}))
+	keyDER, err := x509.MarshalPKCS8PrivateKey(tlsServer.TLS.Certificates[0].PrivateKey)
+	require.NoError(t, err)
+	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
+
+	store := &memoryStore{regs: map[string]schemas.AgentRegistration{}}
+	m, err := NewManager(context.Background(), store, nil, "http://gateway", nil)
+	require.NoError(t, err)
+	defer m.Close()
+	cardURL := "https://agent.example" + agentCardPath
+	_, err = m.Create(context.Background(), CreateRequest{Name: "tls", AgentCardURL: cardURL, Enabled: boolPtr(false), RuntimeAuth: &schemas.UpstreamAuth{
+		Type: schemas.MCPAuthTypeNone,
+		TLS:  &schemas.UpstreamTLSConfig{CACertPEM: schemas.NewSecretVar(certPEM), ClientCertPEM: schemas.NewSecretVar(certPEM), ClientKeyPEM: schemas.NewSecretVar(keyPEM)},
+	}})
+	require.NoError(t, err)
+
+	masked := func() *schemas.SecretVar { return schemas.NewSecretVar("<REDACTED>") }
+	_, err = m.Update(context.Background(), "tls", UpdateRequest{AgentCardURL: &cardURL, Enabled: boolPtr(false), RuntimeAuth: &schemas.UpstreamAuth{
+		Type: schemas.MCPAuthTypeNone,
+		TLS:  &schemas.UpstreamTLSConfig{CACertPEM: masked(), ClientCertPEM: masked(), ClientKeyPEM: masked()},
+	}})
+	require.NoError(t, err, "echoed masked TLS fields must keep the stored material")
+	stored, err := store.GetAgentRegistration(context.Background(), "tls")
+	require.NoError(t, err)
+	require.Equal(t, certPEM, stored.RuntimeAuth.TLS.CACertPEM.GetValue())
+	require.Equal(t, keyPEM, stored.RuntimeAuth.TLS.ClientKeyPEM.GetValue())
 }
