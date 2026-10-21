@@ -333,3 +333,30 @@ func TestGenerateMCPClientHash_OpenAPIConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
 }
+
+// TestPriorFormatClientConfigHashMatchesPreviousRelease pins the prior-format hash to
+// the values the fork's release before the v2.3 sync computed for the same config.json
+// client sections (computed with origin/main 39b04fbe0's GenerateClientConfigHash*),
+// and shows why it is needed: the current format differs even for an empty section.
+func TestPriorFormatClientConfigHashMatchesPreviousRelease(t *testing.T) {
+	for _, tc := range []struct{ raw, base, withToolManager string }{
+		{`{}`, "6c65f7281c21ca16330ad2307ab4149fff41dfb742d192ea9f4512b0b57e2ec3", "3ddd19f0972c3bfcc841953ed61fd4efaf134b41c292005f865deeb725387fb0"},
+		{`{"drop_excess_requests":true,"log_retention_days":7,"prometheus_labels":["team"]}`, "62fc57f0c78ca9153e018d4c1d7a1e22c94ea0460fcaa15048897830322c52aa", "43524267e5c1ed64abea5ca0c30b42d8f72c6a88358848eb044c02e2d1921397"},
+		{`{"enable_logging":true,"compat":{"convert_text_to_chat":false},"max_request_body_size_mb":50}`, "e7262fe51e023aa2ce89ad3d0d479a4f013286a70bec904d3391906d28c6155f", "2f5a2ec8bddd47bfeec73a47e3588f9d23a0ecc564ac93813bf965e42d0422fd"},
+	} {
+		var c ClientConfig
+		require.NoError(t, sonic.Unmarshal([]byte(tc.raw), &c))
+		tm := &schemas.MCPToolManagerConfig{MaxAgentDepth: 5}
+
+		base, err := c.GeneratePriorFormatClientConfigHash()
+		require.NoError(t, err)
+		assert.Equal(t, tc.base, base, tc.raw)
+		withToolManager, err := c.GeneratePriorFormatClientConfigHashWithToolManager(tm)
+		require.NoError(t, err)
+		assert.Equal(t, tc.withToolManager, withToolManager, tc.raw)
+
+		current, err := c.GenerateClientConfigHashWithToolManager(tm)
+		require.NoError(t, err)
+		assert.NotEqual(t, tc.withToolManager, current, "the current format hashes compat.azure_deepseek even at its default")
+	}
+}

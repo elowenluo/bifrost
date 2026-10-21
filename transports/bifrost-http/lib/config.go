@@ -1628,13 +1628,21 @@ func loadClientConfig(ctx context.Context, config *Config, configData *ConfigDat
 	// Hash file input before resolving an omitted setting against the database.
 	// Mark new secure defaults so adding explicit false is a detectable file change,
 	// even though both decode to the same boolean. Preserve legacy hashes on upgrade.
-	var fileHash, baseHash string
+	var fileHash, baseHash, priorFileHash, priorBaseHash string
 	if configData.Client != nil {
 		fileHash, err = configData.Client.GenerateClientConfigHashWithToolManager(toolManagerFromFile)
 		if err != nil {
 			return fmt.Errorf("failed to hash client config: %w", err)
 		}
 		baseHash, err = configData.Client.GenerateClientConfigHash()
+		if err != nil {
+			return fmt.Errorf("failed to hash client config: %w", err)
+		}
+		priorFileHash, err = configData.Client.GeneratePriorFormatClientConfigHashWithToolManager(toolManagerFromFile)
+		if err != nil {
+			return fmt.Errorf("failed to hash client config: %w", err)
+		}
+		priorBaseHash, err = configData.Client.GeneratePriorFormatClientConfigHash()
 		if err != nil {
 			return fmt.Errorf("failed to hash client config: %w", err)
 		}
@@ -1721,8 +1729,17 @@ func loadClientConfig(ctx context.Context, config *Config, configData *ConfigDat
 	if !firstAdmin && !forceClientSync && clientConfig.ConfigHash == fileHash {
 		// Hash matches - keep DB config (preserves UI changes to both client and tool manager settings)
 		logger.Debug("client config hash matches, keeping DB config")
+	} else if !firstAdmin && !forceClientSync && clientConfig.ConfigHash == priorFileHash {
+		// The checkpoint a release before the v2.3 sync stored, for this same file: the file
+		// is unchanged, so dashboard settings stay and only the checkpoint moves to the new
+		// hash format.
+		logger.Info("client config unchanged since the previous release's checkpoint; keeping DB config and upgrading its hash format")
+		config.ClientConfig.ConfigHash = fileHash
+		if err = persistReconciledClientConfig(ctx, config); err != nil {
+			return err
+		}
 	} else if !firstAdmin && !forceClientSync &&
-		clientConfig.ConfigHash == baseHash && toolManagerFromFile != nil {
+		(clientConfig.ConfigHash == baseHash || clientConfig.ConfigHash == priorBaseHash) && toolManagerFromFile != nil {
 		// Legacy hash match (pre-upgrade): the stored hash covers only the client section and
 		// matches the file, meaning the client section is unchanged. Only apply the tool manager
 		// settings from the file so that client-section UI changes survive the upgrade.

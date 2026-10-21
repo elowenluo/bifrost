@@ -23535,6 +23535,48 @@ func TestLoadClientConfig_ToolManagerOnlyFileReconciles(t *testing.T) {
 	assert.Equal(t, 9, unchanged.MCPAgentDepth, "an unchanged file must keep dashboard edits")
 }
 
+// TestLoadClientConfig_PriorReleaseCheckpointKeepsDashboardEdits pins the upgrade from
+// the release before the v2.3 sync: its stored checkpoint is the prior-format hash of
+// the same config.json, so the file is unchanged and dashboard edits survive while the
+// checkpoint moves to the new format. A file edited since then still wins.
+func TestLoadClientConfig_PriorReleaseCheckpointKeepsDashboardEdits(t *testing.T) {
+	initTestLogger()
+	store := createTestSQLiteConfigStore(t, t.TempDir())
+	ctx := context.Background()
+	tm := &schemas.MCPToolManagerConfig{MaxAgentDepth: 5}
+	fileData := func(retention int) *ConfigData {
+		var data ConfigData
+		require.NoError(t, json.Unmarshal([]byte(fmt.Sprintf(`{"client":{"drop_excess_requests":true,"log_retention_days":%d,"enforce_auth_on_inference":false}}`, retention)), &data))
+		data.MCP = &schemas.MCPConfig{ToolManagerConfig: tm}
+		return &data
+	}
+	start := func(data *ConfigData) *configstore.ClientConfig {
+		t.Helper()
+		cfg := &Config{ConfigStore: store}
+		require.NoError(t, loadClientConfig(ctx, cfg, data))
+		stored, err := store.GetClientConfig(ctx)
+		require.NoError(t, err)
+		return stored
+	}
+
+	first := start(fileData(7))
+	prior, err := fileData(7).Client.GeneratePriorFormatClientConfigHashWithToolManager(tm)
+	require.NoError(t, err)
+	// The state a pre-sync release left: its own checkpoint and a dashboard edit.
+	first.ConfigHash = prior
+	first.LogRetentionDays = 30
+	require.NoError(t, store.UpdateClientConfig(ctx, first))
+
+	upgraded := start(fileData(7))
+	assert.Equal(t, 30, upgraded.LogRetentionDays, "an unchanged file must keep dashboard edits across the upgrade")
+	current, err := fileData(7).Client.GenerateClientConfigHashWithToolManager(tm)
+	require.NoError(t, err)
+	assert.Equal(t, current, upgraded.ConfigHash, "the checkpoint moves to the new format")
+
+	edited := start(fileData(14))
+	assert.Equal(t, 14, edited.LogRetentionDays, "a file edited since the checkpoint still wins")
+}
+
 // TestLoadClientConfig_InvalidAllowlistIsNeverPersisted pins that client config
 // reconciliation validates before it writes: an invalid oauth_private_allowlist
 // in config.json fails startup without reaching the store, so fixing the file
