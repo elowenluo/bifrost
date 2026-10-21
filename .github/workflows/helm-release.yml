@@ -13,11 +13,21 @@ env:
   # Temporary exception tracked in .github/action-runtime-exceptions.json.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
+# One publication at a time, never cancelled: two runs that both read the
+# published index at the same revision would otherwise let the later Pages
+# push replace the earlier run's entry.
+concurrency:
+  group: helm-chart-publication
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
 jobs:
   release:
+    # Every write below (GitHub release, Pages, OCI) shares this gate, so a
+    # manual dispatch from another branch can never occupy a release version.
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1.5.0'
     runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
     permissions:
       contents: write
@@ -33,6 +43,7 @@ jobs:
             get.helm.sh:443
             ghcr.io:443
             github.com:443
+            pkg-containers.githubusercontent.com:443
             registry-1.docker.io:443
             proxy.golang.org:443
             release-assets.githubusercontent.com:443
@@ -153,7 +164,19 @@ jobs:
             --remote origin \
             --publish-branch gh-pages \
             --index-path helm-charts/index.yaml \
-            --output helm-charts/index.yaml
+            --output helm-charts/index.yaml \
+            --base-sha-output "$RUNNER_TEMP/helm-index-base-sha"
+
+      # The job is serialized, but a push to gh-pages from outside this workflow
+      # could still land between the index read and the deploy step's own clone.
+      # Refuse to deploy over it; a re-run rebuilds the index from it.
+      - name: Verify publish branch unchanged
+        run: |
+          chmod +x .github/workflows/scripts/helm-publish-index-verify.sh
+          .github/workflows/scripts/helm-publish-index-verify.sh \
+            --remote origin \
+            --publish-branch gh-pages \
+            --base-sha-file "$RUNNER_TEMP/helm-index-base-sha"
 
       # keep_files: false clears only destination_dir (helm-charts/) in the
       # publish branch before copying publish_dir in; anything published outside
@@ -171,8 +194,6 @@ jobs:
           user_email: "github-actions[bot]@users.noreply.github.com"
 
       - name: Login to GitHub Container Registry
-        if: steps.check-release.outputs.exists == 'false'
-        continue-on-error: true
         uses: step-security/docker-login-action@870af644803bf9f204aed474adbad2958fec048b # v4.1.0
         with:
           registry: ghcr.io
@@ -188,20 +209,34 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       # Publishes under the owner this workflow runs in, never a hardcoded
-      # organisation. GHCR namespaces are lowercase.
+      # organisation. The registry is asked on every attempt: a missing version
+      # is pushed from the canonical asset and read back, an identical one is
+      # left alone, a different one or any registry error fails the job. This
+      # does not depend on whether the GitHub release pre-existed, so a re-run
+      # after a failed deploy still publishes the artifact.
       - name: Push Helm chart as OCI artifact to GHCR
-        if: steps.check-release.outputs.exists == 'false'
-        continue-on-error: true
         env:
+          VERSION: ${{ steps.chart-version.outputs.version }}
           RELEASE_ASSET: ${{ steps.release-asset.outputs.path }}
         run: |
-          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
-          helm push "$RELEASE_ASSET" "oci://ghcr.io/$owner/helm-charts"
+          chmod +x .github/workflows/scripts/helm-publish-oci.sh
+          .github/workflows/scripts/helm-publish-oci.sh \
+            --chart-name bifrost \
+            --chart-version "$VERSION" \
+            --canonical-chart "$RELEASE_ASSET" \
+            --registry ghcr.io \
+            --owner "$GITHUB_REPOSITORY_OWNER" \
+            --repository-path helm-charts
 
       # - name: Push Helm chart as OCI artifact to Docker Hub
-      #   if: steps.check-release.outputs.exists == 'false'
-      #   continue-on-error: true
       #   env:
+      #     VERSION: ${{ steps.chart-version.outputs.version }}
       #     RELEASE_ASSET: ${{ steps.release-asset.outputs.path }}
       #   run: |
-      #     helm push "$RELEASE_ASSET" "oci://registry-1.docker.io/${{ secrets.DOCKER_USERNAME }}"
+      #     .github/workflows/scripts/helm-publish-oci.sh \
+      #       --chart-name bifrost \
+      #       --chart-version "$VERSION" \
+      #       --canonical-chart "$RELEASE_ASSET" \
+      #       --registry registry-1.docker.io \
+      #       --owner "${{ secrets.DOCKER_USERNAME }}" \
+      #       --repository-path helm-charts

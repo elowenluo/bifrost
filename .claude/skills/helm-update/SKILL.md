@@ -45,13 +45,15 @@ git show FETCH_HEAD:helm-charts/index.yaml
 gh release list --repo "$ORIGIN_REPO" --limit 200 | grep 'helm-chart-v'
 ```
 
-Select the highest chart `version` under `entries.bifrost` using semantic version ordering (not `appVersion`, not array order). Then identify its source commit from this repository's matching tag:
+Select the highest chart `version` under `entries.bifrost` using semantic version ordering (not `appVersion`, not array order). Then confirm the release exists in this repository and resolve its source commit from the tag **as origin has it**. The shared local tag namespace is not evidence: it can hold a same-named upstream tag, and a fork tag may not have been fetched yet. Fetch the exact tag from `origin` into an isolated ref and resolve that:
 
 ```bash
-LAST_COMMIT=$(git rev-list -n 1 "helm-chart-v<VERSION>")
+gh release view --repo "$ORIGIN_REPO" "helm-chart-v<VERSION>" --json tagName,targetCommitish
+git fetch --no-tags origin "+refs/tags/helm-chart-v<VERSION>:refs/helm-release/helm-chart-v<VERSION>"
+LAST_COMMIT=$(git rev-parse "refs/helm-release/helm-chart-v<VERSION>^{commit}")
 ```
 
-Save that commit SHA — you'll need it to scope the config.schema.json diff. If the index cannot be fetched or parsed, if the `gh-pages` branch does not exist, or if this repository has no `helm-chart-v<VERSION>` tag (the entry was inherited from upstream rather than released here), report that and stop version selection. Do not guess from local files.
+Save that commit SHA — you'll need it to scope the config.schema.json diff. If the index cannot be fetched or parsed, if the `gh-pages` branch does not exist, if `gh release view` finds no `helm-chart-v<VERSION>` release in `$ORIGIN_REPO` (the entry was inherited from upstream rather than released here), or if the tag cannot be fetched from `origin`, report that and stop version selection. Do not guess from local files or local tags.
 
 ### Step 2: Check config.schema.json Changes Since Last Helm Release
 

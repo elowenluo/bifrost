@@ -92,3 +92,8 @@ jobs:
       # origin, release assets that are plain files. No Pages push, no releases.
       - name: Check Helm index publication
         run: ./.github/workflows/scripts/helm-publish-index.test.sh
+
+      # The registry is a helm shim on PATH: nothing is pushed anywhere.
+      - name: Check Helm OCI publication
+        if: ${{ !cancelled() }}
+        run: ./.github/workflows/scripts/helm-publish-oci.test.sh

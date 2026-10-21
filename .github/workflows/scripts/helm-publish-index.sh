@@ -28,6 +28,13 @@ set -euo pipefail
 #      - index digest differs from the asset, local chart content differs from
 #      the asset, asset is not the version being released - is a conflict and
 #      aborts.
+#   5. Preservation is checked on the complete text of every published entry,
+#      not on a projection: after the merge, each entry's exact lines must
+#      appear unchanged in the output. helm re-emits its own index byte for
+#      byte, so this holds for anything this workflow published; an index
+#      written or edited by another tool must be re-normalized deliberately
+#      before this script will build on it. Required fields (chart name,
+#      version, sha256 digest, urls) are validated explicitly as well.
 #
 # Usage:
 #   helm-publish-index.sh \
@@ -36,7 +43,12 @@ set -euo pipefail
 #     --local-chart helm-charts/bifrost-2.1.45.tgz \
 #     --repository "$GITHUB_REPOSITORY" --server-url "$GITHUB_SERVER_URL" \
 #     --remote origin --publish-branch gh-pages --index-path helm-charts/index.yaml \
-#     --output helm-charts/index.yaml
+#     --output helm-charts/index.yaml \
+#     --base-sha-output "$RUNNER_TEMP/helm-index-base-sha"
+#
+# --base-sha-output records the publish branch commit the index was read from
+# (or `none` when the branch did not exist) for helm-publish-index-verify.sh,
+# which re-checks the branch right before the deploy step.
 #
 # --local-chart is the tarball packaged from this checkout; it is only compared
 # with the release asset (content, not bytes) to catch a version that was
@@ -56,6 +68,7 @@ REMOTE="origin"
 BRANCH="gh-pages"
 INDEX_PATH="helm-charts/index.yaml"
 OUTPUT=""
+BASE_SHA_OUTPUT=""
 
 usage() {
   sed -n '/^# Usage:/,/^# Exit status/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
@@ -83,6 +96,7 @@ while [ $# -gt 0 ]; do
     --publish-branch) BRANCH="${2:-}"; shift 2 ;;
     --index-path) INDEX_PATH="${2:-}"; shift 2 ;;
     --output) OUTPUT="${2:-}"; shift 2 ;;
+    --base-sha-output) BASE_SHA_OUTPUT="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage; die "unknown argument: $1" ;;
   esac
@@ -125,15 +139,15 @@ chart_meta() {
   helm show chart "$1" | awk -v k="$2:" '$1 == k { v = $2; gsub(/^"|"$/, "", v); print v; exit }'
 }
 
-# index_entries INDEX -> one line per chart version: name, version, digest and
-# the urls list joined with commas, tab-separated. Walks the layout helm writes
-# (two-space indent, one entry per "  - " item); the caller cross-checks the
-# result against helm's own re-emission of the same file.
+# index_entries INDEX -> one line per entry: chart name, version, digest and
+# the urls list joined with commas, tab-separated (empty where missing). Walks
+# the layout helm writes (two-space indent, one entry per "  - " item); the
+# caller cross-checks the result against helm's own re-emission of the file.
 index_entries() {
   awk '
     function flush() {
-      if (name != "" && ver != "") printf "%s\t%s\t%s\t%s\n", name, ver, digest, urls
-      ver = ""; digest = ""; urls = ""
+      if (started) printf "%s\t%s\t%s\t%s\n", name, ver, digest, urls
+      started = 0; ver = ""; digest = ""; urls = ""
     }
     function kv(line,   k, v) {
       k = line; sub(/:.*/, "", k)
@@ -146,11 +160,55 @@ index_entries() {
     /^[^ ]/ { if (inentries) { flush(); inentries = 0 }; next }
     !inentries { next }
     /^  [^ -][^:]*:[ ]*$/ { flush(); name = $0; sub(/^  /, "", name); sub(/:[ ]*$/, "", name); next }
-    /^  - / { flush(); line = $0; sub(/^  - /, "", line); kv(line); next }
+    /^  - / { flush(); started = 1; line = $0; sub(/^  - /, "", line); kv(line); next }
     /^    - / { if (list == "urls") { u = $0; sub(/^    - /, "", u); urls = (urls == "") ? u : urls "," u }; next }
     /^    [^ ][^:]*:/ { line = $0; sub(/^    /, "", line); kv(line); next }
     END { flush() }
   ' "$1" | LC_ALL=C sort
+}
+
+# validate_entries ENTRIES LABEL: every entry needs a chart name, a version, a
+# sha256 digest and at least one url. Anything less cannot be served or
+# verified, so it is reported rather than carried along or dropped.
+validate_entries() {
+  local bad
+  bad="$(awk -F'\t' '
+    $1 == "" || $2 == "" || $3 !~ /^[0-9a-f]{64}$/ || $4 == "" {
+      printf "  %s %s:", ($1 == "" ? "(no chart name)" : $1), ($2 == "" ? "(no version)" : $2)
+      if ($3 !~ /^[0-9a-f]{64}$/) printf " digest=%s", ($3 == "" ? "(missing)" : $3)
+      if ($4 == "") printf " urls=(missing)"
+      printf "\n"
+    }' "$1")"
+  if [ -n "$bad" ]; then
+    printf '%s\n' "$bad" >&2
+    die "$2 has entries without a chart name, version, sha256 digest or urls; refusing to build on it"
+  fi
+}
+
+# index_blocks INDEX DIR: the exact text of every entry, one file per entry
+# named <chart>@<version>, for byte-for-byte preservation checks.
+index_blocks() {
+  mkdir -p "$2"
+  awk -v dir="$2" '
+    function flush(  file) {
+      if (buf != "") {
+        file = dir "/" name "@" ver
+        printf "%s", buf > file
+        close(file)
+      }
+      buf = ""; ver = ""
+    }
+    /^entries:/ { inentries = 1; next }
+    /^[^ ]/ { if (inentries) { flush(); inentries = 0 }; next }
+    !inentries { next }
+    /^  [^ -][^:]*:[ ]*$/ { flush(); name = $0; sub(/^  /, "", name); sub(/:[ ]*$/, "", name); next }
+    /^  - / { flush(); buf = $0 "\n"; next }
+    buf != "" {
+      buf = buf $0 "\n"
+      if ($0 ~ /^    version: /) { ver = $0; sub(/^    version: */, "", ver); gsub(/^"|"$/, "", ver) }
+    }
+    END { flush() }
+  ' "$1"
 }
 
 # lookup ENTRIES NAME VERSION -> the matching entry lines.
@@ -201,6 +259,7 @@ fi
 # --- 3. Read the published index from this repository's publish branch -----
 
 EXISTING=""
+BRANCH_SHA=""
 set +e
 git ls-remote --exit-code "$REMOTE" "refs/heads/$BRANCH" >"$WORK/ls-remote.out" 2>"$WORK/ls-remote.err"
 rc=$?
@@ -224,6 +283,11 @@ if [ "$rc" -eq 0 ]; then
     log "$BRANCH@${BRANCH_SHA:0:12} has no $INDEX_PATH: first release"
   fi
 fi
+if [ -n "$BASE_SHA_OUTPUT" ]; then
+  mkdir -p "$(dirname "$BASE_SHA_OUTPUT")"
+  printf '%s\n' "${BRANCH_SHA:-none}" >"$BASE_SHA_OUTPUT"
+  log "recorded publish branch revision ${BRANCH_SHA:-none} in $BASE_SHA_OUTPUT"
+fi
 
 # --- 4. The published index must be a valid Helm index we can read ---------
 # helm re-emitting the file through an empty-directory merge both validates it
@@ -231,12 +295,15 @@ fi
 # otherwise an entry it cannot see could be silently overridden below.
 
 if [ -n "$EXISTING" ]; then
+  grep -qE '^apiVersion: v1[ ]*$' "$EXISTING" || die "existing index $BRANCH:$INDEX_PATH does not declare 'apiVersion: v1'; refusing to replace it"
+  grep -qE '^entries:' "$EXISTING" || die "existing index $BRANCH:$INDEX_PATH has no 'entries' map; refusing to replace it"
   mkdir -p "$WORK/validate"
   if ! helm repo index "$WORK/validate" --merge "$EXISTING" >"$WORK/validate.log" 2>&1; then
     cat "$WORK/validate.log" >&2
     die "existing index $BRANCH:$INDEX_PATH is not a valid Helm repository index; refusing to replace it"
   fi
   index_entries "$EXISTING" >"$WORK/existing.entries"
+  validate_entries "$WORK/existing.entries" "existing index $BRANCH:$INDEX_PATH"
   index_entries "$WORK/validate/index.yaml" >"$WORK/existing.normalized.entries"
   if ! cmp -s "$WORK/existing.entries" "$WORK/existing.normalized.entries"; then
     diff "$WORK/existing.entries" "$WORK/existing.normalized.entries" >&2 || true
@@ -281,14 +348,27 @@ NEW="$WORK/stage/index.yaml"
 index_entries "$NEW" >"$WORK/new.entries"
 
 # --- 7. Nothing published may have changed; the new entry must be right ----
+# Every published entry's exact text must reappear in the output. This is a
+# whole-entry comparison, not a projection: a field helm re-emits differently
+# (or drops) fails here rather than being published silently.
 
 if [ -n "$EXISTING" ]; then
-  lost="$(LC_ALL=C comm -23 "$WORK/existing.entries" "$WORK/new.entries")"
-  if [ -n "$lost" ]; then
-    printf '%s\n' "$lost" >&2
-    die "merging $CHART_NAME $CHART_VERSION lost or altered the published entries above; refusing to publish"
-  fi
+  index_blocks "$EXISTING" "$WORK/existing.blocks"
+  index_blocks "$NEW" "$WORK/new.blocks"
+  for block in "$WORK/existing.blocks"/*; do
+    [ -e "$block" ] || break
+    key="$(basename "$block")"
+    if [ ! -f "$WORK/new.blocks/$key" ]; then
+      die "merging $CHART_NAME $CHART_VERSION lost the published entry $key; refusing to publish"
+    fi
+    if ! cmp -s "$block" "$WORK/new.blocks/$key"; then
+      diff "$block" "$WORK/new.blocks/$key" >&2 || true
+      die "merging $CHART_NAME $CHART_VERSION changed the published entry $key (diff above); refusing to publish. If the published index was written by another tool, re-normalize it deliberately before releasing"
+    fi
+  done
+  log "all $(count_lines "$WORK/existing.entries") published entries carried over verbatim"
 fi
+validate_entries "$WORK/new.entries" "merged index"
 lookup "$WORK/new.entries" "$CHART_NAME" "$CHART_VERSION" >"$WORK/new.match"
 if [ "$(count_lines "$WORK/new.match")" -ne 1 ]; then
   die "merged index does not list $CHART_NAME $CHART_VERSION exactly once"
