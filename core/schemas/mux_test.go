@@ -1125,6 +1125,85 @@ func TestToBifrostResponsesStreamResponse_ContentAfterToolStartNotEmittedPastDon
 	}
 }
 
+// TestToBifrostResponsesStreamResponse_TextAfterToolStartOpensNewMessageItem pins
+// text -> tool_call -> text: once the tool call closes the first text item, later
+// substantive text opens a new message item instead of being dropped, never lands on
+// the finished item, and both messages reach the completed output in stream order.
+func TestToBifrostResponsesStreamResponse_TextAfterToolStartOpensNewMessageItem(t *testing.T) {
+	state := AcquireChatToResponsesStreamState()
+	defer ReleaseChatToResponsesStreamState(state)
+
+	role := string(ChatMessageRoleAssistant)
+	before := "Let me check."
+	newline := "\n"
+	after := "Found it."
+	toolCallsFinish := string(BifrostFinishReasonToolCalls)
+	funcName := "lookup"
+	toolCallID := "call_1"
+
+	chunk := func(delta *ChatStreamResponseChoiceDelta, finish *string) *BifrostChatResponse {
+		return &BifrostChatResponse{
+			ID:    "chatcmpl-test",
+			Model: "test-model",
+			Choices: []BifrostResponseChoice{{
+				FinishReason:             finish,
+				ChatStreamResponseChoice: &ChatStreamResponseChoice{Delta: delta},
+			}},
+		}
+	}
+
+	var all []*BifrostResponsesStreamResponse
+	all = append(all, chunk(&ChatStreamResponseChoiceDelta{Role: &role, Content: &before}, nil).ToBifrostResponsesStreamResponse(state)...)
+	all = append(all, chunk(&ChatStreamResponseChoiceDelta{ToolCalls: []ChatAssistantMessageToolCall{{
+		Index: 0, ID: &toolCallID, Function: ChatAssistantMessageToolCallFunction{Name: &funcName, Arguments: `{"q":"x"}`},
+	}}}, nil).ToBifrostResponsesStreamResponse(state)...)
+	all = append(all, chunk(&ChatStreamResponseChoiceDelta{Content: &newline}, nil).ToBifrostResponsesStreamResponse(state)...)
+	all = append(all, chunk(&ChatStreamResponseChoiceDelta{Content: &after}, nil).ToBifrostResponsesStreamResponse(state)...)
+	all = append(all, chunk(&ChatStreamResponseChoiceDelta{}, &toolCallsFinish).ToBifrostResponsesStreamResponse(state)...)
+
+	doneIndices := map[int]bool{}
+	addedIndices := map[int]bool{}
+	var deltas []string
+	var completed *BifrostResponsesStreamResponse
+	for _, evt := range all {
+		switch evt.Type {
+		case ResponsesStreamResponseTypeOutputItemAdded:
+			if addedIndices[*evt.OutputIndex] {
+				t.Fatalf("output_index %d added twice", *evt.OutputIndex)
+			}
+			addedIndices[*evt.OutputIndex] = true
+		case ResponsesStreamResponseTypeOutputItemDone:
+			doneIndices[*evt.OutputIndex] = true
+		case ResponsesStreamResponseTypeOutputTextDelta:
+			if doneIndices[*evt.OutputIndex] {
+				t.Fatalf("output_text.delta %q emitted for output_index %d after its output_item.done", *evt.Delta, *evt.OutputIndex)
+			}
+			deltas = append(deltas, *evt.Delta)
+		case ResponsesStreamResponseTypeCompleted:
+			completed = evt
+		}
+	}
+
+	if want := []string{before, newline + after}; !reflect.DeepEqual(deltas, want) {
+		t.Fatalf("output_text deltas = %q, want %q", deltas, want)
+	}
+	if completed == nil || completed.Response == nil {
+		t.Fatal("expected response.completed event")
+	}
+	var got []string
+	for _, item := range completed.Response.Output {
+		switch {
+		case item.Type != nil && *item.Type == ResponsesMessageTypeMessage:
+			got = append(got, "message:"+*item.Content.ContentBlocks[0].Text)
+		case item.Type != nil && *item.Type == ResponsesMessageTypeFunctionCall:
+			got = append(got, "function_call:"+*item.Arguments)
+		}
+	}
+	if want := []string{"message:" + before, `function_call:{"q":"x"}`, "message:" + newline + after}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("completed output = %q, want %q", got, want)
+	}
+}
+
 func TestToBifrostResponsesStreamResponse_MapsLengthToIncompleteEvent(t *testing.T) {
 	state := AcquireChatToResponsesStreamState()
 	defer ReleaseChatToResponsesStreamState(state)
