@@ -338,6 +338,24 @@ func TestParse_RefSiblingsApplyIn31(t *testing.T) {
 	assert.NotContains(t, schema30["properties"], "extra")
 }
 
+// TestParse_RefSiblingDataIsNotAReference pins that keywords beside a $ref in 3.1
+// follow the same rules as anywhere else: a default whose data holds a "$ref" key,
+// and a property named "$ref", are not references, so the operation stays usable.
+func TestParse_RefSiblingDataIsNotAReference(t *testing.T) {
+	spec := `{"openapi":"3.1.0","info":{"title":"t","version":"1"},"servers":[{"url":"https://a"}],
+"paths":{"/docs":{"post":{"operationId":"putDoc","requestBody":{"required":true,"content":{"application/json":{"schema":{
+  "$ref":"#/components/schemas/Base",
+  "default":{"$ref":"https://example.com/not-a-schema"},
+  "properties":{"$ref":{"type":"string"}}}}}},"responses":{"200":{"description":"ok"}}}}},
+"components":{"schemas":{"Base":{"type":"object","properties":{"id":{"type":"integer"}}}}}}`
+	tool := findTool(t, synthesizeSpec(t, spec), "putDoc")
+	var schema map[string]any
+	require.NoError(t, json.Unmarshal(tool.InputSchema, &schema))
+	props := schema["properties"].(map[string]any)
+	assert.Contains(t, props, "id")
+	assert.Contains(t, props, "$ref", "a property named $ref is a property")
+}
+
 // TestParse_IgnoredHeaderParameters: OpenAPI says header parameters named
 // Accept, Content-Type or Authorization are ignored. Exposing them would make
 // the model supply the token and override the configured credential.
