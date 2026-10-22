@@ -167,23 +167,48 @@ get_previous_versions() {
     | tail -n "$count"
 }
 
-# local_binary_for_version prints the MIGRATION_LOCAL_BINARIES path for a version, if any.
+# local_binary_for_version prints the MIGRATION_LOCAL_BINARIES path for a version and
+# succeeds when the version has a mapping, even an empty one; it fails when it has none.
 local_binary_for_version() {
   local version="$1" pair
   for pair in ${MIGRATION_LOCAL_BINARIES:-}; do
     if [ "${pair%%=*}" = "$version" ]; then
       echo "${pair#*=}"
-      return
+      return 0
     fi
   done
+  return 1
+}
+
+# validate_local_binaries rejects any MIGRATION_LOCAL_BINARIES entry that does not name
+# an executable file. An explicit mapping that cannot run must fail the test: falling
+# back to the npx release would migrate from upstream's build while reporting success
+# for the fork build the override asked for.
+validate_local_binaries() {
+  local pair version binary status=0
+  for pair in ${MIGRATION_LOCAL_BINARIES:-}; do
+    version="${pair%%=*}"
+    binary="${pair#*=}"
+    if [ "$pair" = "$version" ] || [ -z "$version" ]; then
+      log_error "MIGRATION_LOCAL_BINARIES entry '$pair' is not a version=path pair"
+      status=1
+    elif [ -z "$binary" ] || [ -d "$binary" ] || [ ! -x "$binary" ]; then
+      log_error "MIGRATION_LOCAL_BINARIES maps $version to '$binary', which is not an executable file"
+      status=1
+    fi
+  done
+  return $status
 }
 
 # start_previous_bifrost starts a previous version in the background (setting BIFROST_PID):
 # a local binary when MIGRATION_LOCAL_BINARIES names one, otherwise the npx release.
 start_previous_bifrost() {
   local version="$1" server_log="$2" binary
-  binary="$(local_binary_for_version "$version")"
-  if [ -n "$binary" ]; then
+  if binary="$(local_binary_for_version "$version")"; then
+    if [ -z "$binary" ] || [ -d "$binary" ] || [ ! -x "$binary" ]; then
+      log_error "MIGRATION_LOCAL_BINARIES maps $version to '$binary', which is not an executable file"
+      return 1
+    fi
     log_info "Starting bifrost $version from local binary $binary..."
     "$binary" -app-dir "$TEMP_DIR" -port "$BIFROST_PORT" > "$server_log" 2>&1 &
   else
@@ -6140,7 +6165,9 @@ EOF
 
     # Start bifrost with this version using npx
     local server_log="$TEMP_DIR/server-$version.log"
-    start_previous_bifrost "$version" "$server_log"
+    if ! start_previous_bifrost "$version" "$server_log"; then
+      exit 1
+    fi
 
     if ! wait_for_bifrost "$server_log" 300; then
       log_error "Failed to start bifrost $version"
@@ -6348,7 +6375,9 @@ EOF
 
     # Start bifrost with this version using npx
     local server_log="$TEMP_DIR/server-$version.log"
-    start_previous_bifrost "$version" "$server_log"
+    if ! start_previous_bifrost "$version" "$server_log"; then
+      exit 1
+    fi
 
     if ! wait_for_bifrost "$server_log" 300; then
       log_error "Failed to start bifrost $version"
@@ -6430,6 +6459,10 @@ main() {
   log_info "Database type: $DB_TYPE"
   log_info "Versions to test: $VERSIONS_TO_TEST"
   log_info ""
+
+  if ! validate_local_binaries; then
+    exit 1
+  fi
 
   local exit_code=0
 
