@@ -173,6 +173,10 @@ jobs:
         with:
           version: "0.11.0"
           python-version: "3.12"
+          # The default (auto) caches on GitHub-hosted runners, and the action's post
+          # step fails when no uv cache dir exists, which is every run that skips the
+          # SDK suites for want of provider credentials. Nothing here needs the cache.
+          enable-cache: false
 
       - name: Install test dependencies
         run: |
