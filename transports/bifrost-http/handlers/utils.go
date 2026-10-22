@@ -212,19 +212,24 @@ func SendBifrostError(ctx *fasthttp.RequestCtx, bifrostErr *schemas.BifrostError
 		return
 	}
 
+	var statusCode int
 	if bifrostErr.StatusCode != nil {
-		ctx.SetStatusCode(lib.NormalizeJSONErrorStatus(*bifrostErr.StatusCode))
+		statusCode = lib.NormalizeJSONErrorStatus(*bifrostErr.StatusCode)
 	} else if !bifrostErr.IsBifrostError {
-		ctx.SetStatusCode(fasthttp.StatusBadRequest)
+		statusCode = fasthttp.StatusBadRequest
 	} else {
 		if bifrostErr.Error != nil &&
 			(bifrostErr.Error.Message == bifrost.ProviderAutoResolveErrorMessage ||
 				bifrostErr.Error.Message == bifrost.ModelAutoResolveErrorMessage) {
-			ctx.SetStatusCode(fasthttp.StatusBadRequest)
+			statusCode = fasthttp.StatusBadRequest
 		} else {
-			ctx.SetStatusCode(fasthttp.StatusInternalServerError)
+			statusCode = fasthttp.StatusInternalServerError
 		}
 	}
+	ctx.SetStatusCode(statusCode)
+	// The error envelope always carries the status actually sent. bifrostErr is the
+	// sanitizer's copy, so stamping it leaves the caller's error untouched.
+	bifrostErr.StatusCode = &statusCode
 
 	// Routed-identity headers from the error itself (provider/model/request-type +
 	// routing_info incl. is-fallback). Callers forward provider headers before this,
