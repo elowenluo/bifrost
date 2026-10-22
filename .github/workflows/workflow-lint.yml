@@ -75,6 +75,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 .github/workflows/scripts/test-docker-publish-gates.py
 
+      # Fake go only: release binaries must build through go.work, as the image does.
+      - name: Check release binaries build through the workspace
+        if: ${{ !cancelled() }}
+        run: ./.github/workflows/scripts/build-executables.test.sh
+
   release-no-main-push:
     name: Release scripts leave main to reviewed PRs
     runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
