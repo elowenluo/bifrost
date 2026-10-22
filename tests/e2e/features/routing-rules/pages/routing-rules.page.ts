@@ -922,7 +922,7 @@ export class RoutingRulesPage extends BasePage {
 
     const text = await row.locator("td").nth(index).textContent();
     const num = parseInt(text || "", 10);
-    return !isNaN(num) && num > 0 ? num : null;
+    return !isNaN(num) && num >= 0 ? num : null;
   }
 
   /**
