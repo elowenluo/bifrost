@@ -51,6 +51,16 @@ HOST_ARCH=$(uname -m)
 
 MODULE_PATH="$PROJECT_ROOT/transports/bifrost-http"
 
+# Build through the checked-in workspace, as transports/Dockerfile does. transports/go.mod
+# pins core, framework and plugin versions whose module tags the fork never cuts, so a
+# GOWORK=off build cannot resolve them; go.work's replaces point them at the sources the
+# release tested.
+WORKSPACE_FILE="$PROJECT_ROOT/go.work"
+if [[ ! -f "$WORKSPACE_FILE" ]]; then
+  echo "❌ $WORKSPACE_FILE not found; refusing to build bifrost-http outside the workspace" >&2
+  exit 1
+fi
+
 
 for platform in "${platforms[@]}"; do
   IFS='/' read -r PLATFORM_DIR GOARCH <<< "$platform"
@@ -89,7 +99,7 @@ for platform in "${platforms[@]}"; do
       CXX_COMPILER="aarch64-linux-musl-g++"
     fi
 
-    env GOWORK=off CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC_COMPILER" CXX="$CXX_COMPILER" \
+    env GOWORK="$WORKSPACE_FILE" CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC_COMPILER" CXX="$CXX_COMPILER" \
       go build -trimpath -tags "netgo,osusergo,sqlite_static" \
       -ldflags "-s -w -buildid= -extldflags '-static' -X main.Version=v${VERSION}" \
       -o "$PROJECT_ROOT/dist/$PLATFORM_DIR/$GOARCH/$output_name" .
@@ -100,7 +110,7 @@ for platform in "${platforms[@]}"; do
       CXX_COMPILER="x86_64-w64-mingw32-g++"
     fi
 
-    env GOWORK=off CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC_COMPILER" CXX="$CXX_COMPILER" \
+    env GOWORK="$WORKSPACE_FILE" CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC_COMPILER" CXX="$CXX_COMPILER" \
       go build -trimpath -ldflags "-s -w -buildid= -X main.Version=v${VERSION}" \
       -o "$PROJECT_ROOT/dist/$PLATFORM_DIR/$GOARCH/$output_name" .
 
@@ -113,7 +123,7 @@ for platform in "${platforms[@]}"; do
       CXX_COMPILER="oa64-clang++"
     fi
 
-    env GOWORK=off CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC_COMPILER" CXX="$CXX_COMPILER" \
+    env GOWORK="$WORKSPACE_FILE" CGO_ENABLED=1 GOOS="$GOOS" GOARCH="$GOARCH" CC="$CC_COMPILER" CXX="$CXX_COMPILER" \
       go build -trimpath -ldflags "-s -w -buildid= -X main.Version=v${VERSION}" \
       -o "$PROJECT_ROOT/dist/$PLATFORM_DIR/$GOARCH/$output_name" .
   fi

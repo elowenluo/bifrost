@@ -1,3 +1,5 @@
 - fix: drop namespace tools whose name Amazon Bedrock reserves (`web`, `image_gen`, `browser`, `python`) on the Bedrock and Bedrock Mantle Responses paths instead of forwarding them into a `tools.namespace` collision 400; a dropped Codex `web` namespace becomes the hosted `web_search` tool on Bedrock Mantle (upstream 1d89501c7)
 - fix: accept a bare-string Responses tool-call action such as `image_generation_call`'s `"generate"`, echo the image generation settings (`background`, `output_format`, `quality`, `revised_prompt`, `size`) on the completed item, and accept the `action` field on the `image_generation` tool (upstream c5c02ae74)
 - fix: deep copies of Responses messages keep the bare-string action and the image generation settings
+- fix: a JSON error response's `status_code` is the HTTP status actually sent, including the 400 and 500 defaults for errors that carried none
+- chore: v2.1.3 supersedes v2.1.2, which was published only as the image `ghcr.io/txehq/bifrost:v2.1.2` (built from 200d93f4c) with no `transports/v2.1.2` tag, GitHub release or binaries; release binaries now build through the checked-in `go.work`, as the image does
