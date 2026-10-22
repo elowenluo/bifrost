@@ -59,13 +59,18 @@ GO_COMMAND = re.compile(r"(?:^|[\s;&|(`])go (?:build|env|generate|get|install|li
 
 
 def scripts_calling_go():
-    """Workflow scripts whose non-comment lines run a go command."""
-    found = set()
-    for script in (WORKFLOWS / "scripts").glob("*.sh"):
-        code = "\n".join(line for line in script.read_text().splitlines() if not line.lstrip().startswith("#"))
-        if GO_COMMAND.search(code):
-            found.add(script.name)
-    return found
+    """Workflow scripts whose non-comment lines run a go command, directly or through
+    another workflow script they call or source."""
+    code = {
+        script.name: "\n".join(line for line in script.read_text().splitlines() if not line.lstrip().startswith("#"))
+        for script in (WORKFLOWS / "scripts").glob("*.sh")
+    }
+    found = {name for name, text in code.items() if GO_COMMAND.search(text)}
+    while True:
+        callers = {name for name, text in code.items() if name not in found and any(callee in text for callee in found)}
+        if not callers:
+            return found
+        found |= callers
 
 
 def evaluate(expression, context):
@@ -286,8 +291,11 @@ class GoStepsHaveTheWorkspaceGo(unittest.TestCase):
     which tries to fetch WORKSPACE_GO and is blocked: bifrost-http-release died that
     way before tagging v2.1.3 (TXE-4977)."""
 
-    def test_the_finalize_script_is_detected_as_calling_go(self):
-        self.assertIn("release-bifrost-http-finalize.sh", scripts_calling_go())
+    def test_scripts_calling_go_are_detected_directly_and_through_wrappers(self):
+        go_scripts = scripts_calling_go()
+        self.assertIn("release-bifrost-http-finalize.sh", go_scripts)
+        # release-all-plugins.sh runs go only through release-single-plugin.sh.
+        self.assertIn("release-all-plugins.sh", go_scripts)
 
     def test_every_go_step_follows_setup_go_for_the_workspace_version(self):
         go_scripts = scripts_calling_go()
