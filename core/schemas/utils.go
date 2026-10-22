@@ -1413,6 +1413,11 @@ func DeepCopyResponsesMessage(original ResponsesMessage) ResponsesMessage {
 		// Deep copy Action
 		if original.ResponsesToolMessage.Action != nil {
 			copy.ResponsesToolMessage.Action = &ResponsesToolMessageActionStruct{}
+			// Deep copy bare-string action.
+			if original.ResponsesToolMessage.Action.ResponsesToolCallActionStr != nil {
+				copyActionString := *original.ResponsesToolMessage.Action.ResponsesToolCallActionStr
+				copy.ResponsesToolMessage.Action.ResponsesToolCallActionStr = &copyActionString
+			}
 
 			if original.ResponsesToolMessage.Action.ResponsesComputerToolCallAction != nil {
 				copyAction := *original.ResponsesToolMessage.Action.ResponsesComputerToolCallAction
@@ -1491,6 +1496,32 @@ func DeepCopyResponsesMessage(original ResponsesMessage) ResponsesMessage {
 				copyCall.Document = &docCopy
 			}
 			copy.ResponsesToolMessage.ResponsesWebFetchCall = &copyCall
+		}
+
+		// Deep copy ResponsesImageGenerationCall.
+		if original.ResponsesToolMessage.ResponsesImageGenerationCall != nil {
+			copyToolCall := *original.ResponsesToolMessage.ResponsesImageGenerationCall
+			if original.ResponsesToolMessage.ResponsesImageGenerationCall.Background != nil {
+				copyBackground := *original.ResponsesToolMessage.ResponsesImageGenerationCall.Background
+				copyToolCall.Background = &copyBackground
+			}
+			if original.ResponsesToolMessage.ResponsesImageGenerationCall.OutputFormat != nil {
+				copyOutputFormat := *original.ResponsesToolMessage.ResponsesImageGenerationCall.OutputFormat
+				copyToolCall.OutputFormat = &copyOutputFormat
+			}
+			if original.ResponsesToolMessage.ResponsesImageGenerationCall.Quality != nil {
+				copyQuality := *original.ResponsesToolMessage.ResponsesImageGenerationCall.Quality
+				copyToolCall.Quality = &copyQuality
+			}
+			if original.ResponsesToolMessage.ResponsesImageGenerationCall.RevisedPrompt != nil {
+				copyRevisedPrompt := *original.ResponsesToolMessage.ResponsesImageGenerationCall.RevisedPrompt
+				copyToolCall.RevisedPrompt = &copyRevisedPrompt
+			}
+			if original.ResponsesToolMessage.ResponsesImageGenerationCall.Size != nil {
+				copySize := *original.ResponsesToolMessage.ResponsesImageGenerationCall.Size
+				copyToolCall.Size = &copySize
+			}
+			copy.ResponsesToolMessage.ResponsesImageGenerationCall = &copyToolCall
 		}
 
 		// Add other embedded tool calls as needed...
