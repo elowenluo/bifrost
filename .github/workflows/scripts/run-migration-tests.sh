@@ -29,9 +29,17 @@ set -euo pipefail
 #                              that bifrost-http binary instead of the npx release, e.g. a
 #                              fork build of the deployed version ("v2.1.1=/tmp/bifrost-http")
 
-# Pull all the tags available. A local checkout can hold same-named tags from another
-# remote that would clobber; version discovery then works from the local tags.
-git fetch --tags || echo "[WARN] git fetch --tags failed; using local tags" >&2
+# Pull all the tags available. Version discovery reads them, so a failed fetch would
+# leave stale or missing tags and quietly narrow the coverage this test reports. It is
+# fatal unless MIGRATION_TEST_VERSIONS names the versions to cover (a local checkout
+# whose same-named tags from another remote refuse to be clobbered).
+if ! git fetch --tags; then
+  if [ -z "${MIGRATION_TEST_VERSIONS:-}" ]; then
+    echo "[ERROR] git fetch --tags failed; set MIGRATION_TEST_VERSIONS to the versions to cover" >&2
+    exit 1
+  fi
+  echo "[WARN] git fetch --tags failed; testing the versions MIGRATION_TEST_VERSIONS names" >&2
+fi
 
 # Get the absolute path of the script directory
 if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
