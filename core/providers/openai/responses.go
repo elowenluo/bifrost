@@ -662,6 +662,11 @@ func ToOpenAIResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.B
 	if reserved := reservedToolNamespaces[toolProvider]; len(reserved) > 0 && len(req.Tools) > 0 {
 		substitute := toolProvider == schemas.BedrockMantle && caps.SupportsWebSearch(true)
 		req.Tools = dropReservedNamespaceTools(req.Tools, reserved, substitute)
+		// filterUnsupportedTools returns early on an empty list, so clear the
+		// tool_choice here when the drop removed every tool; it is a 400 on its own.
+		if len(req.Tools) == 0 {
+			req.ToolChoice = nil
+		}
 	}
 
 	// Normalize function tool parameters for deterministic JSON serialization, and
