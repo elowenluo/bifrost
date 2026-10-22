@@ -105,6 +105,75 @@ func dropReservedNamespaceTools(tools []schemas.ResponsesTool, reserved map[stri
 	return out
 }
 
+// toolChoiceNames collects the names a tool_choice can use for tools: each tool's
+// own name and, for a namespace, its member tools both bare and qualified
+// ("web" and "web.run" for namespace web holding run).
+func toolChoiceNames(tools []schemas.ResponsesTool) map[string]bool {
+	names := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		if tool.Name == nil {
+			continue
+		}
+		names[*tool.Name] = true
+		if tool.Type == schemas.ResponsesToolTypeNamespace && tool.ResponsesToolNamespace != nil {
+			for _, member := range tool.ResponsesToolNamespace.Tools {
+				if member.Name != nil {
+					names[*member.Name] = true
+					names[*tool.Name+"."+*member.Name] = true
+				}
+			}
+		}
+	}
+	return names
+}
+
+// reconcileToolChoiceWithDroppedTools keeps a tool_choice consistent with a tool
+// list that lost some tools (before -> after). A choice naming a tool that is gone
+// is cleared, the fallback used when every tool is stripped; allowed_tools loses
+// its entries for removed tools and is cleared when none remain. A name some
+// surviving tool still answers to is not removed. The caller's choice is never
+// modified: a changed choice is a new value.
+func reconcileToolChoiceWithDroppedTools(choice *schemas.ResponsesToolChoice, before, after []schemas.ResponsesTool) *schemas.ResponsesToolChoice {
+	if len(after) == 0 {
+		// A tool_choice without tools is a 400 on its own, and filterUnsupportedTools
+		// returns early on an empty list.
+		return nil
+	}
+	if choice == nil || choice.ResponsesToolChoiceStruct == nil {
+		return choice
+	}
+	removed := toolChoiceNames(before)
+	for name := range toolChoiceNames(after) {
+		delete(removed, name)
+	}
+	if len(removed) == 0 {
+		return choice
+	}
+	s := choice.ResponsesToolChoiceStruct
+	if s.Type != schemas.ResponsesToolChoiceTypeAllowedTools {
+		if s.Name != nil && removed[*s.Name] {
+			return nil
+		}
+		return choice
+	}
+	tools := make([]schemas.ResponsesToolChoiceAllowedToolDef, 0, len(s.Tools))
+	for _, def := range s.Tools {
+		if def.Name != nil && removed[*def.Name] {
+			continue
+		}
+		tools = append(tools, def)
+	}
+	if len(tools) == len(s.Tools) {
+		return choice
+	}
+	if len(tools) == 0 {
+		return nil
+	}
+	reconciled := *s
+	reconciled.Tools = tools
+	return &schemas.ResponsesToolChoice{ResponsesToolChoiceStruct: &reconciled}
+}
+
 // supportsAdditionalToolsItem reports whether provider accepts codex
 // additional_tools input items. Unlisted providers are assumed to.
 func supportsAdditionalToolsItem(provider schemas.ModelProvider) bool {
@@ -661,12 +730,9 @@ func ToOpenAIResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.B
 	toolProvider := schemas.ResolveBaseProvider(ctx, bifrostReq.Provider)
 	if reserved := reservedToolNamespaces[toolProvider]; len(reserved) > 0 && len(req.Tools) > 0 {
 		substitute := toolProvider == schemas.BedrockMantle && caps.SupportsWebSearch(true)
-		req.Tools = dropReservedNamespaceTools(req.Tools, reserved, substitute)
-		// filterUnsupportedTools returns early on an empty list, so clear the
-		// tool_choice here when the drop removed every tool; it is a 400 on its own.
-		if len(req.Tools) == 0 {
-			req.ToolChoice = nil
-		}
+		kept := dropReservedNamespaceTools(req.Tools, reserved, substitute)
+		req.ToolChoice = reconcileToolChoiceWithDroppedTools(req.ToolChoice, req.Tools, kept)
+		req.Tools = kept
 	}
 
 	// Normalize function tool parameters for deterministic JSON serialization, and

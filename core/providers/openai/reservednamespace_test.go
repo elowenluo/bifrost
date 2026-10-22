@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/capsohq/bifrost/core/schemas"
@@ -121,6 +122,82 @@ func TestToOpenAIResponsesRequest_ReservedNamespaceDropClearsOrphanToolChoice(t 
 			} else {
 				require.Nil(t, result.ToolChoice)
 			}
+		})
+	}
+}
+
+// A tool_choice that names a tool the reserved-namespace drop removed must not
+// reach the provider while other tools survive: a named choice of a dropped tool
+// is cleared (the fallback used when the tools themselves vanish), allowed_tools
+// entries for dropped tools are removed, and an allowed set left empty clears
+// the choice. A surviving tool of the same name keeps its choice, and the
+// caller's choice is never modified.
+func TestToOpenAIResponsesRequest_ReservedNamespaceDropReconcilesToolChoice(t *testing.T) {
+	namespace := func(name string, inner ...string) schemas.ResponsesTool {
+		tools := make([]schemas.ResponsesTool, 0, len(inner))
+		for _, n := range inner {
+			tools = append(tools, schemas.ResponsesTool{Type: schemas.ResponsesToolTypeFunction, Name: schemas.Ptr(n), ResponsesToolFunction: &schemas.ResponsesToolFunction{}})
+		}
+		return schemas.ResponsesTool{Type: schemas.ResponsesToolTypeNamespace, Name: schemas.Ptr(name), ResponsesToolNamespace: &schemas.ResponsesToolNamespace{Tools: tools}}
+	}
+	function := func(name string) schemas.ResponsesTool {
+		return schemas.ResponsesTool{Type: schemas.ResponsesToolTypeFunction, Name: schemas.Ptr(name), ResponsesToolFunction: &schemas.ResponsesToolFunction{}}
+	}
+	named := func(name string) *schemas.ResponsesToolChoice {
+		return &schemas.ResponsesToolChoice{ResponsesToolChoiceStruct: &schemas.ResponsesToolChoiceStruct{Type: schemas.ResponsesToolChoiceTypeFunction, Name: schemas.Ptr(name)}}
+	}
+	allowed := func(names ...string) *schemas.ResponsesToolChoice {
+		defs := make([]schemas.ResponsesToolChoiceAllowedToolDef, 0, len(names))
+		for _, n := range names {
+			defs = append(defs, schemas.ResponsesToolChoiceAllowedToolDef{Type: "function", Name: schemas.Ptr(n)})
+		}
+		return &schemas.ResponsesToolChoice{ResponsesToolChoiceStruct: &schemas.ResponsesToolChoiceStruct{Type: schemas.ResponsesToolChoiceTypeAllowedTools, Mode: schemas.Ptr("required"), Tools: defs}}
+	}
+	tools := []schemas.ResponsesTool{namespace("web", "run"), namespace("multi_agent_v1", "spawn")}
+
+	tests := []struct {
+		name     string
+		provider schemas.ModelProvider
+		tools    []schemas.ResponsesTool
+		choice   *schemas.ResponsesToolChoice
+		want     string // serialized tool_choice, or "" for absent
+	}{
+		{"bedrock named choice of the dropped namespace", schemas.Bedrock, tools, named("web"), ""},
+		{"bedrock named choice of a dropped inner tool", schemas.Bedrock, tools, named("run"), ""},
+		{"bedrock qualified name of a dropped inner tool", schemas.Bedrock, tools, named("web.run"), ""},
+		{"bedrock named choice of a surviving tool", schemas.Bedrock, tools, named("spawn"), `{"name":"spawn","type":"function"}`},
+		{"bedrock allowed_tools keeps only survivors", schemas.Bedrock, tools, allowed("web.run", "spawn"), `{"mode":"required","tools":[{"name":"spawn","type":"function"}],"type":"allowed_tools"}`},
+		{"bedrock allowed_tools left empty clears the choice", schemas.Bedrock, tools, allowed("web", "run"), ""},
+		{"mantle substitution clears a choice of the replaced namespace", schemas.BedrockMantle, tools, named("run"), ""},
+		{"a surviving function named like the namespace keeps its choice", schemas.Bedrock, []schemas.ResponsesTool{namespace("web", "run"), function("web")}, named("web"), `{"name":"web","type":"function"}`},
+		{"openai leaves the choice alone", schemas.OpenAI, tools, named("run"), `{"name":"run","type":"function"}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			before, err := schemas.Marshal(tc.choice)
+			require.NoError(t, err)
+			result := ToOpenAIResponsesRequest(nil, &schemas.BifrostResponsesRequest{
+				Provider: tc.provider,
+				Model:    "gpt-5",
+				Input: []schemas.ResponsesMessage{{
+					Role:    schemas.Ptr(schemas.ResponsesInputMessageRoleUser),
+					Content: &schemas.ResponsesMessageContent{ContentStr: schemas.Ptr("hi")},
+				}},
+				Params: &schemas.ResponsesParameters{Tools: tc.tools, ToolChoice: tc.choice},
+			})
+			require.NotNil(t, result)
+			body, err := schemas.Marshal(result)
+			require.NoError(t, err)
+			var wire map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(body, &wire))
+			if tc.want == "" {
+				require.NotContains(t, wire, "tool_choice")
+			} else {
+				require.JSONEq(t, tc.want, string(wire["tool_choice"]))
+			}
+			after, err := schemas.Marshal(tc.choice)
+			require.NoError(t, err)
+			require.Equal(t, string(before), string(after), "the caller's tool_choice must not change")
 		})
 	}
 }
