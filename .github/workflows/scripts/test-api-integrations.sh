@@ -56,6 +56,7 @@ TEMP_DIR=$(mktemp -d)
 MERGED_CONFIG="$TEMP_DIR/config.json"
 SERVER_LOG="$TEMP_DIR/server.log"
 BIFROST_PID=""
+STUB_PID=""
 
 cleanup() {
   local exit_code=$?
@@ -63,6 +64,10 @@ cleanup() {
     echo "🧹 Stopping bifrost (PID $BIFROST_PID)..."
     kill "$BIFROST_PID" 2>/dev/null || true
     wait "$BIFROST_PID" 2>/dev/null || true
+  fi
+  if [ -n "${STUB_PID:-}" ] && kill -0 "$STUB_PID" 2>/dev/null; then
+    kill "$STUB_PID" 2>/dev/null || true
+    wait "$STUB_PID" 2>/dev/null || true
   fi
   echo "🧹 Stopping Docker services..."
   docker compose -f "$COMPOSE_FILE" down 2>/dev/null || true
@@ -149,6 +154,49 @@ jq --arg host "$POSTGRES_HOST" --arg port "$POSTGRES_PORT" --arg user "$POSTGRES
      "config_store": {"enabled": true, "type": "postgres", "config": {"host": $host, "port": $port, "user": $user, "password": $pass, "db_name": $db, "ssl_mode": $ssl}},
      "logs_store":   {"enabled": true, "type": "postgres", "config": {"host": $host, "port": $port, "user": $user, "password": $pass, "db_name": $db, "ssl_mode": $ssl}}
    }' "$SOURCE_CONFIG" > "$MERGED_CONFIG"
+
+# Providers whose API key secret is unset get a local list-models stub instead of
+# their real endpoint (TXE-4950). The VK List Models Restriction folder needs one
+# VK-allowed provider (openai) that can list models and some disallowed ones
+# (mistral, groq) that can too, so its exclusion checks are not vacuous. A run
+# with the real secret set keeps the real provider; nothing else in the
+# collection calls these providers' inference endpoints.
+STUB_PORT="${LIST_MODELS_STUB_PORT:-18090}"
+STUBBED_PROVIDERS=""
+for provider in openai mistral groq; do
+  key_var="$(printf '%s' "$provider" | tr '[:lower:]' '[:upper:]')_API_KEY"
+  if [ -z "${!key_var:-}" ]; then
+    STUBBED_PROVIDERS="$STUBBED_PROVIDERS $provider"
+  fi
+done
+if [ -n "$STUBBED_PROVIDERS" ]; then
+  echo "🧩 No API key for:$STUBBED_PROVIDERS; serving their list-models from a local stub on port $STUB_PORT"
+  node "$SCRIPT_DIR/list-models-stub.js" "$STUB_PORT" > "$TEMP_DIR/list-models-stub.log" 2>&1 &
+  STUB_PID=$!
+  STUB_READY=false
+  for _ in $(seq 1 30); do
+    if curl -fs -o /dev/null "http://127.0.0.1:$STUB_PORT/openai/v1/models"; then
+      STUB_READY=true
+      break
+    fi
+    if ! kill -0 "$STUB_PID" 2>/dev/null; then
+      break
+    fi
+    sleep 1
+  done
+  if [ "$STUB_READY" = false ]; then
+    echo "❌ list-models stub did not start on port $STUB_PORT"
+    cat "$TEMP_DIR/list-models-stub.log"
+    exit 1
+  fi
+  for provider in $STUBBED_PROVIDERS; do
+    key_var="$(printf '%s' "$provider" | tr '[:lower:]' '[:upper:]')_API_KEY"
+    export "$key_var=ci-list-models-stub"
+    jq --arg p "$provider" --arg url "http://127.0.0.1:$STUB_PORT/$provider" \
+      '.providers[$p].network_config.base_url = $url' "$MERGED_CONFIG" > "$MERGED_CONFIG.tmp"
+    mv "$MERGED_CONFIG.tmp" "$MERGED_CONFIG"
+  done
+fi
 
 # The authenticated newman pass needs a first admin account. Creating it is the one
 # config write the server accepts unauthenticated, and it demands a bootstrap token

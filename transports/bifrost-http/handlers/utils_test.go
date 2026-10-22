@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
@@ -122,5 +123,63 @@ func TestSendBifrostError_NormalStatusPreserved(t *testing.T) {
 		if got := ctx.Response.StatusCode(); got != code {
 			t.Errorf("status got %d, want %d", got, code)
 		}
+	}
+}
+
+// TestSendBifrostError_BodyStatusCodeMatchesResponse pins the error-envelope
+// contract: the JSON body always carries status_code, equal to the HTTP status
+// actually written. A core error with no StatusCode (GET /v1/models when every
+// provider fails key selection, TXE-4950) was sent as a 400 whose body had no
+// status_code, and a normalized upstream code left the body disagreeing with
+// the response.
+func TestSendBifrostError_BodyStatusCodeMatchesResponse(t *testing.T) {
+	cases := []struct {
+		name string
+		err  *schemas.BifrostError
+		want int
+	}{
+		{
+			name: "no status, not a bifrost error",
+			err: &schemas.BifrostError{
+				Error:       &schemas.ErrorField{Message: "no valid keys found for provider: openai"},
+				ExtraFields: schemas.BifrostErrorExtraFields{Provider: schemas.OpenAI, RequestType: schemas.ListModelsRequest},
+			},
+			want: fasthttp.StatusBadRequest,
+		},
+		{
+			name: "no status, bifrost error",
+			err:  &schemas.BifrostError{IsBifrostError: true, Error: &schemas.ErrorField{Message: "boom"}},
+			want: fasthttp.StatusInternalServerError,
+		},
+		{
+			name: "bodyless upstream status normalized",
+			err:  &schemas.BifrostError{StatusCode: new(fasthttp.StatusNoContent), Error: &schemas.ErrorField{Message: "boom"}},
+			want: fasthttp.StatusBadGateway,
+		},
+		{
+			name: "explicit status",
+			err:  &schemas.BifrostError{StatusCode: new(fasthttp.StatusTooManyRequests), Error: &schemas.ErrorField{Message: "boom"}},
+			want: fasthttp.StatusTooManyRequests,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &fasthttp.RequestCtx{}
+			SendBifrostError(ctx, tc.err)
+			if got := ctx.Response.StatusCode(); got != tc.want {
+				t.Fatalf("status got %d, want %d", got, tc.want)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(ctx.Response.Body(), &body); err != nil {
+				t.Fatalf("body is not JSON: %v (%q)", err, ctx.Response.Body())
+			}
+			got, ok := body["status_code"].(float64)
+			if !ok {
+				t.Fatalf("body has no numeric status_code: %s", ctx.Response.Body())
+			}
+			if int(got) != tc.want {
+				t.Errorf("body status_code got %d, want %d", int(got), tc.want)
+			}
+		})
 	}
 }
