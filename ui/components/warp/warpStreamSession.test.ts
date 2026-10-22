@@ -97,6 +97,26 @@ describe("WarpStreamSession", () => {
 		expect(conversationIds).toEqual(["conv-1"]);
 	});
 
+	// An error frame is as terminal as done: the server filed the turn under a thread
+	// and charged for it, so the id and usage it carries are kept.
+	it("keeps the thread id and usage an error frame carries", async () => {
+		const sending = session.send([], "q");
+		await settle();
+		await net.push({
+			type: "error",
+			code: "upstream_error",
+			message: "boom",
+			conversation_id: "conv-err",
+			usage: { prompt_tokens: 7, completion_tokens: 1, total_tokens: 8 },
+		});
+		await net.close();
+		await sending;
+
+		expect(session.conversationId).toBe("conv-err");
+		expect(conversationIds).toEqual(["conv-err"]);
+		expect(committed[0].usage).toEqual({ prompt_tokens: 7, completion_tokens: 1, total_tokens: 8 });
+	});
+
 	it("notifies subscribers per event and hands a late subscriber the in-flight state", async () => {
 		const seen: string[] = [];
 		session.subscribe(() => seen.push(session.getSnapshot().text));

@@ -194,6 +194,10 @@ export class WarpStreamSession {
 					// Terminal. Always encoded so a colon in a code-less message isn't read as a code.
 					terminalError = encodeTurnError(event.code, event.message ?? (event.code ? "" : "error"));
 					sawTerminal = true;
+					// A failed turn is still filed and paid for: keep what it spent and the thread
+					// it was filed under, so the next question continues that thread.
+					usage = event.usage ?? usage;
+					if (event.conversation_id) this.setConversationId(event.conversation_id);
 					break;
 				default:
 					break;
