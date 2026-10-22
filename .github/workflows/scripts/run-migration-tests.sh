@@ -23,9 +23,23 @@ set -euo pipefail
 #   POSTGRES_DB       - PostgreSQL database (default: bifrost)
 #   BIFROST_PORT      - Port for bifrost server (default: 8089)
 #   VERSIONS_TO_TEST  - Number of previous versions to test (default: 3)
+#   MIGRATION_TEST_VERSIONS  - Space-separated versions to test instead of the newest
+#                              VERSIONS_TO_TEST tags (e.g. "v2.1.1 v2.3.1")
+#   MIGRATION_LOCAL_BINARIES - Space-separated version=path pairs; a listed version runs
+#                              that bifrost-http binary instead of the npx release, e.g. a
+#                              fork build of the deployed version ("v2.1.1=/tmp/bifrost-http")
 
-# Pull all the tags available
-git fetch --tags
+# Pull all the tags available. Version discovery reads them, so a failed fetch would
+# leave stale or missing tags and quietly narrow the coverage this test reports. It is
+# fatal unless MIGRATION_TEST_VERSIONS names the versions to cover (a local checkout
+# whose same-named tags from another remote refuse to be clobbered).
+if ! git fetch --tags; then
+  if [ -z "${MIGRATION_TEST_VERSIONS:-}" ]; then
+    echo "[ERROR] git fetch --tags failed; set MIGRATION_TEST_VERSIONS to the versions to cover" >&2
+    exit 1
+  fi
+  echo "[WARN] git fetch --tags failed; testing the versions MIGRATION_TEST_VERSIONS names" >&2
+fi
 
 # Get the absolute path of the script directory
 if command -v readlink >/dev/null 2>&1 && readlink -f "$0" >/dev/null 2>&1; then
@@ -140,6 +154,10 @@ trap cleanup EXIT
 # not its tag exists yet (the release tag is created after this test runs).
 get_previous_versions() {
   local count="${1:-3}"
+  if [ -n "${MIGRATION_TEST_VERSIONS:-}" ]; then
+    printf '%s\n' $MIGRATION_TEST_VERSIONS
+    return
+  fi
   cd "$REPO_ROOT"
   local current
   current="v$(tr -d '[:space:]' < "$REPO_ROOT/transports/version")"
@@ -147,6 +165,33 @@ get_previous_versions() {
     | sort -V -u \
     | awk -v cur="$current" '$0 == cur { exit } { print }' \
     | tail -n "$count"
+}
+
+# local_binary_for_version prints the MIGRATION_LOCAL_BINARIES path for a version, if any.
+local_binary_for_version() {
+  local version="$1" pair
+  for pair in ${MIGRATION_LOCAL_BINARIES:-}; do
+    if [ "${pair%%=*}" = "$version" ]; then
+      echo "${pair#*=}"
+      return
+    fi
+  done
+}
+
+# start_previous_bifrost starts a previous version in the background (setting BIFROST_PID):
+# a local binary when MIGRATION_LOCAL_BINARIES names one, otherwise the npx release.
+start_previous_bifrost() {
+  local version="$1" server_log="$2" binary
+  binary="$(local_binary_for_version "$version")"
+  if [ -n "$binary" ]; then
+    log_info "Starting bifrost $version from local binary $binary..."
+    "$binary" -app-dir "$TEMP_DIR" -port "$BIFROST_PORT" > "$server_log" 2>&1 &
+  else
+    log_info "Starting bifrost $version via npx..."
+    npx @maximhq/bifrost --transport-version "$version" \
+      --app-dir "$TEMP_DIR" --port "$BIFROST_PORT" > "$server_log" 2>&1 &
+  fi
+  BIFROST_PID=$!
 }
 
 # Wait for bifrost to start
@@ -6095,11 +6140,7 @@ EOF
 
     # Start bifrost with this version using npx
     local server_log="$TEMP_DIR/server-$version.log"
-    log_info "Starting bifrost $version via npx..."
-
-    npx @maximhq/bifrost --transport-version "$version" \
-      --app-dir "$TEMP_DIR" --port "$BIFROST_PORT" > "$server_log" 2>&1 &
-    BIFROST_PID=$!
+    start_previous_bifrost "$version" "$server_log"
 
     if ! wait_for_bifrost "$server_log" 300; then
       log_error "Failed to start bifrost $version"
@@ -6307,11 +6348,7 @@ EOF
 
     # Start bifrost with this version using npx
     local server_log="$TEMP_DIR/server-$version.log"
-    log_info "Starting bifrost $version via npx..."
-
-    npx @maximhq/bifrost --transport-version "$version" \
-      --app-dir "$TEMP_DIR" --port "$BIFROST_PORT" > "$server_log" 2>&1 &
-    BIFROST_PID=$!
+    start_previous_bifrost "$version" "$server_log"
 
     if ! wait_for_bifrost "$server_log" 300; then
       log_error "Failed to start bifrost $version"
