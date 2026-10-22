@@ -57250,7 +57250,7 @@
           "content": "<Warning>\n  This path is deprecated and will be removed in the following major release.\n  Use `/api/governance/users/{user_id}/virtual-keys` instead.\n</Warning>\n<Note>\n  This endpoint is available in [Bifrost Enterprise](https://www.getmaxim.ai/bifrost/enterprise) only.\n</Note>\n<Warning>\n  **Deprecated.** Use [`POST /api/governance/users/{user_id}/virtual-keys`](/api-reference/governance/mint-an-extra-virtual-key-for-a-user)\n  instead. This path still works and behaves identically, but will be removed in a future major release.\n</Warning>\n"
         },
         "summary": "Add an extra virtual key under a user's access profile (deprecated) (deprecated path)",
-        "description": "Issues an additional virtual key for the user. \n\nVirtual keys are scoped to the **user**, not to one access profile: what a request may do with\nthe key is resolved at request time from whichever of the user's active profiles grant it. So\n`profile_id` is ignored — the key minted is the same whichever profile is named, and it is not\nbound to that profile or removed with it. The user must hold at least one access profile.\n",
+        "description": "Issues an additional virtual key for the user.\n\nVirtual keys are scoped to the **user**, not to one access profile: what a request may do with\nthe key is resolved at request time from whichever of the user's active profiles grant it. So\n`profile_id` is ignored — the key minted is the same whichever profile is named, and it is not\nbound to that profile or removed with it. The user must hold at least one access profile.\n",
         "tags": [
           "Access Profiles"
         ],
@@ -74837,7 +74837,7 @@
           "content": "<Warning>\n  This path is deprecated and will be removed in the following major release.\n  Use `/api/governance/users/{user_id}/virtual-keys` instead.\n</Warning>\n<Note>\n  This endpoint is available in [Bifrost Enterprise](https://www.getmaxim.ai/bifrost/enterprise) only.\n</Note>\n<Warning>\n  **Deprecated.** Use [`POST /api/governance/users/{user_id}/virtual-keys`](/api-reference/governance/mint-an-extra-virtual-key-for-a-user)\n  instead. This path still works and behaves identically, but will be removed in a future major release.\n</Warning>\n"
         },
         "summary": "Add an extra virtual key under a user's access profile (deprecated) (deprecated path)",
-        "description": "Issues an additional virtual key for the user. \n\nVirtual keys are scoped to the **user**, not to one access profile: what a request may do with\nthe key is resolved at request time from whichever of the user's active profiles grant it. So\n`profile_id` is ignored — the key minted is the same whichever profile is named, and it is not\nbound to that profile or removed with it. The user must hold at least one access profile.\n",
+        "description": "Issues an additional virtual key for the user.\n\nVirtual keys are scoped to the **user**, not to one access profile: what a request may do with\nthe key is resolved at request time from whichever of the user's active profiles grant it. So\n`profile_id` is ignored — the key minted is the same whichever profile is named, and it is not\nbound to that profile or removed with it. The user must hold at least one access profile.\n",
         "tags": [
           "Access Profiles"
         ],

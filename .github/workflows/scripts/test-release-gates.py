@@ -7,6 +7,10 @@ to run and pass before an image is published, even when no module publishes itse
 because its changelog is empty. This evaluates the real `if:` expressions, and the
 detect-changes outputs they read, against scripted job results; no runner is involved.
 
+It also pins the protected-main contract: release jobs build and tag the tested commit,
+never write main, and an image is published only after the bifrost-http release it
+ships has verified and completed.
+
 Usage: python3 test-release-gates.py
 """
 import ast
@@ -18,6 +22,7 @@ import yaml
 
 WORKFLOW = Path(__file__).resolve().parent.parent / "release-pipeline.yml"
 JOBS = yaml.safe_load(WORKFLOW.read_text())["jobs"]
+WORKFLOWS = WORKFLOW.parent
 
 # Suites an image or transport release embeds the code of, and the skip flags that may
 # legitimately skip each one (an admin skip_tests dispatch, or --skip-core-test for the
@@ -32,6 +37,20 @@ EMBEDDED_SUITES = {
     "test-plugins": ("skip-tests",),
 }
 PUBLISHERS = ["bifrost-http-prep", "docker-build-amd64", "docker-build-arm64", "docker-build-ubi9-amd64", "docker-build-ubi9-arm64"]
+DOCKER_PUBLISHERS = PUBLISHERS[1:]
+# Jobs that follow a due bifrost-http release. The docs changelog clears
+# transports/changelog.md, and detection reads an empty one as "no release due", so it
+# must not be generated for a release that never completed.
+RELEASE_FOLLOWERS = [*DOCKER_PUBLISHERS, "push-mintlify-changelog"]
+# Jobs that build or tag release artifacts from the checkout.
+BUILDERS = ["build-binaries-x86", "build-binaries-arm64", "bifrost-http-release", *DOCKER_PUBLISHERS]
+# (workflow, job) that used to push to main and now leave a patch artifact instead.
+PATCH_JOBS = {
+    ("release-pipeline.yml", "bifrost-http-prep"): "release-prep",
+    ("release-pipeline.yml", "push-mintlify-changelog"): "docs-changelog",
+    ("release-cli.yml", "push-mintlify-changelog"): "cli-docs-changelog",
+}
+UPLOAD_ARTIFACT = "actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f"
 
 
 def evaluate(expression, context):
@@ -76,13 +95,14 @@ def _evaluate_node(node):
     raise AssertionError(f"unsupported expression element {ast.dump(node)}")
 
 
-def transport_only_context(results, skip_tests="false", skip_core_test="false"):
-    """A transport/Docker release with every module changelog empty."""
+def transport_only_context(results, skip_tests="false", skip_core_test="false", transport_release="true"):
+    """A transport/Docker release with every module changelog empty. With
+    transport_release="false" only the image is released (its version is already tagged)."""
     flags = {
         "core-needs-release": "false",
         "framework-needs-release": "false",
         "plugins-need-release": "false",
-        "bifrost-http-needs-release": "true",
+        "bifrost-http-needs-release": transport_release,
         "docker-needs-release": "true",
     }
     context = {f"steps.detect.outputs.{k}": v for k, v in flags.items()}
@@ -148,6 +168,102 @@ class TransportOnlyReleaseGates(unittest.TestCase):
         for publisher in PUBLISHERS:
             with self.subTest(flag="skip-core-test does not cover unit", publisher=publisher):
                 self.assertEqual(evaluate(str(JOBS[publisher]["if"]), context), "false")
+
+
+class DockerWaitsForTheTransportRelease(unittest.TestCase):
+    """An image ships the transport, so while a bifrost-http release is due it is
+    published only after prep verified the commit and the release completed. A skipped
+    prep or release is not a pass: the fork's v2.1.1 images went out with both skipped.
+    The docs changelog waits the same way (see RELEASE_FOLLOWERS)."""
+
+    def test_a_due_release_that_did_not_complete_blocks_every_image(self):
+        for job in ("bifrost-http-prep", "bifrost-http-release"):
+            for result in ("skipped", "failure", "cancelled"):
+                context = transport_only_context({job: result})
+                for publisher in RELEASE_FOLLOWERS:
+                    with self.subTest(job=job, result=result, publisher=publisher):
+                        self.assertEqual(evaluate(str(JOBS[publisher]["if"]), context), "false")
+
+    def test_a_completed_release_publishes_every_image(self):
+        context = transport_only_context({})
+        for publisher in RELEASE_FOLLOWERS:
+            with self.subTest(publisher=publisher):
+                self.assertEqual(evaluate(str(JOBS[publisher]["if"]), context), "true")
+
+    def test_an_image_only_release_does_not_wait_for_a_transport_release(self):
+        context = transport_only_context({"bifrost-http-prep": "skipped", "bifrost-http-release": "skipped"}, transport_release="false")
+        for publisher in RELEASE_FOLLOWERS:
+            with self.subTest(publisher=publisher):
+                self.assertEqual(evaluate(str(JOBS[publisher]["if"]), context), "true")
+
+    def test_images_need_the_jobs_their_condition_reads(self):
+        for publisher in RELEASE_FOLLOWERS:
+            with self.subTest(publisher=publisher):
+                self.assertIn("bifrost-http-prep", JOBS[publisher]["needs"])
+                self.assertIn("bifrost-http-release", JOBS[publisher]["needs"])
+
+
+class ReleaseJobsLeaveMainToReviewedPRs(unittest.TestCase):
+    """main requires a reviewed codex-review check, so no release job writes it: generated
+    changes leave as patch artifacts, and every artifact is built from the tested commit."""
+
+    def test_no_job_pulls_or_pushes_a_branch(self):
+        for name in ("release-pipeline.yml", "release-cli.yml", "openapi-bundle.yml"):
+            jobs = yaml.safe_load((WORKFLOWS / name).read_text())["jobs"]
+            for job_name, job in jobs.items():
+                for step in job.get("steps", []):
+                    run = step.get("run", "")
+                    with self.subTest(workflow=name, job=job_name, step=step.get("name")):
+                        self.assertNotIn("git pull", run)
+                        self.assertNotIn("git commit", run)
+                        self.assertIsNone(re.search(r"git push origin (main|HEAD|\"?\$)", run))
+
+    def test_scripts_that_pushed_to_main_no_longer_write_git(self):
+        for script in ("release-bifrost-http-prep.sh", "push-mintlify-changelog.sh", "push-cli-mintlify-changelog.sh"):
+            lines = (WORKFLOWS / "scripts" / script).read_text().splitlines()
+            code = "\n".join(line for line in lines if not line.lstrip().startswith("#"))
+            for command in ("git pull", "git push", "git commit", "git config", "go mod tidy"):
+                with self.subTest(script=script, command=command):
+                    self.assertFalse(command in code, f"{script} runs {command}")
+
+    def test_builders_assert_the_tested_commit_before_building(self):
+        for job_name in BUILDERS:
+            steps = JOBS[job_name]["steps"]
+            checks = [i for i, step in enumerate(steps) if "is not the tested commit" in step.get("run", "")]
+            builds = [i for i, step in enumerate(steps)
+                      if "docker-build-push-action" in step.get("uses", "")
+                      or any(s in step.get("run", "") for s in ("build-executables.sh", "release-bifrost-http-finalize.sh"))]
+            with self.subTest(job=job_name):
+                self.assertTrue(checks and builds, "no tested-commit check or no build step found")
+                self.assertLess(checks[0], builds[0])
+
+    def test_patch_jobs_hold_no_write_token_and_upload_only_their_patch(self):
+        for (name, job_name), kind in PATCH_JOBS.items():
+            job = yaml.safe_load((WORKFLOWS / name).read_text())["jobs"][job_name]
+            with self.subTest(workflow=name, job=job_name):
+                self.assertEqual(job["permissions"], {"contents": "read"})
+                checkout = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@"))
+                self.assertIs(checkout["with"].get("persist-credentials"), False)
+                self.assertNotIn("token", checkout["with"])
+                uploads = [s for s in job["steps"] if s.get("uses", "").startswith("actions/upload-artifact@")]
+                self.assertEqual(len(uploads), 1)
+                upload = uploads[0]
+                self.assertTrue(upload["uses"].startswith(UPLOAD_ARTIFACT))
+                self.assertEqual(upload["if"], "${{ !cancelled() }}")
+                self.assertNotIn("continue-on-error", upload)
+                self.assertEqual(upload["with"]["path"], f"${{{{ runner.temp }}}}/release-patches/{kind}-v*.patch")
+                self.assertTrue(upload["with"]["name"].startswith(f"{kind}-v"))
+                self.assertTrue(upload["with"]["name"].endswith("-${{ github.sha }}"))
+                self.assertLessEqual(upload["with"]["retention-days"], 14)
+                self.assertIs(upload["with"]["overwrite"], True)
+
+    def test_openapi_bundle_only_checks_the_spec(self):
+        workflow = yaml.safe_load((WORKFLOWS / "openapi-bundle.yml").read_text())
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        for job in workflow["jobs"].values():
+            runs = " ".join(step.get("run", "") for step in job["steps"])
+            self.assertIn("is stale", runs)
+            self.assertNotIn("git push", runs)
 
 
 if __name__ == "__main__":
