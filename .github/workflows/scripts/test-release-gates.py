@@ -38,6 +38,10 @@ EMBEDDED_SUITES = {
 }
 PUBLISHERS = ["bifrost-http-prep", "docker-build-amd64", "docker-build-arm64", "docker-build-ubi9-amd64", "docker-build-ubi9-arm64"]
 DOCKER_PUBLISHERS = PUBLISHERS[1:]
+# Jobs that follow a due bifrost-http release. The docs changelog clears
+# transports/changelog.md, and detection reads an empty one as "no release due", so it
+# must not be generated for a release that never completed.
+RELEASE_FOLLOWERS = [*DOCKER_PUBLISHERS, "push-mintlify-changelog"]
 # Jobs that build or tag release artifacts from the checkout.
 BUILDERS = ["build-binaries-x86", "build-binaries-arm64", "bifrost-http-release", *DOCKER_PUBLISHERS]
 # (workflow, job) that used to push to main and now leave a patch artifact instead.
@@ -169,30 +173,31 @@ class TransportOnlyReleaseGates(unittest.TestCase):
 class DockerWaitsForTheTransportRelease(unittest.TestCase):
     """An image ships the transport, so while a bifrost-http release is due it is
     published only after prep verified the commit and the release completed. A skipped
-    prep or release is not a pass: the fork's v2.1.1 images went out with both skipped."""
+    prep or release is not a pass: the fork's v2.1.1 images went out with both skipped.
+    The docs changelog waits the same way (see RELEASE_FOLLOWERS)."""
 
     def test_a_due_release_that_did_not_complete_blocks_every_image(self):
         for job in ("bifrost-http-prep", "bifrost-http-release"):
             for result in ("skipped", "failure", "cancelled"):
                 context = transport_only_context({job: result})
-                for publisher in DOCKER_PUBLISHERS:
+                for publisher in RELEASE_FOLLOWERS:
                     with self.subTest(job=job, result=result, publisher=publisher):
                         self.assertEqual(evaluate(str(JOBS[publisher]["if"]), context), "false")
 
     def test_a_completed_release_publishes_every_image(self):
         context = transport_only_context({})
-        for publisher in DOCKER_PUBLISHERS:
+        for publisher in RELEASE_FOLLOWERS:
             with self.subTest(publisher=publisher):
                 self.assertEqual(evaluate(str(JOBS[publisher]["if"]), context), "true")
 
     def test_an_image_only_release_does_not_wait_for_a_transport_release(self):
         context = transport_only_context({"bifrost-http-prep": "skipped", "bifrost-http-release": "skipped"}, transport_release="false")
-        for publisher in DOCKER_PUBLISHERS:
+        for publisher in RELEASE_FOLLOWERS:
             with self.subTest(publisher=publisher):
                 self.assertEqual(evaluate(str(JOBS[publisher]["if"]), context), "true")
 
     def test_images_need_the_jobs_their_condition_reads(self):
-        for publisher in DOCKER_PUBLISHERS:
+        for publisher in RELEASE_FOLLOWERS:
             with self.subTest(publisher=publisher):
                 self.assertIn("bifrost-http-prep", JOBS[publisher]["needs"])
                 self.assertIn("bifrost-http-release", JOBS[publisher]["needs"])
