@@ -319,6 +319,11 @@ func deepCopyResponsesMessage(original schemas.ResponsesMessage) schemas.Respons
 		// Deep copy Action
 		if original.ResponsesToolMessage.Action != nil {
 			copy.ResponsesToolMessage.Action = &schemas.ResponsesToolMessageActionStruct{}
+			// Deep copy bare-string action.
+			if original.ResponsesToolMessage.Action.ResponsesToolCallActionStr != nil {
+				copyActionString := *original.ResponsesToolMessage.Action.ResponsesToolCallActionStr
+				copy.ResponsesToolMessage.Action.ResponsesToolCallActionStr = &copyActionString
+			}
 
 			if original.ResponsesToolMessage.Action.ResponsesComputerToolCallAction != nil {
 				copyAction := *original.ResponsesToolMessage.Action.ResponsesComputerToolCallAction
@@ -463,6 +468,26 @@ func deepCopyResponsesMessage(original schemas.ResponsesMessage) schemas.Respons
 
 		if original.ResponsesToolMessage.ResponsesImageGenerationCall != nil {
 			copyCall := *original.ResponsesToolMessage.ResponsesImageGenerationCall
+			if original.ResponsesToolMessage.ResponsesImageGenerationCall.Background != nil {
+				copyBackground := *original.ResponsesToolMessage.ResponsesImageGenerationCall.Background
+				copyCall.Background = &copyBackground
+			}
+			if original.ResponsesToolMessage.ResponsesImageGenerationCall.OutputFormat != nil {
+				copyOutputFormat := *original.ResponsesToolMessage.ResponsesImageGenerationCall.OutputFormat
+				copyCall.OutputFormat = &copyOutputFormat
+			}
+			if original.ResponsesToolMessage.ResponsesImageGenerationCall.Quality != nil {
+				copyQuality := *original.ResponsesToolMessage.ResponsesImageGenerationCall.Quality
+				copyCall.Quality = &copyQuality
+			}
+			if original.ResponsesToolMessage.ResponsesImageGenerationCall.RevisedPrompt != nil {
+				copyRevisedPrompt := *original.ResponsesToolMessage.ResponsesImageGenerationCall.RevisedPrompt
+				copyCall.RevisedPrompt = &copyRevisedPrompt
+			}
+			if original.ResponsesToolMessage.ResponsesImageGenerationCall.Size != nil {
+				copySize := *original.ResponsesToolMessage.ResponsesImageGenerationCall.Size
+				copyCall.Size = &copySize
+			}
 			copy.ResponsesToolMessage.ResponsesImageGenerationCall = &copyCall
 		}
 
