@@ -179,3 +179,15 @@ func TestA2AExportWireProfiles(t *testing.T) {
 		}
 	}
 }
+
+// TestA2AExportStatusMessageFollowsContentPolicy pins that an A2A operation's error
+// text, which can echo the caller's input, is exported only when content is.
+func TestA2AExportStatusMessageFollowsContentPolicy(t *testing.T) {
+	span := &schemas.Span{SpanID: "0102030405060708", Name: "a2a", Kind: schemas.SpanKindA2AOperation,
+		StartTime: time.Now(), EndTime: time.Now(), Status: schemas.SpanStatusError, StatusMsg: "agent rejected: 'my card 4111 1111'"}
+	shown := convertSpanToOTELSpan("0102030405060708090a0b0c0d0e0f10", span, false, false)
+	require.Equal(t, span.StatusMsg, shown.Status.Message)
+	hidden := convertSpanToOTELSpan("0102030405060708090a0b0c0d0e0f10", span, true, false)
+	require.Empty(t, hidden.Status.Message, "suppressed content must not leave as a status message")
+	require.Equal(t, shown.Status.Code, hidden.Status.Code, "the error status itself is kept")
+}
