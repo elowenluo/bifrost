@@ -60,6 +60,120 @@ var ProviderFeatures = map[schemas.ModelProvider]ResponsesFeatureSupport{
 	schemas.BedrockMantle: {AdditionalToolsItem: false, ContextManagement: false},
 }
 
+// reservedToolNamespaces lists the namespace-tool names a provider keeps for
+// its own server-side tools. Bedrock rejects a user-defined namespace with one
+// of these names outright on both the bedrock-mantle and bedrock-runtime
+// Responses endpoints: "Invalid Value: 'tools.namespace'. User-defined namespace
+// 'web' collides with an existing tool namespace." (HTTP 400). Codex registers a
+// client-side "web" namespace (web.run) whenever it believes it is talking to
+// OpenAI, which is the case when Bifrost is configured through openai_base_url.
+// Live-verified against openai.gpt-5.6-luna on 2026-09-09.
+var reservedToolNamespaces = map[schemas.ModelProvider]map[string]bool{
+	schemas.Bedrock:       {"web": true, "image_gen": true, "browser": true, "python": true},
+	schemas.BedrockMantle: {"web": true, "image_gen": true, "browser": true, "python": true},
+}
+
+// dropReservedNamespaceTools returns a copy of tools without the namespace tools
+// the provider reserves. A dropped "web" namespace is Codex's client-side web.run
+// tool, which only executes against OpenAI's search endpoint anyway. When
+// substituteWebSearch is set (bedrock-mantle, which hosts web search) and the
+// caller sent no web_search tool, the hosted tool is appended with
+// external_web_access=false, matching what Codex sends to non-OpenAI providers and
+// what AWS documents for Codex on Mantle
+// (https://docs.aws.amazon.com/bedrock/latest/userguide/web-search.html).
+func dropReservedNamespaceTools(tools []schemas.ResponsesTool, reserved map[string]bool, substituteWebSearch bool) []schemas.ResponsesTool {
+	out := make([]schemas.ResponsesTool, 0, len(tools)+1)
+	droppedWeb, hasWebSearch := false, false
+	for _, tool := range tools {
+		if tool.Type == schemas.ResponsesToolTypeWebSearch {
+			hasWebSearch = true
+		}
+		if tool.Type == schemas.ResponsesToolTypeNamespace && tool.Name != nil && reserved[*tool.Name] {
+			if *tool.Name == "web" {
+				droppedWeb = true
+			}
+			continue
+		}
+		out = append(out, tool)
+	}
+	if substituteWebSearch && droppedWeb && !hasWebSearch {
+		out = append(out, schemas.ResponsesTool{
+			Type:                   schemas.ResponsesToolTypeWebSearch,
+			ResponsesToolWebSearch: &schemas.ResponsesToolWebSearch{ExternalWebAccess: new(false)},
+		})
+	}
+	return out
+}
+
+// toolChoiceNames collects the names a tool_choice can use for tools: each tool's
+// own name and, for a namespace, its member tools both bare and qualified
+// ("web" and "web.run" for namespace web holding run).
+func toolChoiceNames(tools []schemas.ResponsesTool) map[string]bool {
+	names := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		if tool.Name == nil {
+			continue
+		}
+		names[*tool.Name] = true
+		if tool.Type == schemas.ResponsesToolTypeNamespace && tool.ResponsesToolNamespace != nil {
+			for _, member := range tool.ResponsesToolNamespace.Tools {
+				if member.Name != nil {
+					names[*member.Name] = true
+					names[*tool.Name+"."+*member.Name] = true
+				}
+			}
+		}
+	}
+	return names
+}
+
+// reconcileToolChoiceWithDroppedTools keeps a tool_choice consistent with a tool
+// list that lost some tools (before -> after). A choice naming a tool that is gone
+// is cleared, the fallback used when every tool is stripped; allowed_tools loses
+// its entries for removed tools and is cleared when none remain. A name some
+// surviving tool still answers to is not removed. The caller's choice is never
+// modified: a changed choice is a new value.
+func reconcileToolChoiceWithDroppedTools(choice *schemas.ResponsesToolChoice, before, after []schemas.ResponsesTool) *schemas.ResponsesToolChoice {
+	if len(after) == 0 {
+		// A tool_choice without tools is a 400 on its own, and filterUnsupportedTools
+		// returns early on an empty list.
+		return nil
+	}
+	if choice == nil || choice.ResponsesToolChoiceStruct == nil {
+		return choice
+	}
+	removed := toolChoiceNames(before)
+	for name := range toolChoiceNames(after) {
+		delete(removed, name)
+	}
+	if len(removed) == 0 {
+		return choice
+	}
+	s := choice.ResponsesToolChoiceStruct
+	if s.Type != schemas.ResponsesToolChoiceTypeAllowedTools {
+		if s.Name != nil && removed[*s.Name] {
+			return nil
+		}
+		return choice
+	}
+	tools := make([]schemas.ResponsesToolChoiceAllowedToolDef, 0, len(s.Tools))
+	for _, def := range s.Tools {
+		if def.Name != nil && removed[*def.Name] {
+			continue
+		}
+		tools = append(tools, def)
+	}
+	if len(tools) == len(s.Tools) {
+		return choice
+	}
+	if len(tools) == 0 {
+		return nil
+	}
+	reconciled := *s
+	reconciled.Tools = tools
+	return &schemas.ResponsesToolChoice{ResponsesToolChoiceStruct: &reconciled}
+}
+
 // supportsAdditionalToolsItem reports whether provider accepts codex
 // additional_tools input items. Unlisted providers are assumed to.
 func supportsAdditionalToolsItem(provider schemas.ModelProvider) bool {
@@ -606,6 +720,19 @@ func ToOpenAIResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.B
 	// normalization below so hoisted function tools get the same treatment.
 	if len(hoistedTools) > 0 {
 		req.Tools = append(append(make([]schemas.ResponsesTool, 0, len(req.Tools)+len(hoistedTools)), req.Tools...), hoistedTools...)
+	}
+
+	// Drop namespace tools the provider reserves; they are a hard 400. Runs after
+	// the hoist so additional_tools namespaces get the same treatment, and before
+	// filterUnsupportedTools so a substituted web_search goes through its copy path.
+	// Match on the base provider: a custom provider built on bedrock reports its own
+	// key, which the map does not know, so the reserved namespace would reach AWS.
+	toolProvider := schemas.ResolveBaseProvider(ctx, bifrostReq.Provider)
+	if reserved := reservedToolNamespaces[toolProvider]; len(reserved) > 0 && len(req.Tools) > 0 {
+		substitute := toolProvider == schemas.BedrockMantle && caps.SupportsWebSearch(true)
+		kept := dropReservedNamespaceTools(req.Tools, reserved, substitute)
+		req.ToolChoice = reconcileToolChoiceWithDroppedTools(req.ToolChoice, req.Tools, kept)
+		req.Tools = kept
 	}
 
 	// Normalize function tool parameters for deterministic JSON serialization, and

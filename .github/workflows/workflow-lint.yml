@@ -50,6 +50,17 @@ jobs:
       - name: Check version-format guard
         run: ./.github/workflows/scripts/version-format.test.sh
 
+      # Replays release-pipeline.yml conditions: a transport-only release must run and
+      # pass the core, CLI, framework and plugin suites it embeds before publishing.
+      - name: Check release gates require the embedded suites
+        if: ${{ !cancelled() }}
+        run: python3 .github/workflows/scripts/test-release-gates.py
+
+      # Fake git/npx/docker/lsof only: an invalid override must fail before any baseline starts.
+      - name: Check migration local-binary overrides fail closed
+        if: ${{ !cancelled() }}
+        run: ./.github/workflows/scripts/migration-local-binaries.test.sh
+
       # Release image publication guards. Fake curl/docker only: nothing reaches a registry.
       # They run even when an earlier guard failed, so their own results are always reported.
       - name: Check GHCR tag probe fails closed

@@ -1,6 +1,7 @@
 package streaming
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -534,4 +535,56 @@ func TestBuildResponsesMessageItemDoneKeepsStreamedText(t *testing.T) {
 	require.Len(t, msgs[0].Content.ContentBlocks, 1)
 	require.NotNil(t, msgs[0].Content.ContentBlocks[0].Text)
 	require.Equal(t, "hello world", *msgs[0].Content.ContentBlocks[0].Text)
+}
+
+// An image_generation_call streamed through the accumulator carries a
+// bare-string action ("generate") and the generation settings. The stream
+// copier must keep both: finalization returns the item in OutputMessages, and
+// an Action left with no variant set fails to marshal ("responses tool message
+// action struct is empty"). The settings must also not alias the caller's.
+func TestProcessStreamingResponseKeepsImageGenerationCall(t *testing.T) {
+	acc := testResponsesAccumulator(t)
+	ctx := schemas.NewBifrostContext(context.Background(), time.Time{})
+	ctx.SetValue(schemas.BifrostContextKeyAccumulatorID, "responses-image-generation")
+
+	var item schemas.ResponsesMessage
+	require.NoError(t, schemas.Unmarshal([]byte(`{"type":"image_generation_call","id":"ig_1","status":"completed","action":"generate","result":"aGVsbG8=","background":"opaque","output_format":"png","quality":"high","revised_prompt":"a cat","size":"1024x1024"}`), &item))
+	extra := schemas.BifrostResponseExtraFields{
+		RequestType:            schemas.ResponsesStreamRequest,
+		Provider:               schemas.OpenAI,
+		OriginalModelRequested: "gpt-5",
+	}
+
+	extra.ChunkIndex = 0
+	_, err := acc.ProcessStreamingResponse(ctx, &schemas.BifrostResponse{ResponsesStreamResponse: &schemas.BifrostResponsesStreamResponse{
+		Type:        schemas.ResponsesStreamResponseTypeOutputItemDone,
+		Item:        &item,
+		ExtraFields: extra,
+	}}, nil)
+	require.NoError(t, err)
+
+	extra.ChunkIndex = 1
+	ctx.SetValue(schemas.BifrostContextKeyStreamEndIndicator, true)
+	processed, err := acc.ProcessStreamingResponse(ctx, &schemas.BifrostResponse{ResponsesStreamResponse: &schemas.BifrostResponsesStreamResponse{
+		Type:        schemas.ResponsesStreamResponseTypeCompleted,
+		Response:    &schemas.BifrostResponsesResponse{ID: bifrost.Ptr("resp_image")},
+		ExtraFields: extra,
+	}}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, processed)
+	require.NotNil(t, processed.Data)
+	require.Len(t, processed.Data.OutputMessages, 1)
+
+	got, err := schemas.Marshal(processed.Data.OutputMessages[0])
+	require.NoError(t, err, "accumulated image_generation_call must marshal")
+	want, err := schemas.Marshal(item)
+	require.NoError(t, err)
+	require.JSONEq(t, string(want), string(got))
+
+	// Mutating the caller's item after the fact leaves the accumulated copy intact.
+	*item.ResponsesToolMessage.Action.ResponsesToolCallActionStr = "edit"
+	*item.ResponsesToolMessage.ResponsesImageGenerationCall.Size = "512x512"
+	out := processed.Data.OutputMessages[0].ResponsesToolMessage
+	require.Equal(t, "generate", *out.Action.ResponsesToolCallActionStr)
+	require.Equal(t, "1024x1024", *out.ResponsesImageGenerationCall.Size)
 }

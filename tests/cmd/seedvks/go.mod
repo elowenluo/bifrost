@@ -9,7 +9,7 @@ replace (
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/capsohq/bifrost/core v1.8.5
+	github.com/capsohq/bifrost/core v1.8.6
 	github.com/capsohq/bifrost/framework v1.3.16
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
