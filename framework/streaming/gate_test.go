@@ -2413,3 +2413,20 @@ func TestGate_OverflowNeverReleasesUnapprovedChunks(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 }
+
+// TestGate_EstimateChunkBytesCountsShellAndPatchCarriers: shell commands, their
+// streamed and final output, and apply_patch diffs grow with what the tool did, so
+// the replay cap must count them even when no raw capture is attached.
+func TestGate_EstimateChunkBytesCountsShellAndPatchCarriers(t *testing.T) {
+	big := strings.Repeat("o", 64*1024)
+	for name, r := range map[string]*schemas.BifrostResponsesStreamResponse{
+		"command":      {Command: &big},
+		"diff":         {Diff: &big},
+		"output":       {Output: []schemas.ResponsesShellCallOutputContent{{Stdout: big}, {Stderr: big}}},
+		"output delta": {ShellOutputDelta: &schemas.ResponsesShellCallOutputDelta{Stdout: &big}},
+	} {
+		if got := estimateChunkBytes(&schemas.BifrostStreamChunk{BifrostResponsesStreamResponse: r}); got < int64(len(big)) {
+			t.Errorf("%s: estimate = %d, want >= %d", name, got, len(big))
+		}
+	}
+}
