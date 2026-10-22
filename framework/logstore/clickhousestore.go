@@ -1236,8 +1236,12 @@ func (s *ClickHouseLogStore) PruneWarpConversations(ctx context.Context, ownerID
 		}
 	}
 	defer s.lockRMWBatch("warp_conversations", ids)()
+	// Bound in milliseconds: a bound time.Time is sent at whole seconds, which
+	// left a stale thread whose updated_at had a fractional second undeleted on
+	// every pass.
+	placeholder, bound := timestampBound("clickhouse", newest, upperTimeBound)
 	deleted, err := s.chDeleteWhere(ctx, "warp_conversations",
-		"id IN ? AND owner_id = ? AND updated_at <= ?", ids, ownerID, newest)
+		"id IN ? AND owner_id = ? AND updated_at <= "+placeholder, ids, ownerID, bound)
 	if err != nil {
 		return 0, err
 	}

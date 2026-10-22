@@ -1785,3 +1785,24 @@ func TestClickHouseBatchUpdateHidingALogClearsItsContent(t *testing.T) {
 	require.NoError(t, err)
 	assertHiddenContentCleared(t, found)
 }
+
+// TestClickHouseWarpPruneDeletesThreadsWithFractionalSeconds pins that pruning
+// removes stale threads whose updated_at falls inside a second: bound at whole
+// seconds, the newest of them was never deleted.
+func TestClickHouseWarpPruneDeletesThreadsWithFractionalSeconds(t *testing.T) {
+	store := trySetupClickHouseStore(t)
+	ctx := context.Background()
+	owner := fmt.Sprintf("user:prune-ms-%d", time.Now().UnixNano())
+	base := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	for i, offset := range []time.Duration{250 * time.Millisecond, 750 * time.Millisecond, 2*time.Second + 500*time.Millisecond} {
+		at := base.Add(offset)
+		require.NoError(t, store.CreateWarpConversation(ctx, &WarpConversation{ID: fmt.Sprintf("%s-%d", owner, i), OwnerID: owner, Title: "t", CreatedAt: at, UpdatedAt: at}))
+	}
+	deleted, err := store.PruneWarpConversations(ctx, owner, 1)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), deleted, "both stale threads go, the newer one inside its second included")
+	list, err := store.ListWarpConversations(ctx, owner, 10)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, owner+"-2", list[0].ID)
+}
