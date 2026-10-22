@@ -2641,8 +2641,7 @@ jobs:
     if: "always() && needs.check-skip.outputs.should-skip != 'true' && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.bifrost-http-needs-release == 'true' && (needs.test-core.result == 'success' || (needs.test-core.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true')) || (needs.test-core.result == 'failure' && needs.approve-flaky-test-core.result == 'success')) && (needs.test-core-integrations.result == 'success' || (needs.test-core-integrations.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true'))) && (needs.test-core-unit.result == 'success' || (needs.test-core-unit.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-cli-harness.result == 'success' || (needs.test-cli-harness.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.resolve-cli-versions.result == 'success' || (needs.resolve-cli-versions.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-framework.result == 'success' || (needs.test-framework.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-plugins.result == 'success' || (needs.test-plugins.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-bifrost-http.result == 'success' || needs.test-bifrost-http.result == 'skipped') && (needs.test-migrations.result == 'success' || needs.test-migrations.result == 'skipped') && (needs.test-api-integrations.result == 'success' || needs.test-api-integrations.result == 'skipped') && (needs.test-cost-accuracy.result == 'success' || needs.test-cost-accuracy.result == 'skipped') && (needs.test-docker-image-amd64.result == 'success' || needs.test-docker-image-amd64.result == 'skipped') && (needs.test-docker-image-arm64.result == 'success' || needs.test-docker-image-arm64.result == 'skipped') && (needs.detect-changes.outputs.core-needs-release == 'false' || needs.core-release.result == 'success' || needs.core-release.result == 'skipped') && (needs.detect-changes.outputs.framework-needs-release == 'false' || needs.framework-release.result == 'success' || needs.framework-release.result == 'skipped') && (needs.detect-changes.outputs.plugins-need-release == 'false' || needs.plugins-release.result == 'success' || needs.plugins-release.result == 'skipped')"
     runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
     permissions:
-      contents: write
-      packages: write
+      contents: read
     outputs:
       success: ${{ steps.prep.outputs.success }}
     steps:
@@ -2669,7 +2668,7 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-          token: ${{ secrets.GH_TOKEN || github.token }}
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
@@ -2681,16 +2680,22 @@ jobs:
         with:
           node-version: "25"
 
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Prep bifrost-http release
+      # Verify only. On go.mod drift it fails and leaves the change as a patch for a
+      # reviewed PR; nothing is committed, and nothing builds from this commit.
+      - name: Verify bifrost-http release prep
         id: prep
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
         run: ./.github/workflows/scripts/release-bifrost-http-prep.sh "${{ needs.detect-changes.outputs.transport-version }}"
+
+      # Uploaded whatever the prep result, and it never changes that result.
+      - name: Upload release prep patch
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: release-prep-v${{ needs.detect-changes.outputs.transport-version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-patches/release-prep-v*.patch
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
 
   # Build darwin, windows, linux/amd64 binaries and upload to R2
   build-binaries-x86:
@@ -2730,8 +2735,9 @@ jobs:
           fetch-tags: true
           token: ${{ secrets.GH_TOKEN || github.token }}
 
-      - name: Pull latest changes
-        run: git pull origin ${{ github.ref_name }}
+      # Build exactly the commit the tests ran on; nothing newer is fetched in.
+      - name: Assert the checkout is the tested commit
+        run: '[ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::checkout $(git rev-parse HEAD) is not the tested commit $GITHUB_SHA"; exit 1; }'
 
       - name: Set up Go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
@@ -2801,8 +2807,9 @@ jobs:
           fetch-tags: true
           token: ${{ secrets.GH_TOKEN || github.token }}
 
-      - name: Pull latest changes
-        run: git pull origin ${{ github.ref_name }}
+      # Build exactly the commit the tests ran on; nothing newer is fetched in.
+      - name: Assert the checkout is the tested commit
+        run: '[ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::checkout $(git rev-parse HEAD) is not the tested commit $GITHUB_SHA"; exit 1; }'
 
       - name: Set up Go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
@@ -2866,8 +2873,9 @@ jobs:
           fetch-tags: true
           token: ${{ secrets.GH_TOKEN || github.token }}
 
-      - name: Pull latest changes
-        run: git pull origin ${{ github.ref_name }}
+      # Build exactly the commit the tests ran on; nothing newer is fetched in.
+      - name: Assert the checkout is the tested commit
+        run: '[ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::checkout $(git rev-parse HEAD) is not the tested commit $GITHUB_SHA"; exit 1; }'
 
       - name: Configure R2
         env:
@@ -2907,9 +2915,10 @@ jobs:
         core-release,
         framework-release,
         plugins-release,
+        bifrost-http-prep,
         bifrost-http-release,
       ]
-    if: "always() && needs.check-skip.outputs.should-skip != 'true' && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.docker-needs-release == 'true' && (needs.test-core.result == 'success' || (needs.test-core.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true')) || (needs.test-core.result == 'failure' && needs.approve-flaky-test-core.result == 'success')) && (needs.test-core-integrations.result == 'success' || (needs.test-core-integrations.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true'))) && (needs.test-core-unit.result == 'success' || (needs.test-core-unit.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-cli-harness.result == 'success' || (needs.test-cli-harness.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.resolve-cli-versions.result == 'success' || (needs.resolve-cli-versions.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-framework.result == 'success' || (needs.test-framework.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-plugins.result == 'success' || (needs.test-plugins.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-bifrost-http.result == 'success' || needs.test-bifrost-http.result == 'skipped') && (needs.test-migrations.result == 'success' || needs.test-migrations.result == 'skipped') && (needs.test-api-integrations.result == 'success' || needs.test-api-integrations.result == 'skipped') && (needs.test-cost-accuracy.result == 'success' || needs.test-cost-accuracy.result == 'skipped') && (needs.test-docker-image-amd64.result == 'success' || needs.test-docker-image-amd64.result == 'skipped') && (needs.test-docker-image-arm64.result == 'success' || needs.test-docker-image-arm64.result == 'skipped') && (needs.detect-changes.outputs.core-needs-release == 'false' || needs.core-release.result == 'success' || needs.core-release.result == 'skipped') && (needs.detect-changes.outputs.framework-needs-release == 'false' || needs.framework-release.result == 'success' || needs.framework-release.result == 'skipped') && (needs.detect-changes.outputs.plugins-need-release == 'false' || needs.plugins-release.result == 'success' || needs.plugins-release.result == 'skipped') && (needs.detect-changes.outputs.bifrost-http-needs-release == 'false' || needs.bifrost-http-release.result == 'success' || needs.bifrost-http-release.result == 'skipped')"
+    if: "always() && needs.check-skip.outputs.should-skip != 'true' && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.docker-needs-release == 'true' && (needs.test-core.result == 'success' || (needs.test-core.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true')) || (needs.test-core.result == 'failure' && needs.approve-flaky-test-core.result == 'success')) && (needs.test-core-integrations.result == 'success' || (needs.test-core-integrations.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true'))) && (needs.test-core-unit.result == 'success' || (needs.test-core-unit.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-cli-harness.result == 'success' || (needs.test-cli-harness.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.resolve-cli-versions.result == 'success' || (needs.resolve-cli-versions.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-framework.result == 'success' || (needs.test-framework.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-plugins.result == 'success' || (needs.test-plugins.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-bifrost-http.result == 'success' || needs.test-bifrost-http.result == 'skipped') && (needs.test-migrations.result == 'success' || needs.test-migrations.result == 'skipped') && (needs.test-api-integrations.result == 'success' || needs.test-api-integrations.result == 'skipped') && (needs.test-cost-accuracy.result == 'success' || needs.test-cost-accuracy.result == 'skipped') && (needs.test-docker-image-amd64.result == 'success' || needs.test-docker-image-amd64.result == 'skipped') && (needs.test-docker-image-arm64.result == 'success' || needs.test-docker-image-arm64.result == 'skipped') && (needs.detect-changes.outputs.core-needs-release == 'false' || needs.core-release.result == 'success' || needs.core-release.result == 'skipped') && (needs.detect-changes.outputs.framework-needs-release == 'false' || needs.framework-release.result == 'success' || needs.framework-release.result == 'skipped') && (needs.detect-changes.outputs.plugins-need-release == 'false' || needs.plugins-release.result == 'success' || needs.plugins-release.result == 'skipped') && (needs.detect-changes.outputs.bifrost-http-needs-release == 'false' || (needs.bifrost-http-prep.result == 'success' && needs.bifrost-http-release.result == 'success'))"
     runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
     permissions:
       contents: write
@@ -2974,7 +2983,7 @@ jobs:
       - name: Determine Docker tags
         id: tags
         run: |
-          git pull origin ${{ github.ref_name }}
+          [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::checkout $(git rev-parse HEAD) is not the tested commit $GITHUB_SHA"; exit 1; }
           VERSION="${{ needs.detect-changes.outputs.transport-version }}"
           BASE_TAG="${{ env.REGISTRY }}/${{ env.ACCOUNT }}/${{ env.IMAGE_NAME }}:v${VERSION}-amd64"
           GHCR_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
@@ -3039,9 +3048,10 @@ jobs:
         core-release,
         framework-release,
         plugins-release,
+        bifrost-http-prep,
         bifrost-http-release,
       ]
-    if: "always() && needs.check-skip.outputs.should-skip != 'true' && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.docker-needs-release == 'true' && (needs.test-core.result == 'success' || (needs.test-core.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true')) || (needs.test-core.result == 'failure' && needs.approve-flaky-test-core.result == 'success')) && (needs.test-core-integrations.result == 'success' || (needs.test-core-integrations.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true'))) && (needs.test-core-unit.result == 'success' || (needs.test-core-unit.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-cli-harness.result == 'success' || (needs.test-cli-harness.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.resolve-cli-versions.result == 'success' || (needs.resolve-cli-versions.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-framework.result == 'success' || (needs.test-framework.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-plugins.result == 'success' || (needs.test-plugins.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-bifrost-http.result == 'success' || needs.test-bifrost-http.result == 'skipped') && (needs.test-migrations.result == 'success' || needs.test-migrations.result == 'skipped') && (needs.test-api-integrations.result == 'success' || needs.test-api-integrations.result == 'skipped') && (needs.test-cost-accuracy.result == 'success' || needs.test-cost-accuracy.result == 'skipped') && (needs.test-docker-image-amd64.result == 'success' || needs.test-docker-image-amd64.result == 'skipped') && (needs.test-docker-image-arm64.result == 'success' || needs.test-docker-image-arm64.result == 'skipped') && (needs.detect-changes.outputs.core-needs-release == 'false' || needs.core-release.result == 'success' || needs.core-release.result == 'skipped') && (needs.detect-changes.outputs.framework-needs-release == 'false' || needs.framework-release.result == 'success' || needs.framework-release.result == 'skipped') && (needs.detect-changes.outputs.plugins-need-release == 'false' || needs.plugins-release.result == 'success' || needs.plugins-release.result == 'skipped') && (needs.detect-changes.outputs.bifrost-http-needs-release == 'false' || needs.bifrost-http-release.result == 'success' || needs.bifrost-http-release.result == 'skipped')"
+    if: "always() && needs.check-skip.outputs.should-skip != 'true' && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.docker-needs-release == 'true' && (needs.test-core.result == 'success' || (needs.test-core.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true')) || (needs.test-core.result == 'failure' && needs.approve-flaky-test-core.result == 'success')) && (needs.test-core-integrations.result == 'success' || (needs.test-core-integrations.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true'))) && (needs.test-core-unit.result == 'success' || (needs.test-core-unit.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-cli-harness.result == 'success' || (needs.test-cli-harness.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.resolve-cli-versions.result == 'success' || (needs.resolve-cli-versions.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-framework.result == 'success' || (needs.test-framework.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-plugins.result == 'success' || (needs.test-plugins.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-bifrost-http.result == 'success' || needs.test-bifrost-http.result == 'skipped') && (needs.test-migrations.result == 'success' || needs.test-migrations.result == 'skipped') && (needs.test-api-integrations.result == 'success' || needs.test-api-integrations.result == 'skipped') && (needs.test-cost-accuracy.result == 'success' || needs.test-cost-accuracy.result == 'skipped') && (needs.test-docker-image-amd64.result == 'success' || needs.test-docker-image-amd64.result == 'skipped') && (needs.test-docker-image-arm64.result == 'success' || needs.test-docker-image-arm64.result == 'skipped') && (needs.detect-changes.outputs.core-needs-release == 'false' || needs.core-release.result == 'success' || needs.core-release.result == 'skipped') && (needs.detect-changes.outputs.framework-needs-release == 'false' || needs.framework-release.result == 'success' || needs.framework-release.result == 'skipped') && (needs.detect-changes.outputs.plugins-need-release == 'false' || needs.plugins-release.result == 'success' || needs.plugins-release.result == 'skipped') && (needs.detect-changes.outputs.bifrost-http-needs-release == 'false' || (needs.bifrost-http-prep.result == 'success' && needs.bifrost-http-release.result == 'success'))"
     runs-on: ${{ vars.BIFROST_RUNNER_ARM64 || 'ubuntu-24.04-arm' }}
     permissions:
       contents: write
@@ -3106,7 +3116,7 @@ jobs:
       - name: Determine Docker tags
         id: tags
         run: |
-          git pull origin ${{ github.ref_name }}
+          [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::checkout $(git rev-parse HEAD) is not the tested commit $GITHUB_SHA"; exit 1; }
           VERSION="${{ needs.detect-changes.outputs.transport-version }}"
           BASE_TAG="${{ env.REGISTRY }}/${{ env.ACCOUNT }}/${{ env.IMAGE_NAME }}:v${VERSION}-arm64"
           GHCR_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
@@ -3230,9 +3240,10 @@ jobs:
         core-release,
         framework-release,
         plugins-release,
+        bifrost-http-prep,
         bifrost-http-release,
       ]
-    if: "always() && needs.check-skip.outputs.should-skip != 'true' && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.docker-needs-release == 'true' && (needs.test-core.result == 'success' || (needs.test-core.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true')) || (needs.test-core.result == 'failure' && needs.approve-flaky-test-core.result == 'success')) && (needs.test-core-integrations.result == 'success' || (needs.test-core-integrations.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true'))) && (needs.test-core-unit.result == 'success' || (needs.test-core-unit.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-cli-harness.result == 'success' || (needs.test-cli-harness.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.resolve-cli-versions.result == 'success' || (needs.resolve-cli-versions.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-framework.result == 'success' || (needs.test-framework.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-plugins.result == 'success' || (needs.test-plugins.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-bifrost-http.result == 'success' || needs.test-bifrost-http.result == 'skipped') && (needs.test-migrations.result == 'success' || needs.test-migrations.result == 'skipped') && (needs.test-api-integrations.result == 'success' || needs.test-api-integrations.result == 'skipped') && (needs.test-cost-accuracy.result == 'success' || needs.test-cost-accuracy.result == 'skipped') && (needs.test-docker-image-amd64.result == 'success' || needs.test-docker-image-amd64.result == 'skipped') && (needs.test-docker-image-arm64.result == 'success' || needs.test-docker-image-arm64.result == 'skipped') && (needs.detect-changes.outputs.core-needs-release == 'false' || needs.core-release.result == 'success' || needs.core-release.result == 'skipped') && (needs.detect-changes.outputs.framework-needs-release == 'false' || needs.framework-release.result == 'success' || needs.framework-release.result == 'skipped') && (needs.detect-changes.outputs.plugins-need-release == 'false' || needs.plugins-release.result == 'success' || needs.plugins-release.result == 'skipped') && (needs.detect-changes.outputs.bifrost-http-needs-release == 'false' || needs.bifrost-http-release.result == 'success' || needs.bifrost-http-release.result == 'skipped')"
+    if: "always() && needs.check-skip.outputs.should-skip != 'true' && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.docker-needs-release == 'true' && (needs.test-core.result == 'success' || (needs.test-core.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true')) || (needs.test-core.result == 'failure' && needs.approve-flaky-test-core.result == 'success')) && (needs.test-core-integrations.result == 'success' || (needs.test-core-integrations.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true'))) && (needs.test-core-unit.result == 'success' || (needs.test-core-unit.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-cli-harness.result == 'success' || (needs.test-cli-harness.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.resolve-cli-versions.result == 'success' || (needs.resolve-cli-versions.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-framework.result == 'success' || (needs.test-framework.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-plugins.result == 'success' || (needs.test-plugins.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-bifrost-http.result == 'success' || needs.test-bifrost-http.result == 'skipped') && (needs.test-migrations.result == 'success' || needs.test-migrations.result == 'skipped') && (needs.test-api-integrations.result == 'success' || needs.test-api-integrations.result == 'skipped') && (needs.test-cost-accuracy.result == 'success' || needs.test-cost-accuracy.result == 'skipped') && (needs.test-docker-image-amd64.result == 'success' || needs.test-docker-image-amd64.result == 'skipped') && (needs.test-docker-image-arm64.result == 'success' || needs.test-docker-image-arm64.result == 'skipped') && (needs.detect-changes.outputs.core-needs-release == 'false' || needs.core-release.result == 'success' || needs.core-release.result == 'skipped') && (needs.detect-changes.outputs.framework-needs-release == 'false' || needs.framework-release.result == 'success' || needs.framework-release.result == 'skipped') && (needs.detect-changes.outputs.plugins-need-release == 'false' || needs.plugins-release.result == 'success' || needs.plugins-release.result == 'skipped') && (needs.detect-changes.outputs.bifrost-http-needs-release == 'false' || (needs.bifrost-http-prep.result == 'success' && needs.bifrost-http-release.result == 'success'))"
     runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
     permissions:
       contents: write
@@ -3299,7 +3310,7 @@ jobs:
       - name: Determine Docker tags
         id: tags
         run: |
-          git pull origin ${{ github.ref_name }}
+          [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::checkout $(git rev-parse HEAD) is not the tested commit $GITHUB_SHA"; exit 1; }
           VERSION="${{ needs.detect-changes.outputs.transport-version }}"
           BASE_TAG="${{ env.REGISTRY }}/${{ env.ACCOUNT }}/${{ env.IMAGE_NAME }}:v${VERSION}-ubi9-amd64"
           GHCR_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
@@ -3366,9 +3377,10 @@ jobs:
         core-release,
         framework-release,
         plugins-release,
+        bifrost-http-prep,
         bifrost-http-release,
       ]
-    if: "always() && needs.check-skip.outputs.should-skip != 'true' && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.docker-needs-release == 'true' && (needs.test-core.result == 'success' || (needs.test-core.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true')) || (needs.test-core.result == 'failure' && needs.approve-flaky-test-core.result == 'success')) && (needs.test-core-integrations.result == 'success' || (needs.test-core-integrations.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true'))) && (needs.test-core-unit.result == 'success' || (needs.test-core-unit.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-cli-harness.result == 'success' || (needs.test-cli-harness.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.resolve-cli-versions.result == 'success' || (needs.resolve-cli-versions.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-framework.result == 'success' || (needs.test-framework.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-plugins.result == 'success' || (needs.test-plugins.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-bifrost-http.result == 'success' || needs.test-bifrost-http.result == 'skipped') && (needs.test-migrations.result == 'success' || needs.test-migrations.result == 'skipped') && (needs.test-api-integrations.result == 'success' || needs.test-api-integrations.result == 'skipped') && (needs.test-cost-accuracy.result == 'success' || needs.test-cost-accuracy.result == 'skipped') && (needs.test-docker-image-amd64.result == 'success' || needs.test-docker-image-amd64.result == 'skipped') && (needs.test-docker-image-arm64.result == 'success' || needs.test-docker-image-arm64.result == 'skipped') && (needs.detect-changes.outputs.core-needs-release == 'false' || needs.core-release.result == 'success' || needs.core-release.result == 'skipped') && (needs.detect-changes.outputs.framework-needs-release == 'false' || needs.framework-release.result == 'success' || needs.framework-release.result == 'skipped') && (needs.detect-changes.outputs.plugins-need-release == 'false' || needs.plugins-release.result == 'success' || needs.plugins-release.result == 'skipped') && (needs.detect-changes.outputs.bifrost-http-needs-release == 'false' || needs.bifrost-http-release.result == 'success' || needs.bifrost-http-release.result == 'skipped')"
+    if: "always() && needs.check-skip.outputs.should-skip != 'true' && needs.detect-changes.result == 'success' && needs.detect-changes.outputs.docker-needs-release == 'true' && (needs.test-core.result == 'success' || (needs.test-core.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true')) || (needs.test-core.result == 'failure' && needs.approve-flaky-test-core.result == 'success')) && (needs.test-core-integrations.result == 'success' || (needs.test-core-integrations.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true'))) && (needs.test-core-unit.result == 'success' || (needs.test-core-unit.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-cli-harness.result == 'success' || (needs.test-cli-harness.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.resolve-cli-versions.result == 'success' || (needs.resolve-cli-versions.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-framework.result == 'success' || (needs.test-framework.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-plugins.result == 'success' || (needs.test-plugins.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-bifrost-http.result == 'success' || needs.test-bifrost-http.result == 'skipped') && (needs.test-migrations.result == 'success' || needs.test-migrations.result == 'skipped') && (needs.test-api-integrations.result == 'success' || needs.test-api-integrations.result == 'skipped') && (needs.test-cost-accuracy.result == 'success' || needs.test-cost-accuracy.result == 'skipped') && (needs.test-docker-image-amd64.result == 'success' || needs.test-docker-image-amd64.result == 'skipped') && (needs.test-docker-image-arm64.result == 'success' || needs.test-docker-image-arm64.result == 'skipped') && (needs.detect-changes.outputs.core-needs-release == 'false' || needs.core-release.result == 'success' || needs.core-release.result == 'skipped') && (needs.detect-changes.outputs.framework-needs-release == 'false' || needs.framework-release.result == 'success' || needs.framework-release.result == 'skipped') && (needs.detect-changes.outputs.plugins-need-release == 'false' || needs.plugins-release.result == 'success' || needs.plugins-release.result == 'skipped') && (needs.detect-changes.outputs.bifrost-http-needs-release == 'false' || (needs.bifrost-http-prep.result == 'success' && needs.bifrost-http-release.result == 'success'))"
     runs-on: ${{ vars.BIFROST_RUNNER_ARM64 || 'ubuntu-24.04-arm' }}
     permissions:
       contents: write
@@ -3435,7 +3447,7 @@ jobs:
       - name: Determine Docker tags
         id: tags
         run: |
-          git pull origin ${{ github.ref_name }}
+          [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::checkout $(git rev-parse HEAD) is not the tested commit $GITHUB_SHA"; exit 1; }
           VERSION="${{ needs.detect-changes.outputs.transport-version }}"
           BASE_TAG="${{ env.REGISTRY }}/${{ env.ACCOUNT }}/${{ env.IMAGE_NAME }}:v${VERSION}-ubi9-arm64"
           GHCR_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
@@ -3566,8 +3578,7 @@ jobs:
     if: "always() && needs.check-skip.outputs.should-skip != 'true' && needs.detect-changes.result == 'success' && (needs.test-core.result == 'success' || (needs.test-core.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true')) || (needs.test-core.result == 'failure' && needs.approve-flaky-test-core.result == 'success')) && (needs.test-core-integrations.result == 'success' || (needs.test-core-integrations.result == 'skipped' && (needs.check-skip.outputs.skip-tests == 'true' || needs.check-skip.outputs.skip-core-test == 'true'))) && (needs.test-core-unit.result == 'success' || (needs.test-core-unit.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-cli-harness.result == 'success' || (needs.test-cli-harness.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.resolve-cli-versions.result == 'success' || (needs.resolve-cli-versions.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-framework.result == 'success' || (needs.test-framework.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-plugins.result == 'success' || (needs.test-plugins.result == 'skipped' && needs.check-skip.outputs.skip-tests == 'true')) && (needs.test-bifrost-http.result == 'success' || needs.test-bifrost-http.result == 'skipped') && (needs.test-migrations.result == 'success' || needs.test-migrations.result == 'skipped') && (needs.test-api-integrations.result == 'success' || needs.test-api-integrations.result == 'skipped') && (needs.test-cost-accuracy.result == 'success' || needs.test-cost-accuracy.result == 'skipped') && (needs.test-docker-image-amd64.result == 'success' || needs.test-docker-image-amd64.result == 'skipped') && (needs.test-docker-image-arm64.result == 'success' || needs.test-docker-image-arm64.result == 'skipped') && (needs.detect-changes.outputs.core-needs-release == 'false' || needs.core-release.result == 'success' || needs.core-release.result == 'skipped') && (needs.detect-changes.outputs.framework-needs-release == 'false' || needs.framework-release.result == 'success' || needs.framework-release.result == 'skipped') && (needs.detect-changes.outputs.plugins-need-release == 'false' || needs.plugins-release.result == 'success' || needs.plugins-release.result == 'skipped') && (needs.detect-changes.outputs.bifrost-http-needs-release == 'false' || needs.bifrost-http-release.result == 'success' || needs.bifrost-http-release.result == 'skipped')"
     runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
     permissions:
-      contents: write
-      packages: write
+      contents: read
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
@@ -3583,9 +3594,11 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-          token: ${{ secrets.GH_TOKEN || github.token }}
+          persist-credentials: false
 
-      - name: Push Mintlify changelog
+      # Generate only: main takes the changelog through a reviewed PR that applies
+      # the uploaded patch, so the run reports it as pending, not published.
+      - name: Generate Mintlify changelog patch
         env:
           # Public origin serving the R2 bucket that test-core and
           # test-cli-harness publish their reports to. Unset means the changelog
@@ -3606,6 +3619,16 @@ jobs:
           CLI_HARNESS_LABELS: ${{ needs.resolve-cli-versions.outputs.matrix && join(fromJSON(needs.resolve-cli-versions.outputs.matrix).*.label, ' ') || '' }}
         run: |
           ./.github/workflows/scripts/push-mintlify-changelog.sh "${{ needs.detect-changes.outputs.transport-version }}"
+
+      - name: Upload Mintlify changelog patch
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: docs-changelog-v${{ needs.detect-changes.outputs.transport-version }}-${{ github.sha }}
+          path: ${{ runner.temp }}/release-patches/docs-changelog-v*.patch
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
 
   # Notification
   notify:
