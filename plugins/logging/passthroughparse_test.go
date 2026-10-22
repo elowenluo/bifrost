@@ -3,7 +3,10 @@ package logging
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"mime/multipart"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/capsohq/bifrost/core/schemas"
@@ -488,4 +491,55 @@ func BenchmarkApplyParsedPassthrough(b *testing.B) {
 			plugin.applyParsedPassthrough(entry)
 		}
 	})
+}
+
+// debugRecorder keeps every debug line the plugin formats.
+type debugRecorder struct {
+	testLogger
+	mu    sync.Mutex
+	lines []string
+}
+
+func (r *debugRecorder) Debug(format string, args ...any) {
+	r.mu.Lock()
+	r.lines = append(r.lines, fmt.Sprintf(format, args...))
+	r.mu.Unlock()
+}
+
+// TestPassthroughParseDiagnosticsCarryNoContent pins that a body that fails to parse
+// is never quoted into the application log: the debug line names the row and the
+// failure's kind only.
+func TestPassthroughParseDiagnosticsCarryNoContent(t *testing.T) {
+	recorder := &debugRecorder{}
+	store := newTestStore(t)
+	plugin, err := Init(context.Background(), &Config{}, recorder, store, nil, nil, nil)
+	require.NoError(t, err)
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	ctx.SetValue(schemas.BifrostContextKeyRequestID, "req-pt-diag")
+	_, _, err = plugin.PreLLMHook(ctx, &schemas.BifrostRequest{
+		RequestType: schemas.PassthroughRequest,
+		PassthroughRequest: &schemas.BifrostPassthroughRequest{
+			Provider: schemas.OpenAI, Model: "gpt-4o", Method: "POST", Path: "/v1/chat/completions",
+			Body: []byte(ptChatRequest), SafeHeaders: map[string]string{"content-type": "application/json"},
+		},
+	})
+	require.NoError(t, err)
+	_, _, err = plugin.PostLLMHook(ctx, &schemas.BifrostResponse{PassthroughResponse: &schemas.BifrostPassthroughResponse{
+		StatusCode: 200, Path: "/v1/chat/completions",
+		Body:        []byte(`{"choices":[{"message":{"content":"SECRET-PAYLOAD-123" oops}}]}`),
+		ExtraFields: schemas.BifrostResponseExtraFields{RequestType: schemas.PassthroughRequest, Provider: schemas.OpenAI},
+	}}, nil)
+	require.NoError(t, err)
+	require.NoError(t, plugin.Cleanup())
+
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	sawParseLine := false
+	for _, line := range recorder.lines {
+		require.NotContains(t, line, "SECRET-PAYLOAD-123", "a debug line quoted the body")
+		if strings.Contains(line, "passthrough log parse") {
+			sawParseLine = true
+		}
+	}
+	require.True(t, sawParseLine, "the partial parse is still reported")
 }
