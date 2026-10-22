@@ -1,0 +1,1392 @@
+[
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4325635811",
+    "pull_request_review_id": 5585862239,
+    "id": 4325635811,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAdP24w",
+    "diff_hunk": "@@ -314,45 +341,77 @@ function nativeNotifier({ Notification, probe, timers, log = () => {}, live = ne\n         answered = true;\n         on.shown();\n       };\n+      // Once let go (clicked, failed, hidden, dismissed, or held by a later show of\n+      // the same id), no later answer opens it.\n+      let over = false;\n+      let retired = false;\n+      const entry = { objects: [] };\n+      const release = () => {\n+        over = true;\n+        for (const o of entry.objects) live.delete(o);\n+        entry.objects.length = 0;\n+        if (held.get(alert.id) === entry) held.delete(alert.id);\n+      };\n+      entry.click = () => {\n+        if (over) return;\n+        release();\n+        presented();\n+        on.clicked();\n+      };\n+      entry.close = (details) => {\n+        if (over) return;\n+        const reason = details && details.reason;\n+        if (reason !== 'timedOut') release();\n+        // Dismissed by the person (not timed out, not hidden by the app): it was presented.\n+        if (reason !== 'timedOut' && reason !== 'applicationHidden') presented();\n+      };\n+      // A getHistory() object for this id: wired, never kept.\n+      entry.adopt = (w) => {\n+        w.on('click', () => route(alert.id, entry).click());\n+        w.on('close', (details) => route(alert.id, entry).close(details));\n+      };\n       try {\n         n = new Notification({ id: alert.id, title: 'OKR', body: alert.text, silent: false });\n+        const earlier = held.get(alert.id);\n+        if (earlier) {\n+          // The same id again while held: this show holds it now, and keeps the earlier\n+          // object(s) until it is let go itself.\n+          entry.objects.push(...earlier.objects);\n+          earlier.objects.length = 0;\n+          earlier.retire();",
+    "path": "okr/desktop/src/shell/alerts.cjs",
+    "commit_id": "7ecb6260c0fb932ef28fd0e65dc1e84b47c96b2c",
+    "original_commit_id": "7ecb6260c0fb932ef28fd0e65dc1e84b47c96b2c",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Preserve the prior holder until the replacement succeeds**\n\nWhen an alert ID is retried after its acknowledgement failed, this immediately transfers the prior notification and retires its holder before `n.show()` has succeeded. If the replacement then throws or emits `failed` before replacing the delivered OS item, the catch/failed path calls `release()`, so the still-visible earlier notification remains in Notification Center but its click handler now targets an `over` entry and opens nothing. Keep the earlier holder active until the replacement is confirmed, or restore it on replacement failure.\n\nAGENTS.md reference: [AGENTS.md:L133-L140](https://github.com/txehq/txe/blob/7ecb6260c0fb932ef28fd0e65dc1e84b47c96b2c/AGENTS.md#L133-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-20T13:41:28Z",
+    "updated_at": "2026-10-20T13:41:28Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4325635811",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4325635811"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4325635811"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4325635811/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 379,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 381,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 77,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4325860836",
+    "pull_request_review_id": 5586142920,
+    "id": 4325860836,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAddl5A",
+    "diff_hunk": "@@ -314,45 +341,77 @@ function nativeNotifier({ Notification, probe, timers, log = () => {}, live = ne\n         answered = true;\n         on.shown();\n       };\n+      // Once let go (clicked, failed, hidden, dismissed, or held by a later show of\n+      // the same id), no later answer opens it.\n+      let over = false;\n+      let retired = false;\n+      const entry = { objects: [] };\n+      const release = () => {\n+        over = true;\n+        for (const o of entry.objects) live.delete(o);\n+        entry.objects.length = 0;\n+        if (held.get(alert.id) === entry) held.delete(alert.id);\n+      };\n+      entry.click = () => {\n+        if (over) return;\n+        release();\n+        presented();\n+        on.clicked();\n+      };\n+      entry.close = (details) => {\n+        if (over) return;\n+        const reason = details && details.reason;\n+        if (reason !== 'timedOut') release();\n+        // Dismissed by the person (not timed out, not hidden by the app): it was presented.\n+        if (reason !== 'timedOut' && reason !== 'applicationHidden') presented();\n+      };\n+      // A getHistory() object for this id: wired, never kept.\n+      entry.adopt = (w) => {\n+        w.on('click', () => route(alert.id, entry).click());\n+        w.on('close', (details) => route(alert.id, entry).close(details));\n+      };\n       try {\n         n = new Notification({ id: alert.id, title: 'OKR', body: alert.text, silent: false });\n+        const earlier = held.get(alert.id);\n+        if (earlier) {\n+          // The same id again while held: this show holds it now, and keeps the earlier\n+          // object(s) until it is let go itself.\n+          entry.objects.push(...earlier.objects);\n+          earlier.objects.length = 0;\n+          earlier.retire();",
+    "path": "okr/desktop/src/shell/alerts.cjs",
+    "commit_id": "7ecb6260c0fb932ef28fd0e65dc1e84b47c96b2c",
+    "original_commit_id": "7ecb6260c0fb932ef28fd0e65dc1e84b47c96b2c",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Fixed in 0a4ce01fe5c22a92c0a9ddaa69c0cca7c1d5a87a.\n\nThe new show of a held id now records the holder it took the id from and what it took. If it throws or answers `failed` while it still holds the id, it hands both back and reinstates that holder, which stays clickable.\n\nCovered by new tests in `okr/desktop/test/alerts.test.cjs`:\n- a sync throw and an async `failed`: the earlier alert is clickable and opens once;\n- a click while the replacement is pending is not undone by its later failure;\n- a failure of a show no longer holding the id (a third show took it) changes nothing;\n- a show whose own notification failed is passed over on the way back;\n- an alert really let go (dismissed) is never given back.\n\nMaking the failure path always release fails 3 of them.\n",
+    "created_at": "2026-10-20T14:02:18Z",
+    "updated_at": "2026-10-20T14:02:18Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4325860836",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4325860836"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4325860836"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4325860836/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 379,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 381,
+    "side": "RIGHT",
+    "in_reply_to_id": 4325635811,
+    "author_association": "MEMBER",
+    "original_position": 77,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4325960050",
+    "pull_request_review_id": 5586266343,
+    "id": 4325960050,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAdjpcg",
+    "diff_hunk": "@@ -477,3 +477,277 @@ test('nativeNotifier: a click or the person dismissing it while the probe looks\n     assert.deepEqual(got, expected, what);\n   }\n });\n+\n+/**\n+ * Electron's macOS presenter as far as a click goes (TXE-4684): every object\n+ * shown, or returned by getHistory(), is an entry, and a click on an id goes to\n+ * the entry `pick` chooses among those with that id (Electron: the first in\n+ * pointer order, so any of them). This models the routing; it is not the OS click.",
+    "path": "okr/desktop/test/alerts.test.cjs",
+    "commit_id": "d3025fd29d8a34d0a65f39fda2850bc94c760f5d",
+    "original_commit_id": "ba907a0ee723624e044a2b3607e6b3bd0ceb234f",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Exercise the restored-object path on real macOS**\n\nThis model injects the exact unverified premise the fix depends on—that `getHistory()` creates a competing entry which receives the click—so it passes even if Electron/macOS still drops Notification Center clicks. The existing attended test at `notifications-os.desktop.real.spec.ts:281` permits clicking either the banner or Notification Center and does not wait for the banner to disappear, so it can pass without exercising this regression. Update that native scenario to wait for the banner to leave, click the retained Notification Center item, and require `alert-clicked` before treating this behavior as covered.\n\nAGENTS.md reference: [AGENTS.md:L142-L148](https://github.com/txehq/txe/blob/ba907a0ee723624e044a2b3607e6b3bd0ceb234f/AGENTS.md#L142-L148)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-20T14:11:27Z",
+    "updated_at": "2026-10-20T14:11:27Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4325960050",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4325960050"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4325960050"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4325960050/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 485,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 9,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326016160",
+    "pull_request_review_id": 5586336433,
+    "id": 4326016160,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAdnEoA",
+    "diff_hunk": "@@ -477,3 +477,277 @@ test('nativeNotifier: a click or the person dismissing it while the probe looks\n     assert.deepEqual(got, expected, what);\n   }\n });\n+\n+/**\n+ * Electron's macOS presenter as far as a click goes (TXE-4684): every object\n+ * shown, or returned by getHistory(), is an entry, and a click on an id goes to\n+ * the entry `pick` chooses among those with that id (Electron: the first in\n+ * pointer order, so any of them). This models the routing; it is not the OS click.",
+    "path": "okr/desktop/test/alerts.test.cjs",
+    "commit_id": "d3025fd29d8a34d0a65f39fda2850bc94c760f5d",
+    "original_commit_id": "ba907a0ee723624e044a2b3607e6b3bd0ceb234f",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Addressed in 1088447bbeaac88259788da46db7d635fe54662a with a separate attended case in this PR's own suite, `okr/desktop/e2e/alerts.e2e.mjs`: \"installed (TXE-4684): a Flow alert clicked in Notification Center after its banner left opens the supporting task\". The NC-owned `notifications-os.desktop.real.spec.ts` is left unchanged.\n\nWhat the case does:\n- It is a hand run on macOS (`OKR_E2E_NC_LATE=1`, `OKR_E2E_GATE_DIR`), on a run-owned test package against a real keycloak-mode okr-api.\n- It fails before anyone is asked anything if macOS refuses the package notification permission (from Electron's own log).\n- READY 1 / `go-1`: it causes one alert, then requires Electron's `Notification restored (<id>)`, the restored entry this fix is about, in the unmodified build.\n- READY 2 / `banner-gone`: written only on the person's word that the banner has left. An elapsed time proves nothing, because a banner can be set to stay.\n- Then one Notification Center click, in its own 5-minute window. The case requires all of: `alert-clicked` for that id with `sameSession`, the task's route and region, and usernoted's `Received response` for that request id.\n\nThe actual OS run is still pending. It is the PR's explicit acceptance hold, and the PR does not merge before it passes.\n",
+    "created_at": "2026-10-20T14:16:27Z",
+    "updated_at": "2026-10-20T14:16:28Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326016160",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326016160"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326016160"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326016160/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 485,
+    "side": "RIGHT",
+    "in_reply_to_id": 4325960050,
+    "author_association": "MEMBER",
+    "original_position": 9,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326055923",
+    "pull_request_review_id": 5586386284,
+    "id": 4326055923,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAdpf8w",
+    "diff_hunk": "@@ -602,6 +615,85 @@ test('installed: a real Flow support alert, clicked on screen, opens the support\n   }\n });\n \n+// A click from Notification Center after the banner has left (TXE-4684), by hand on macOS with a\n+// person at the keyboard, on the same run-owned test package and real keycloak-mode okr-api as the\n+// case above. A banner click alone never exercises it: the app's presence check reads the\n+// delivered list (Notification.getHistory), which in Electron 44 adds a second entry with the\n+// alert's id, and a later click on the Notification Center item can be handed to that entry.\n+// OKR_E2E_NC_LATE=1 and OKR_E2E_GATE_DIR=<dir> run it; it prints READY 1, waits for <dir>/go-1,\n+// causes one alert, prints READY 2 and waits for <dir>/banner-gone, which the person's helper\n+// writes only once the person says the banner has left the screen (a time alone proves nothing:\n+// a banner can be set to stay). Then one click on the Notification Center item, within\n+// NC_CLICK_MS of being asked. Before anyone is asked, the package must hold notification\n+// permission (Electron's own log), and the run fails at once if it does not. It requires\n+// Electron's \"Notification restored (<id>)\" (the second entry existed), the app's alert-clicked\n+// for that id in the same session, the task's route and region, and macOS's own record of the\n+// response (usernoted \"Received response\" for the request id).\n+const NC_LATE = process.env.OKR_E2E_NC_LATE === '1';\n+const GATES = process.env.OKR_E2E_GATE_DIR || '';\n+const NC_CLICK_MS = 5 * 60_000;\n+const ncLateSkip = (!NC_LATE && 'a hand-run check: set OKR_E2E_NC_LATE=1')\n+  || (process.platform !== 'darwin' && 'Notification Center: macOS only')\n+  || (!GATES && 'needs OKR_E2E_GATE_DIR for the READY/go handshake')\n+  || (!(REAL && EXE) && 'needs a macOS test package showing real notifications (OKR_E2E_EXE, OKR_E2E_REAL_NOTIFY=1)')\n+  || (!kcUp && 'needs okr-api in keycloak mode (OKR_E2E_KC_API)')\n+  || (!FLOW_ISSUER && 'needs the realm issuer (OKR_E2E_KC_ISSUER) for the supporter\\'s token');\n+/** `log show --start` takes the Mac's local time. */\n+const localStamp = (d) => {\n+  const z = (n) => String(n).padStart(2, '0');\n+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;\n+};\n+\n+/** Holds until `<GATES>/<name>` exists, saying so first. */\n+async function gate(name, what) {\n+  console.log(`TXE-4684 ${what}; continues once ${path.join(GATES, name)} exists`);\n+  assert.ok(await eventually(() => fs.existsSync(path.join(GATES, name)), 50 * 60_000), `${name} was opened`);",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "58b951c02d5ce4c52f4088e611a485113cc76757",
+    "original_commit_id": "1088447bbeaac88259788da46db7d635fe54662a",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Reset gate markers before waiting**\n\nWhen this attended case is rerun with the same `OKR_E2E_GATE_DIR`, the prior `go-1` and `banner-gone` files still exist, so both gates open immediately and the test no longer establishes that the current banner has left before prompting for the click. This can turn a required retry into apparent Notification Center evidence even though the intended late-click condition was skipped; remove each marker before announcing its gate or require a fresh run-specific directory.\n\nAGENTS.md reference: [AGENTS.md:L133-L140](https://github.com/txehq/txe/blob/1088447bbeaac88259788da46db7d635fe54662a/AGENTS.md#L133-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-20T14:20:08Z",
+    "updated_at": "2026-10-20T14:20:08Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326055923",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326055923"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326055923"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326055923/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": 737,
+    "original_start_line": 648,
+    "start_side": "RIGHT",
+    "line": 739,
+    "original_line": 650,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 144,
+    "position": 239,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326055930",
+    "pull_request_review_id": 5586386284,
+    "id": 4326055930,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAdpf-g",
+    "diff_hunk": "@@ -602,6 +615,85 @@ test('installed: a real Flow support alert, clicked on screen, opens the support\n   }\n });\n \n+// A click from Notification Center after the banner has left (TXE-4684), by hand on macOS with a\n+// person at the keyboard, on the same run-owned test package and real keycloak-mode okr-api as the\n+// case above. A banner click alone never exercises it: the app's presence check reads the\n+// delivered list (Notification.getHistory), which in Electron 44 adds a second entry with the\n+// alert's id, and a later click on the Notification Center item can be handed to that entry.\n+// OKR_E2E_NC_LATE=1 and OKR_E2E_GATE_DIR=<dir> run it; it prints READY 1, waits for <dir>/go-1,\n+// causes one alert, prints READY 2 and waits for <dir>/banner-gone, which the person's helper\n+// writes only once the person says the banner has left the screen (a time alone proves nothing:\n+// a banner can be set to stay). Then one click on the Notification Center item, within\n+// NC_CLICK_MS of being asked. Before anyone is asked, the package must hold notification\n+// permission (Electron's own log), and the run fails at once if it does not. It requires\n+// Electron's \"Notification restored (<id>)\" (the second entry existed), the app's alert-clicked\n+// for that id in the same session, the task's route and region, and macOS's own record of the\n+// response (usernoted \"Received response\" for the request id).\n+const NC_LATE = process.env.OKR_E2E_NC_LATE === '1';\n+const GATES = process.env.OKR_E2E_GATE_DIR || '';\n+const NC_CLICK_MS = 5 * 60_000;\n+const ncLateSkip = (!NC_LATE && 'a hand-run check: set OKR_E2E_NC_LATE=1')\n+  || (process.platform !== 'darwin' && 'Notification Center: macOS only')\n+  || (!GATES && 'needs OKR_E2E_GATE_DIR for the READY/go handshake')\n+  || (!(REAL && EXE) && 'needs a macOS test package showing real notifications (OKR_E2E_EXE, OKR_E2E_REAL_NOTIFY=1)')\n+  || (!kcUp && 'needs okr-api in keycloak mode (OKR_E2E_KC_API)')\n+  || (!FLOW_ISSUER && 'needs the realm issuer (OKR_E2E_KC_ISSUER) for the supporter\\'s token');\n+/** `log show --start` takes the Mac's local time. */\n+const localStamp = (d) => {\n+  const z = (n) => String(n).padStart(2, '0');\n+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;\n+};\n+\n+/** Holds until `<GATES>/<name>` exists, saying so first. */\n+async function gate(name, what) {\n+  console.log(`TXE-4684 ${what}; continues once ${path.join(GATES, name)} exists`);\n+  assert.ok(await eventually(() => fs.existsSync(path.join(GATES, name)), 50 * 60_000), `${name} was opened`);\n+}\n+\n+test('installed (TXE-4684): a Flow alert clicked in Notification Center after its banner left opens the supporting task', { skip: ncLateSkip, timeout: 4 * 3600000 }, async () => {\n+  const electronLog = path.join(scratchDir('okr-desktop-nclate-'), 'electron.log');\n+  const s = await launch(KC_API, { env: { ELECTRON_DEBUG_NOTIFICATIONS: '1', ELECTRON_ENABLE_LOGGING: 'file', ELECTRON_LOG_FILE: electronLog } });\n+  const log = () => (fs.existsSync(electronLog) ? fs.readFileSync(electronLog, 'utf8') : '');\n+  try {\n+    await kcSignIn(s, FLOW_OWNER, FLOW_ORG);\n+    // Permission first: nobody is asked anything for a package macOS will not notify for.\n+    assert.ok(await eventually(() => /Notification authorization granted: 1|Error requesting notification authorization/.test(log()), 30000), 'macOS answered the permission request');\n+    assert.doesNotMatch(log(), /Error requesting notification authorization/, 'notifications are allowed for the test package (System Settings > Notifications)');\n+    const mine = await ownerTask(s);\n+    await gate('go-1', `READY 1: ${path.basename(EXE)} is signed in as ${FLOW_OWNER}; one Flow alert is caused`);\n+    const title = `Late click ${Date.now()}`;\n+    const support = await supportAs(mine, title);\n+    let alertId;\n+    assert.ok(await eventually(() => {\n+      alertId = s.events().find((e) => e.type === 'alert-received' && e.category === 'flow_support')?.id;\n+      return Boolean(alertId);",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "1088447bbeaac88259788da46db7d635fe54662a",
+    "original_commit_id": "1088447bbeaac88259788da46db7d635fe54662a",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Select the alert created by this attended run**\n\nIf a previous failed/interrupted run left any `flow_support` alert pending for this reused real account, it can be fetched after sign-in and this unqualified `find` permanently chooses that older alert instead of the one just created by `supportAs`. The subsequent click assertion and route assertion then refer to different alerts, making the required retry fail despite correct behavior; snapshot the received events before creating the support and select only the new event (or otherwise correlate it to the created support).\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/1088447bbeaac88259788da46db7d635fe54662a/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-20T14:20:08Z",
+    "updated_at": "2026-10-20T14:20:08Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326055930",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326055930"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326055930"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326055930/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 667,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 669,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 163,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326086570",
+    "pull_request_review_id": 5586424631,
+    "id": 4326086570,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAdrXqg",
+    "diff_hunk": "@@ -602,6 +615,85 @@ test('installed: a real Flow support alert, clicked on screen, opens the support\n   }\n });\n \n+// A click from Notification Center after the banner has left (TXE-4684), by hand on macOS with a\n+// person at the keyboard, on the same run-owned test package and real keycloak-mode okr-api as the\n+// case above. A banner click alone never exercises it: the app's presence check reads the\n+// delivered list (Notification.getHistory), which in Electron 44 adds a second entry with the\n+// alert's id, and a later click on the Notification Center item can be handed to that entry.\n+// OKR_E2E_NC_LATE=1 and OKR_E2E_GATE_DIR=<dir> run it; it prints READY 1, waits for <dir>/go-1,\n+// causes one alert, prints READY 2 and waits for <dir>/banner-gone, which the person's helper\n+// writes only once the person says the banner has left the screen (a time alone proves nothing:\n+// a banner can be set to stay). Then one click on the Notification Center item, within\n+// NC_CLICK_MS of being asked. Before anyone is asked, the package must hold notification\n+// permission (Electron's own log), and the run fails at once if it does not. It requires\n+// Electron's \"Notification restored (<id>)\" (the second entry existed), the app's alert-clicked\n+// for that id in the same session, the task's route and region, and macOS's own record of the\n+// response (usernoted \"Received response\" for the request id).\n+const NC_LATE = process.env.OKR_E2E_NC_LATE === '1';\n+const GATES = process.env.OKR_E2E_GATE_DIR || '';\n+const NC_CLICK_MS = 5 * 60_000;\n+const ncLateSkip = (!NC_LATE && 'a hand-run check: set OKR_E2E_NC_LATE=1')\n+  || (process.platform !== 'darwin' && 'Notification Center: macOS only')\n+  || (!GATES && 'needs OKR_E2E_GATE_DIR for the READY/go handshake')\n+  || (!(REAL && EXE) && 'needs a macOS test package showing real notifications (OKR_E2E_EXE, OKR_E2E_REAL_NOTIFY=1)')\n+  || (!kcUp && 'needs okr-api in keycloak mode (OKR_E2E_KC_API)')\n+  || (!FLOW_ISSUER && 'needs the realm issuer (OKR_E2E_KC_ISSUER) for the supporter\\'s token');\n+/** `log show --start` takes the Mac's local time. */\n+const localStamp = (d) => {\n+  const z = (n) => String(n).padStart(2, '0');\n+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;\n+};\n+\n+/** Holds until `<GATES>/<name>` exists, saying so first. */\n+async function gate(name, what) {\n+  console.log(`TXE-4684 ${what}; continues once ${path.join(GATES, name)} exists`);\n+  assert.ok(await eventually(() => fs.existsSync(path.join(GATES, name)), 50 * 60_000), `${name} was opened`);",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "58b951c02d5ce4c52f4088e611a485113cc76757",
+    "original_commit_id": "1088447bbeaac88259788da46db7d635fe54662a",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Fixed in 10226f7d43300e3888705ea1cf405232b3277d26: the case fails at once if `go-1` or `banner-gone` already exists in `OKR_E2E_GATE_DIR` (an earlier run's), naming the file and asking for a fresh gate directory, before the app is launched. A rerun therefore cannot reuse a gate.\n",
+    "created_at": "2026-10-20T14:22:52Z",
+    "updated_at": "2026-10-20T14:22:52Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326086570",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326086570"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326086570"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326086570/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": 737,
+    "original_start_line": 648,
+    "start_side": "RIGHT",
+    "line": 739,
+    "original_line": 650,
+    "side": "RIGHT",
+    "in_reply_to_id": 4326055923,
+    "author_association": "MEMBER",
+    "original_position": 144,
+    "position": 239,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326087092",
+    "pull_request_review_id": 5586425241,
+    "id": 4326087092,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAdrZtA",
+    "diff_hunk": "@@ -602,6 +615,85 @@ test('installed: a real Flow support alert, clicked on screen, opens the support\n   }\n });\n \n+// A click from Notification Center after the banner has left (TXE-4684), by hand on macOS with a\n+// person at the keyboard, on the same run-owned test package and real keycloak-mode okr-api as the\n+// case above. A banner click alone never exercises it: the app's presence check reads the\n+// delivered list (Notification.getHistory), which in Electron 44 adds a second entry with the\n+// alert's id, and a later click on the Notification Center item can be handed to that entry.\n+// OKR_E2E_NC_LATE=1 and OKR_E2E_GATE_DIR=<dir> run it; it prints READY 1, waits for <dir>/go-1,\n+// causes one alert, prints READY 2 and waits for <dir>/banner-gone, which the person's helper\n+// writes only once the person says the banner has left the screen (a time alone proves nothing:\n+// a banner can be set to stay). Then one click on the Notification Center item, within\n+// NC_CLICK_MS of being asked. Before anyone is asked, the package must hold notification\n+// permission (Electron's own log), and the run fails at once if it does not. It requires\n+// Electron's \"Notification restored (<id>)\" (the second entry existed), the app's alert-clicked\n+// for that id in the same session, the task's route and region, and macOS's own record of the\n+// response (usernoted \"Received response\" for the request id).\n+const NC_LATE = process.env.OKR_E2E_NC_LATE === '1';\n+const GATES = process.env.OKR_E2E_GATE_DIR || '';\n+const NC_CLICK_MS = 5 * 60_000;\n+const ncLateSkip = (!NC_LATE && 'a hand-run check: set OKR_E2E_NC_LATE=1')\n+  || (process.platform !== 'darwin' && 'Notification Center: macOS only')\n+  || (!GATES && 'needs OKR_E2E_GATE_DIR for the READY/go handshake')\n+  || (!(REAL && EXE) && 'needs a macOS test package showing real notifications (OKR_E2E_EXE, OKR_E2E_REAL_NOTIFY=1)')\n+  || (!kcUp && 'needs okr-api in keycloak mode (OKR_E2E_KC_API)')\n+  || (!FLOW_ISSUER && 'needs the realm issuer (OKR_E2E_KC_ISSUER) for the supporter\\'s token');\n+/** `log show --start` takes the Mac's local time. */\n+const localStamp = (d) => {\n+  const z = (n) => String(n).padStart(2, '0');\n+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;\n+};\n+\n+/** Holds until `<GATES>/<name>` exists, saying so first. */\n+async function gate(name, what) {\n+  console.log(`TXE-4684 ${what}; continues once ${path.join(GATES, name)} exists`);\n+  assert.ok(await eventually(() => fs.existsSync(path.join(GATES, name)), 50 * 60_000), `${name} was opened`);\n+}\n+\n+test('installed (TXE-4684): a Flow alert clicked in Notification Center after its banner left opens the supporting task', { skip: ncLateSkip, timeout: 4 * 3600000 }, async () => {\n+  const electronLog = path.join(scratchDir('okr-desktop-nclate-'), 'electron.log');\n+  const s = await launch(KC_API, { env: { ELECTRON_DEBUG_NOTIFICATIONS: '1', ELECTRON_ENABLE_LOGGING: 'file', ELECTRON_LOG_FILE: electronLog } });\n+  const log = () => (fs.existsSync(electronLog) ? fs.readFileSync(electronLog, 'utf8') : '');\n+  try {\n+    await kcSignIn(s, FLOW_OWNER, FLOW_ORG);\n+    // Permission first: nobody is asked anything for a package macOS will not notify for.\n+    assert.ok(await eventually(() => /Notification authorization granted: 1|Error requesting notification authorization/.test(log()), 30000), 'macOS answered the permission request');\n+    assert.doesNotMatch(log(), /Error requesting notification authorization/, 'notifications are allowed for the test package (System Settings > Notifications)');\n+    const mine = await ownerTask(s);\n+    await gate('go-1', `READY 1: ${path.basename(EXE)} is signed in as ${FLOW_OWNER}; one Flow alert is caused`);\n+    const title = `Late click ${Date.now()}`;\n+    const support = await supportAs(mine, title);\n+    let alertId;\n+    assert.ok(await eventually(() => {\n+      alertId = s.events().find((e) => e.type === 'alert-received' && e.category === 'flow_support')?.id;\n+      return Boolean(alertId);",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "1088447bbeaac88259788da46db7d635fe54662a",
+    "original_commit_id": "1088447bbeaac88259788da46db7d635fe54662a",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Fixed in 10226f7d43300e3888705ea1cf405232b3277d26.\n\n- Before go-1, the case lets anything the account had pending arrive (3 alert intervals) and records the ids received so far.\n- After the support is written, the run's alert is the one `flow_support` alert received since then that is not among those ids (`newAlerts` in `e2e/fixtures/click-proof.mjs`, unit-tested in `test/click-proof.test.cjs`).\n- Any count other than exactly one fails before the person is asked to click, rather than choosing.\n",
+    "created_at": "2026-10-20T14:22:55Z",
+    "updated_at": "2026-10-20T14:22:55Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326087092",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326087092"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326087092"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326087092/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 667,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 669,
+    "side": "RIGHT",
+    "in_reply_to_id": 4326055930,
+    "author_association": "MEMBER",
+    "original_position": 163,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326162163",
+    "pull_request_review_id": 5586519401,
+    "id": 4326162163,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAdv-8w",
+    "diff_hunk": "@@ -602,6 +621,103 @@ test('installed: a real Flow support alert, clicked on screen, opens the support\n   }\n });\n \n+// A click from Notification Center after the banner has left (TXE-4684), by hand on macOS with a\n+// person at the keyboard, on the same run-owned test package and real keycloak-mode okr-api as the\n+// case above. A banner click alone never exercises it: the app's presence check reads the\n+// delivered list (Notification.getHistory), which in Electron 44 adds a second entry with the\n+// alert's id, and a later click on the Notification Center item can be handed to that entry.\n+// OKR_E2E_NC_LATE=1 and OKR_E2E_GATE_DIR=<dir> run it; it prints READY 1, waits for <dir>/go-1,\n+// causes one alert, prints READY 2 and waits for <dir>/banner-gone, which the person's helper\n+// writes only once the person says the banner has left the screen (a time alone proves nothing:\n+// a banner can be set to stay). Then one click on the Notification Center item, within\n+// NC_CLICK_MS of being asked. Before anyone is asked, the package must hold notification\n+// permission (Electron's own log), and the run fails at once if it does not. It requires\n+// Electron's \"Notification restored (<id>)\" (the second entry existed), the app's alert-clicked\n+// for that id in the same session, the task's route and region, and macOS's own record of the\n+// response (usernoted \"Received response\" for the request id).\n+const GATES = process.env.OKR_E2E_GATE_DIR || '';\n+const NC_CLICK_MS = 5 * 60_000;\n+const ncLateSkip = (!NC_LATE && 'a hand-run check: set OKR_E2E_NC_LATE=1')\n+  || (process.platform !== 'darwin' && 'Notification Center: macOS only')\n+  || (!GATES && 'needs OKR_E2E_GATE_DIR for the READY/go handshake')\n+  || (!(REAL && EXE) && 'needs a macOS test package showing real notifications (OKR_E2E_EXE, OKR_E2E_REAL_NOTIFY=1)')\n+  || (!kcUp && 'needs okr-api in keycloak mode (OKR_E2E_KC_API)')\n+  || (!FLOW_ISSUER && 'needs the realm issuer (OKR_E2E_KC_ISSUER) for the supporter\\'s token');\n+\n+/** Holds until `<GATES>/<name>` exists, saying so first. */\n+async function gate(name, what) {\n+  console.log(`TXE-4684 ${what}; continues once ${path.join(GATES, name)} exists`);\n+  assert.ok(await eventually(() => fs.existsSync(path.join(GATES, name)), 50 * 60_000), `${name} was opened`);\n+}\n+\n+test('installed (TXE-4684): a Flow alert clicked in Notification Center after its banner left opens the supporting task', { skip: ncLateSkip, timeout: 4 * 3600000 }, async () => {\n+  // Its proof is what it keeps: a run with nowhere to keep it does not start.\n+  const EVIDENCE = process.env.OKR_E2E_EVIDENCE_DIR || '';\n+  assert.ok(EVIDENCE, 'needs OKR_E2E_EVIDENCE_DIR: the attended run keeps its events, Electron\\'s log and usernoted\\'s');\n+  // A gate opened for an earlier run would open this run's at once.\n+  for (const name of ['go-1', 'banner-gone']) assert.ok(!fs.existsSync(path.join(GATES, name)), `${path.join(GATES, name)} is left from an earlier run: use a fresh OKR_E2E_GATE_DIR`);\n+  const electronLog = path.join(scratchDir('okr-desktop-nclate-'), 'electron.log');\n+  const s = await launch(KC_API, { env: { ELECTRON_DEBUG_NOTIFICATIONS: '1', ELECTRON_ENABLE_LOGGING: 'file', ELECTRON_LOG_FILE: electronLog } });\n+  const log = () => (fs.existsSync(electronLog) ? fs.readFileSync(electronLog, 'utf8') : '');\n+  let usernoted = '';\n+  let runError = null;\n+  try {\n+    await kcSignIn(s, FLOW_OWNER, FLOW_ORG);\n+    // Permission first: nobody is asked anything for a package macOS will not notify for.\n+    assert.ok(await eventually(() => /Notification authorization granted: 1|Error requesting notification authorization/.test(log()), 30000), 'macOS answered the permission request');\n+    assert.doesNotMatch(log(), /Error requesting notification authorization/, 'notifications are allowed for the test package (System Settings > Notifications)');\n+    const mine = await ownerTask(s);\n+    // Anything the account had pending arrives now, before this run causes its alert.\n+    await settle(3 * INTERVAL);\n+    await gate('go-1', `READY 1: ${path.basename(EXE)} is signed in as ${FLOW_OWNER}; one Flow alert is caused`);\n+    const before = new Set(s.events().filter((e) => e.type === 'alert-received').map((e) => e.id));\n+    const since = Date.now();\n+    const title = `Late click ${Date.now()}`;\n+    const support = await supportAs(mine, title);\n+    assert.ok(await eventually(() => newAlerts(s.events(), 'flow_support', before, since).length > 0, 60000), 'the Flow alert was handed to the package');\n+    await settle(2 * INTERVAL);\n+    const mineNow = newAlerts(s.events(), 'flow_support', before, since);\n+    assert.equal(mineNow.length, 1, `exactly one Flow alert since this run caused one (got ${mineNow.join(', ')}): not choosing among them`);\n+    const [alertId] = mineNow;\n+    assert.ok(await eventually(() => s.events().some((e) => e.type === 'alert-shown' && e.id === alertId), 60000), 'macOS took the notification');\n+    const shownAt = Date.parse(s.events().find((e) => e.type === 'alert-shown' && e.id === alertId).t);\n+    assert.equal(s.count('alert-failed'), 0, 'notifications are allowed for the test package');\n+    assert.ok(await eventually(() => log().includes(`Notification restored (${alertId})`), 10000), 'the delivered list was read: Electron restored a second entry for the id');\n+    await gate('banner-gone', `READY 2: alert ${alertId} is on screen as a banner; write banner-gone only once the person says the banner has left the screen`);\n+    // Only a click asked for counts: a click on this alert before CLICK NOW is the banner\n+    // clicked early (not the path under test), and fails the run.\n+    const asked = Date.now();\n+    assert.deepEqual(appClicks(s.events(), alertId, asked).early, [], 'no click on the alert before it was asked for');\n+    console.log(`TXE-4684 CLICK NOW: open Notification Center and click the OKR item (not a banner), ${new Date(asked).toISOString()}`);\n+    assert.ok(await eventually(() => appClicks(s.events(), alertId, asked).late.length > 0, NC_CLICK_MS), 'the Notification Center click reached the app');\n+    assert.deepEqual(appClicks(s.events(), alertId, asked).early, [], 'no click on the alert before it was asked for');\n+    await s.page.waitForURL(new RegExp(`#/flow/tasks/${support.id}$`));\n+    await s.page.getByRole('region', { name: title }).waitFor({ timeout: 20000 });\n+    // macOS's own record of the click on this request, read from when the alert was shown so an\n+    // earlier response would be seen too.\n+    usernoted = execFileSync('/usr/bin/log', ['show', '--style', 'compact', '--start', localStamp(new Date(shownAt - 2000)), '--predicate', `process == \"usernoted\" AND eventMessage CONTAINS \"Received response\" AND eventMessage CONTAINS \"${alertId}\"`], { encoding: 'utf8', timeout: 60000 });",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "077016f771a09a164aeccacc3a3990fe08e4cc1a",
+    "original_commit_id": "077016f771a09a164aeccacc3a3990fe08e4cc1a",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Capture usernoted before an app-click timeout aborts**\n\nWhen the regression under test occurs—macOS records the Notification Center response but Electron never emits `alert-clicked`—the assertion at line 692 throws before this command runs. Consequently `usernoted` remains empty, and `keepEvidence` omits `nc-late-usernoted.log`, losing the OS-side evidence needed to distinguish the target bug from a click that never reached macOS. Capture the filtered unified log in `finally` once `alertId` and `shownAt` are known so failed runs retain the required evidence too.\n\nAGENTS.md reference: [AGENTS.md:L133-L140](https://github.com/txehq/txe/blob/077016f771a09a164aeccacc3a3990fe08e4cc1a/AGENTS.md#L133-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-20T14:29:40Z",
+    "updated_at": "2026-10-20T14:29:40Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326162163",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326162163"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326162163"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326162163/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 698,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 215,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326183427",
+    "pull_request_review_id": 5586546339,
+    "id": 4326183427,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAdxSAw",
+    "diff_hunk": "@@ -602,6 +621,103 @@ test('installed: a real Flow support alert, clicked on screen, opens the support\n   }\n });\n \n+// A click from Notification Center after the banner has left (TXE-4684), by hand on macOS with a\n+// person at the keyboard, on the same run-owned test package and real keycloak-mode okr-api as the\n+// case above. A banner click alone never exercises it: the app's presence check reads the\n+// delivered list (Notification.getHistory), which in Electron 44 adds a second entry with the\n+// alert's id, and a later click on the Notification Center item can be handed to that entry.\n+// OKR_E2E_NC_LATE=1 and OKR_E2E_GATE_DIR=<dir> run it; it prints READY 1, waits for <dir>/go-1,\n+// causes one alert, prints READY 2 and waits for <dir>/banner-gone, which the person's helper\n+// writes only once the person says the banner has left the screen (a time alone proves nothing:\n+// a banner can be set to stay). Then one click on the Notification Center item, within\n+// NC_CLICK_MS of being asked. Before anyone is asked, the package must hold notification\n+// permission (Electron's own log), and the run fails at once if it does not. It requires\n+// Electron's \"Notification restored (<id>)\" (the second entry existed), the app's alert-clicked\n+// for that id in the same session, the task's route and region, and macOS's own record of the\n+// response (usernoted \"Received response\" for the request id).\n+const GATES = process.env.OKR_E2E_GATE_DIR || '';\n+const NC_CLICK_MS = 5 * 60_000;\n+const ncLateSkip = (!NC_LATE && 'a hand-run check: set OKR_E2E_NC_LATE=1')\n+  || (process.platform !== 'darwin' && 'Notification Center: macOS only')\n+  || (!GATES && 'needs OKR_E2E_GATE_DIR for the READY/go handshake')\n+  || (!(REAL && EXE) && 'needs a macOS test package showing real notifications (OKR_E2E_EXE, OKR_E2E_REAL_NOTIFY=1)')\n+  || (!kcUp && 'needs okr-api in keycloak mode (OKR_E2E_KC_API)')\n+  || (!FLOW_ISSUER && 'needs the realm issuer (OKR_E2E_KC_ISSUER) for the supporter\\'s token');\n+\n+/** Holds until `<GATES>/<name>` exists, saying so first. */\n+async function gate(name, what) {\n+  console.log(`TXE-4684 ${what}; continues once ${path.join(GATES, name)} exists`);\n+  assert.ok(await eventually(() => fs.existsSync(path.join(GATES, name)), 50 * 60_000), `${name} was opened`);\n+}\n+\n+test('installed (TXE-4684): a Flow alert clicked in Notification Center after its banner left opens the supporting task', { skip: ncLateSkip, timeout: 4 * 3600000 }, async () => {\n+  // Its proof is what it keeps: a run with nowhere to keep it does not start.\n+  const EVIDENCE = process.env.OKR_E2E_EVIDENCE_DIR || '';\n+  assert.ok(EVIDENCE, 'needs OKR_E2E_EVIDENCE_DIR: the attended run keeps its events, Electron\\'s log and usernoted\\'s');\n+  // A gate opened for an earlier run would open this run's at once.\n+  for (const name of ['go-1', 'banner-gone']) assert.ok(!fs.existsSync(path.join(GATES, name)), `${path.join(GATES, name)} is left from an earlier run: use a fresh OKR_E2E_GATE_DIR`);\n+  const electronLog = path.join(scratchDir('okr-desktop-nclate-'), 'electron.log');\n+  const s = await launch(KC_API, { env: { ELECTRON_DEBUG_NOTIFICATIONS: '1', ELECTRON_ENABLE_LOGGING: 'file', ELECTRON_LOG_FILE: electronLog } });\n+  const log = () => (fs.existsSync(electronLog) ? fs.readFileSync(electronLog, 'utf8') : '');\n+  let usernoted = '';\n+  let runError = null;\n+  try {\n+    await kcSignIn(s, FLOW_OWNER, FLOW_ORG);\n+    // Permission first: nobody is asked anything for a package macOS will not notify for.\n+    assert.ok(await eventually(() => /Notification authorization granted: 1|Error requesting notification authorization/.test(log()), 30000), 'macOS answered the permission request');\n+    assert.doesNotMatch(log(), /Error requesting notification authorization/, 'notifications are allowed for the test package (System Settings > Notifications)');\n+    const mine = await ownerTask(s);\n+    // Anything the account had pending arrives now, before this run causes its alert.\n+    await settle(3 * INTERVAL);\n+    await gate('go-1', `READY 1: ${path.basename(EXE)} is signed in as ${FLOW_OWNER}; one Flow alert is caused`);\n+    const before = new Set(s.events().filter((e) => e.type === 'alert-received').map((e) => e.id));\n+    const since = Date.now();\n+    const title = `Late click ${Date.now()}`;\n+    const support = await supportAs(mine, title);\n+    assert.ok(await eventually(() => newAlerts(s.events(), 'flow_support', before, since).length > 0, 60000), 'the Flow alert was handed to the package');\n+    await settle(2 * INTERVAL);\n+    const mineNow = newAlerts(s.events(), 'flow_support', before, since);\n+    assert.equal(mineNow.length, 1, `exactly one Flow alert since this run caused one (got ${mineNow.join(', ')}): not choosing among them`);\n+    const [alertId] = mineNow;\n+    assert.ok(await eventually(() => s.events().some((e) => e.type === 'alert-shown' && e.id === alertId), 60000), 'macOS took the notification');\n+    const shownAt = Date.parse(s.events().find((e) => e.type === 'alert-shown' && e.id === alertId).t);\n+    assert.equal(s.count('alert-failed'), 0, 'notifications are allowed for the test package');\n+    assert.ok(await eventually(() => log().includes(`Notification restored (${alertId})`), 10000), 'the delivered list was read: Electron restored a second entry for the id');\n+    await gate('banner-gone', `READY 2: alert ${alertId} is on screen as a banner; write banner-gone only once the person says the banner has left the screen`);\n+    // Only a click asked for counts: a click on this alert before CLICK NOW is the banner\n+    // clicked early (not the path under test), and fails the run.\n+    const asked = Date.now();\n+    assert.deepEqual(appClicks(s.events(), alertId, asked).early, [], 'no click on the alert before it was asked for');\n+    console.log(`TXE-4684 CLICK NOW: open Notification Center and click the OKR item (not a banner), ${new Date(asked).toISOString()}`);\n+    assert.ok(await eventually(() => appClicks(s.events(), alertId, asked).late.length > 0, NC_CLICK_MS), 'the Notification Center click reached the app');\n+    assert.deepEqual(appClicks(s.events(), alertId, asked).early, [], 'no click on the alert before it was asked for');\n+    await s.page.waitForURL(new RegExp(`#/flow/tasks/${support.id}$`));\n+    await s.page.getByRole('region', { name: title }).waitFor({ timeout: 20000 });\n+    // macOS's own record of the click on this request, read from when the alert was shown so an\n+    // earlier response would be seen too.\n+    usernoted = execFileSync('/usr/bin/log', ['show', '--style', 'compact', '--start', localStamp(new Date(shownAt - 2000)), '--predicate', `process == \"usernoted\" AND eventMessage CONTAINS \"Received response\" AND eventMessage CONTAINS \"${alertId}\"`], { encoding: 'utf8', timeout: 60000 });",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "077016f771a09a164aeccacc3a3990fe08e4cc1a",
+    "original_commit_id": "077016f771a09a164aeccacc3a3990fe08e4cc1a",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Fixed in f4bb42900bead44ff7365e4c3a9f249a5df80012.\n\n- `alertId` and `shownAt` are kept outside the `try`. Once the alert is shown, `finally` reads usernoted's lines for its request id (`process == \"usernoted\" AND eventMessage CONTAINS <id>`, from 2 s before it was shown) whatever happened: presented, any `Received response`, `Bringing app`. These are written to `nc-late-usernoted.log`.\n- So a run that fails on `alert-clicked` still keeps the OS-side record that tells a click lost in the app from one that never reached macOS.\n- A failure to read the log fails the run as evidence not kept.\n- The post-click assertion still reads its own `Received response` query.\n",
+    "created_at": "2026-10-20T14:31:33Z",
+    "updated_at": "2026-10-20T14:31:34Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326183427",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326183427"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326183427"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326183427/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 698,
+    "side": "RIGHT",
+    "in_reply_to_id": 4326162163,
+    "author_association": "MEMBER",
+    "original_position": 215,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326509720",
+    "pull_request_review_id": 5586955746,
+    "id": 4326509720,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAeFMmA",
+    "diff_hunk": "@@ -602,6 +621,110 @@ test('installed: a real Flow support alert, clicked on screen, opens the support\n   }\n });\n \n+// A click from Notification Center after the banner has left (TXE-4684), by hand on macOS with a\n+// person at the keyboard, on the same run-owned test package and real keycloak-mode okr-api as the\n+// case above. A banner click alone never exercises it: the app's presence check reads the\n+// delivered list (Notification.getHistory), which in Electron 44 adds a second entry with the\n+// alert's id, and a later click on the Notification Center item can be handed to that entry.\n+// OKR_E2E_NC_LATE=1 and OKR_E2E_GATE_DIR=<dir> run it; it prints READY 1, waits for <dir>/go-1,\n+// causes one alert, prints READY 2 and waits for <dir>/banner-gone, which the person's helper\n+// writes only once the person says the banner has left the screen (a time alone proves nothing:\n+// a banner can be set to stay). Then one click on the Notification Center item, within\n+// NC_CLICK_MS of being asked. Before anyone is asked, the package must hold notification\n+// permission (Electron's own log), and the run fails at once if it does not. It requires\n+// Electron's \"Notification restored (<id>)\" (the second entry existed), the app's alert-clicked\n+// for that id in the same session, the task's route and region, and macOS's own record of the\n+// response (usernoted \"Received response\" for the request id).\n+const GATES = process.env.OKR_E2E_GATE_DIR || '';\n+const NC_CLICK_MS = 5 * 60_000;\n+const ncLateSkip = (!NC_LATE && 'a hand-run check: set OKR_E2E_NC_LATE=1')\n+  || (process.platform !== 'darwin' && 'Notification Center: macOS only')\n+  || (!GATES && 'needs OKR_E2E_GATE_DIR for the READY/go handshake')\n+  || (!(REAL && EXE) && 'needs a macOS test package showing real notifications (OKR_E2E_EXE, OKR_E2E_REAL_NOTIFY=1)')\n+  || (!kcUp && 'needs okr-api in keycloak mode (OKR_E2E_KC_API)')\n+  || (!FLOW_ISSUER && 'needs the realm issuer (OKR_E2E_KC_ISSUER) for the supporter\\'s token');\n+\n+/** Holds until `<GATES>/<name>` exists, saying so first. */\n+async function gate(name, what) {\n+  console.log(`TXE-4684 ${what}; continues once ${path.join(GATES, name)} exists`);\n+  assert.ok(await eventually(() => fs.existsSync(path.join(GATES, name)), 50 * 60_000), `${name} was opened`);\n+}\n+\n+test('installed (TXE-4684): a Flow alert clicked in Notification Center after its banner left opens the supporting task', { skip: ncLateSkip, timeout: 4 * 3600000 }, async () => {\n+  // Its proof is what it keeps: a run with nowhere to keep it does not start.\n+  const EVIDENCE = process.env.OKR_E2E_EVIDENCE_DIR || '';\n+  assert.ok(EVIDENCE, 'needs OKR_E2E_EVIDENCE_DIR: the attended run keeps its events, Electron\\'s log and usernoted\\'s');\n+  // A gate opened for an earlier run would open this run's at once.\n+  for (const name of ['go-1', 'banner-gone']) assert.ok(!fs.existsSync(path.join(GATES, name)), `${path.join(GATES, name)} is left from an earlier run: use a fresh OKR_E2E_GATE_DIR`);\n+  const electronLog = path.join(scratchDir('okr-desktop-nclate-'), 'electron.log');\n+  const s = await launch(KC_API, { env: { ELECTRON_DEBUG_NOTIFICATIONS: '1', ELECTRON_ENABLE_LOGGING: 'file', ELECTRON_LOG_FILE: electronLog } });\n+  const log = () => (fs.existsSync(electronLog) ? fs.readFileSync(electronLog, 'utf8') : '');\n+  let usernoted = '';\n+  let runError = null;\n+  // Known once the alert is shown: then macOS's own lines for it are read whatever happens next.\n+  let alertId = null;\n+  let shownAt = null;\n+  const osLog = (predicate) => execFileSync('/usr/bin/log', ['show', '--style', 'compact', '--start', localStamp(new Date(shownAt - 2000)), '--predicate', predicate], { encoding: 'utf8', timeout: 60000 });\n+  try {\n+    await kcSignIn(s, FLOW_OWNER, FLOW_ORG);\n+    // Permission first: nobody is asked anything for a package macOS will not notify for.\n+    assert.ok(await eventually(() => /Notification authorization granted: 1|Error requesting notification authorization/.test(log()), 30000), 'macOS answered the permission request');\n+    assert.doesNotMatch(log(), /Error requesting notification authorization/, 'notifications are allowed for the test package (System Settings > Notifications)');\n+    const mine = await ownerTask(s);\n+    // Anything the account had pending arrives now, before this run causes its alert.\n+    await settle(3 * INTERVAL);",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "f4bb42900bead44ff7365e4c3a9f249a5df80012",
+    "original_commit_id": "f4bb42900bead44ff7365e4c3a9f249a5df80012",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Correlate the alert instead of using a fixed drain delay**\n\nWhen the reused real account has more than a few pending alerts, this six-second wait cannot ensure they have all arrived before `before` is captured: this test configures one-second spacing, while `MaxAlertsPerFetch` is one and the server can retain up to 100 undecided candidates. An older `flow_support` first delivered after the snapshot is therefore treated by `newAlerts` as belonging to this run, causing the exactly-one assertion to fail despite correct notification behavior. Fresh evidence beyond the prior comment is the server's explicit one-alert-per-fetch and 100-candidate bounds, which show that three intervals are not a drain guarantee; correlate the alert with the created support or use state owned by this run.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/f4bb42900bead44ff7365e4c3a9f249a5df80012/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-20T15:00:13Z",
+    "updated_at": "2026-10-20T15:00:13Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326509720",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326509720"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326509720"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326509720/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 675,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 192,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326538135",
+    "pull_request_review_id": 5586991116,
+    "id": 4326538135,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAeG7lw",
+    "diff_hunk": "@@ -602,6 +621,110 @@ test('installed: a real Flow support alert, clicked on screen, opens the support\n   }\n });\n \n+// A click from Notification Center after the banner has left (TXE-4684), by hand on macOS with a\n+// person at the keyboard, on the same run-owned test package and real keycloak-mode okr-api as the\n+// case above. A banner click alone never exercises it: the app's presence check reads the\n+// delivered list (Notification.getHistory), which in Electron 44 adds a second entry with the\n+// alert's id, and a later click on the Notification Center item can be handed to that entry.\n+// OKR_E2E_NC_LATE=1 and OKR_E2E_GATE_DIR=<dir> run it; it prints READY 1, waits for <dir>/go-1,\n+// causes one alert, prints READY 2 and waits for <dir>/banner-gone, which the person's helper\n+// writes only once the person says the banner has left the screen (a time alone proves nothing:\n+// a banner can be set to stay). Then one click on the Notification Center item, within\n+// NC_CLICK_MS of being asked. Before anyone is asked, the package must hold notification\n+// permission (Electron's own log), and the run fails at once if it does not. It requires\n+// Electron's \"Notification restored (<id>)\" (the second entry existed), the app's alert-clicked\n+// for that id in the same session, the task's route and region, and macOS's own record of the\n+// response (usernoted \"Received response\" for the request id).\n+const GATES = process.env.OKR_E2E_GATE_DIR || '';\n+const NC_CLICK_MS = 5 * 60_000;\n+const ncLateSkip = (!NC_LATE && 'a hand-run check: set OKR_E2E_NC_LATE=1')\n+  || (process.platform !== 'darwin' && 'Notification Center: macOS only')\n+  || (!GATES && 'needs OKR_E2E_GATE_DIR for the READY/go handshake')\n+  || (!(REAL && EXE) && 'needs a macOS test package showing real notifications (OKR_E2E_EXE, OKR_E2E_REAL_NOTIFY=1)')\n+  || (!kcUp && 'needs okr-api in keycloak mode (OKR_E2E_KC_API)')\n+  || (!FLOW_ISSUER && 'needs the realm issuer (OKR_E2E_KC_ISSUER) for the supporter\\'s token');\n+\n+/** Holds until `<GATES>/<name>` exists, saying so first. */\n+async function gate(name, what) {\n+  console.log(`TXE-4684 ${what}; continues once ${path.join(GATES, name)} exists`);\n+  assert.ok(await eventually(() => fs.existsSync(path.join(GATES, name)), 50 * 60_000), `${name} was opened`);\n+}\n+\n+test('installed (TXE-4684): a Flow alert clicked in Notification Center after its banner left opens the supporting task', { skip: ncLateSkip, timeout: 4 * 3600000 }, async () => {\n+  // Its proof is what it keeps: a run with nowhere to keep it does not start.\n+  const EVIDENCE = process.env.OKR_E2E_EVIDENCE_DIR || '';\n+  assert.ok(EVIDENCE, 'needs OKR_E2E_EVIDENCE_DIR: the attended run keeps its events, Electron\\'s log and usernoted\\'s');\n+  // A gate opened for an earlier run would open this run's at once.\n+  for (const name of ['go-1', 'banner-gone']) assert.ok(!fs.existsSync(path.join(GATES, name)), `${path.join(GATES, name)} is left from an earlier run: use a fresh OKR_E2E_GATE_DIR`);\n+  const electronLog = path.join(scratchDir('okr-desktop-nclate-'), 'electron.log');\n+  const s = await launch(KC_API, { env: { ELECTRON_DEBUG_NOTIFICATIONS: '1', ELECTRON_ENABLE_LOGGING: 'file', ELECTRON_LOG_FILE: electronLog } });\n+  const log = () => (fs.existsSync(electronLog) ? fs.readFileSync(electronLog, 'utf8') : '');\n+  let usernoted = '';\n+  let runError = null;\n+  // Known once the alert is shown: then macOS's own lines for it are read whatever happens next.\n+  let alertId = null;\n+  let shownAt = null;\n+  const osLog = (predicate) => execFileSync('/usr/bin/log', ['show', '--style', 'compact', '--start', localStamp(new Date(shownAt - 2000)), '--predicate', predicate], { encoding: 'utf8', timeout: 60000 });\n+  try {\n+    await kcSignIn(s, FLOW_OWNER, FLOW_ORG);\n+    // Permission first: nobody is asked anything for a package macOS will not notify for.\n+    assert.ok(await eventually(() => /Notification authorization granted: 1|Error requesting notification authorization/.test(log()), 30000), 'macOS answered the permission request');\n+    assert.doesNotMatch(log(), /Error requesting notification authorization/, 'notifications are allowed for the test package (System Settings > Notifications)');\n+    const mine = await ownerTask(s);\n+    // Anything the account had pending arrives now, before this run causes its alert.\n+    await settle(3 * INTERVAL);",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "f4bb42900bead44ff7365e4c3a9f249a5df80012",
+    "original_commit_id": "f4bb42900bead44ff7365e4c3a9f249a5df80012",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Fixed in 5069a9758ded8748020f0d82e1ab844cab3dcede.\n\n- The fixed 3-interval settle is replaced: the case waits until no alert has arrived for 5 intervals, up to 4 minutes (`drained()` in `e2e/fixtures/click-proof.mjs`, unit-tested).\n- It fails plainly if the account's backlog never stops arriving.\n- Only then does it record the ids received so far and hold at READY 1. A backlog handed out one per fetch is therefore fully in `before` before this run causes its alert.\n",
+    "created_at": "2026-10-20T15:02:45Z",
+    "updated_at": "2026-10-20T15:02:45Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326538135",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326538135"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326538135"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326538135/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 675,
+    "side": "RIGHT",
+    "in_reply_to_id": 4326509720,
+    "author_association": "MEMBER",
+    "original_position": 192,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326580540",
+    "pull_request_review_id": 5587047599,
+    "id": 4326580540,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAeJhPA",
+    "diff_hunk": "@@ -602,6 +621,113 @@ test('installed: a real Flow support alert, clicked on screen, opens the support\n   }\n });\n \n+// A click from Notification Center after the banner has left (TXE-4684), by hand on macOS with a\n+// person at the keyboard, on the same run-owned test package and real keycloak-mode okr-api as the\n+// case above. A banner click alone never exercises it: the app's presence check reads the\n+// delivered list (Notification.getHistory), which in Electron 44 adds a second entry with the\n+// alert's id, and a later click on the Notification Center item can be handed to that entry.\n+// OKR_E2E_NC_LATE=1 and OKR_E2E_GATE_DIR=<dir> run it; it prints READY 1, waits for <dir>/go-1,\n+// causes one alert, prints READY 2 and waits for <dir>/banner-gone, which the person's helper\n+// writes only once the person says the banner has left the screen (a time alone proves nothing:\n+// a banner can be set to stay). Then one click on the Notification Center item, within\n+// NC_CLICK_MS of being asked. Before anyone is asked, the package must hold notification\n+// permission (Electron's own log), and the run fails at once if it does not. It requires\n+// Electron's \"Notification restored (<id>)\" (the second entry existed), the app's alert-clicked\n+// for that id in the same session, the task's route and region, and macOS's own record of the\n+// response (usernoted \"Received response\" for the request id).\n+const GATES = process.env.OKR_E2E_GATE_DIR || '';\n+const NC_CLICK_MS = 5 * 60_000;\n+const ncLateSkip = (!NC_LATE && 'a hand-run check: set OKR_E2E_NC_LATE=1')\n+  || (process.platform !== 'darwin' && 'Notification Center: macOS only')\n+  || (!GATES && 'needs OKR_E2E_GATE_DIR for the READY/go handshake')\n+  || (!(REAL && EXE) && 'needs a macOS test package showing real notifications (OKR_E2E_EXE, OKR_E2E_REAL_NOTIFY=1)')\n+  || (!kcUp && 'needs okr-api in keycloak mode (OKR_E2E_KC_API)')\n+  || (!FLOW_ISSUER && 'needs the realm issuer (OKR_E2E_KC_ISSUER) for the supporter\\'s token');\n+\n+/** Holds until `<GATES>/<name>` exists, saying so first. */\n+async function gate(name, what) {\n+  console.log(`TXE-4684 ${what}; continues once ${path.join(GATES, name)} exists`);\n+  assert.ok(await eventually(() => fs.existsSync(path.join(GATES, name)), 50 * 60_000), `${name} was opened`);\n+}\n+\n+test('installed (TXE-4684): a Flow alert clicked in Notification Center after its banner left opens the supporting task', { skip: ncLateSkip, timeout: 4 * 3600000 }, async () => {\n+  // Its proof is what it keeps: a run with nowhere to keep it does not start.\n+  const EVIDENCE = process.env.OKR_E2E_EVIDENCE_DIR || '';\n+  assert.ok(EVIDENCE, 'needs OKR_E2E_EVIDENCE_DIR: the attended run keeps its events, Electron\\'s log and usernoted\\'s');\n+  // A gate opened for an earlier run would open this run's at once.\n+  for (const name of ['go-1', 'banner-gone']) assert.ok(!fs.existsSync(path.join(GATES, name)), `${path.join(GATES, name)} is left from an earlier run: use a fresh OKR_E2E_GATE_DIR`);\n+  const electronLog = path.join(scratchDir('okr-desktop-nclate-'), 'electron.log');\n+  const s = await launch(KC_API, { env: { ELECTRON_DEBUG_NOTIFICATIONS: '1', ELECTRON_ENABLE_LOGGING: 'file', ELECTRON_LOG_FILE: electronLog } });\n+  const log = () => (fs.existsSync(electronLog) ? fs.readFileSync(electronLog, 'utf8') : '');\n+  let usernoted = '';\n+  let runError = null;\n+  // Known once the alert is shown: then macOS's own lines for it are read whatever happens next.\n+  let alertId = null;\n+  let shownAt = null;\n+  const osLog = (predicate) => execFileSync('/usr/bin/log', ['show', '--style', 'compact', '--start', localStamp(new Date(shownAt - 2000)), '--predicate', predicate], { encoding: 'utf8', timeout: 60000 });\n+  try {\n+    await kcSignIn(s, FLOW_OWNER, FLOW_ORG);\n+    // Permission first: nobody is asked anything for a package macOS will not notify for.\n+    assert.ok(await eventually(() => /Notification authorization granted: 1|Error requesting notification authorization/.test(log()), 30000), 'macOS answered the permission request');\n+    assert.doesNotMatch(log(), /Error requesting notification authorization/, 'notifications are allowed for the test package (System Settings > Notifications)');\n+    const mine = await ownerTask(s);",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "5069a9758ded8748020f0d82e1ab844cab3dcede",
+    "original_commit_id": "5069a9758ded8748020f0d82e1ab844cab3dcede",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Restore the owner's alert preferences after the attended run**\n\nWhen this attended case runs against the reusable `FLOW_OWNER` account, `ownerTask` permanently sets `quiet_hours.enabled` to false, and the `finally` block only stops the app. A successful or failed run therefore changes shared account state and can alter later notification tests; snapshot the original preferences and restore them—including the previously-unsaved state—in `finally`.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/5069a9758ded8748020f0d82e1ab844cab3dcede/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-20T15:06:38Z",
+    "updated_at": "2026-10-20T15:06:38Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326580540",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326580540"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326580540"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326580540/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 673,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 190,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326667760",
+    "pull_request_review_id": 5587174029,
+    "id": 4326667760,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAeO18A",
+    "diff_hunk": "@@ -602,6 +621,113 @@ test('installed: a real Flow support alert, clicked on screen, opens the support\n   }\n });\n \n+// A click from Notification Center after the banner has left (TXE-4684), by hand on macOS with a\n+// person at the keyboard, on the same run-owned test package and real keycloak-mode okr-api as the\n+// case above. A banner click alone never exercises it: the app's presence check reads the\n+// delivered list (Notification.getHistory), which in Electron 44 adds a second entry with the\n+// alert's id, and a later click on the Notification Center item can be handed to that entry.\n+// OKR_E2E_NC_LATE=1 and OKR_E2E_GATE_DIR=<dir> run it; it prints READY 1, waits for <dir>/go-1,\n+// causes one alert, prints READY 2 and waits for <dir>/banner-gone, which the person's helper\n+// writes only once the person says the banner has left the screen (a time alone proves nothing:\n+// a banner can be set to stay). Then one click on the Notification Center item, within\n+// NC_CLICK_MS of being asked. Before anyone is asked, the package must hold notification\n+// permission (Electron's own log), and the run fails at once if it does not. It requires\n+// Electron's \"Notification restored (<id>)\" (the second entry existed), the app's alert-clicked\n+// for that id in the same session, the task's route and region, and macOS's own record of the\n+// response (usernoted \"Received response\" for the request id).\n+const GATES = process.env.OKR_E2E_GATE_DIR || '';\n+const NC_CLICK_MS = 5 * 60_000;\n+const ncLateSkip = (!NC_LATE && 'a hand-run check: set OKR_E2E_NC_LATE=1')\n+  || (process.platform !== 'darwin' && 'Notification Center: macOS only')\n+  || (!GATES && 'needs OKR_E2E_GATE_DIR for the READY/go handshake')\n+  || (!(REAL && EXE) && 'needs a macOS test package showing real notifications (OKR_E2E_EXE, OKR_E2E_REAL_NOTIFY=1)')\n+  || (!kcUp && 'needs okr-api in keycloak mode (OKR_E2E_KC_API)')\n+  || (!FLOW_ISSUER && 'needs the realm issuer (OKR_E2E_KC_ISSUER) for the supporter\\'s token');\n+\n+/** Holds until `<GATES>/<name>` exists, saying so first. */\n+async function gate(name, what) {\n+  console.log(`TXE-4684 ${what}; continues once ${path.join(GATES, name)} exists`);\n+  assert.ok(await eventually(() => fs.existsSync(path.join(GATES, name)), 50 * 60_000), `${name} was opened`);\n+}\n+\n+test('installed (TXE-4684): a Flow alert clicked in Notification Center after its banner left opens the supporting task', { skip: ncLateSkip, timeout: 4 * 3600000 }, async () => {\n+  // Its proof is what it keeps: a run with nowhere to keep it does not start.\n+  const EVIDENCE = process.env.OKR_E2E_EVIDENCE_DIR || '';\n+  assert.ok(EVIDENCE, 'needs OKR_E2E_EVIDENCE_DIR: the attended run keeps its events, Electron\\'s log and usernoted\\'s');\n+  // A gate opened for an earlier run would open this run's at once.\n+  for (const name of ['go-1', 'banner-gone']) assert.ok(!fs.existsSync(path.join(GATES, name)), `${path.join(GATES, name)} is left from an earlier run: use a fresh OKR_E2E_GATE_DIR`);\n+  const electronLog = path.join(scratchDir('okr-desktop-nclate-'), 'electron.log');\n+  const s = await launch(KC_API, { env: { ELECTRON_DEBUG_NOTIFICATIONS: '1', ELECTRON_ENABLE_LOGGING: 'file', ELECTRON_LOG_FILE: electronLog } });\n+  const log = () => (fs.existsSync(electronLog) ? fs.readFileSync(electronLog, 'utf8') : '');\n+  let usernoted = '';\n+  let runError = null;\n+  // Known once the alert is shown: then macOS's own lines for it are read whatever happens next.\n+  let alertId = null;\n+  let shownAt = null;\n+  const osLog = (predicate) => execFileSync('/usr/bin/log', ['show', '--style', 'compact', '--start', localStamp(new Date(shownAt - 2000)), '--predicate', predicate], { encoding: 'utf8', timeout: 60000 });\n+  try {\n+    await kcSignIn(s, FLOW_OWNER, FLOW_ORG);\n+    // Permission first: nobody is asked anything for a package macOS will not notify for.\n+    assert.ok(await eventually(() => /Notification authorization granted: 1|Error requesting notification authorization/.test(log()), 30000), 'macOS answered the permission request');\n+    assert.doesNotMatch(log(), /Error requesting notification authorization/, 'notifications are allowed for the test package (System Settings > Notifications)');\n+    const mine = await ownerTask(s);",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "5069a9758ded8748020f0d82e1ab844cab3dcede",
+    "original_commit_id": "5069a9758ded8748020f0d82e1ab844cab3dcede",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Fixed in 946a0ff29897ba52663cf0eec7e26f8c38cb0e77.\n\n- `ownerTask` now returns the preferences it found.\n- Both installed Flow cases (TXE-4402's and this one) write them back in `finally`, before the app closes, with `If-Match` at the saved row's version (`restorePrefs`).\n- A run that passed fails if they cannot be put back.\n- Limit: the API has GET and PUT only (`okr/internal/httpapi/alerts.go:27-28`), so a row the owner had never saved cannot return to unsaved. It comes back as the same values, saved, and later alerts behave the same.\n",
+    "created_at": "2026-10-20T15:14:35Z",
+    "updated_at": "2026-10-20T15:14:35Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326667760",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326667760"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326667760"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326667760/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 673,
+    "side": "RIGHT",
+    "in_reply_to_id": 4326580540,
+    "author_association": "MEMBER",
+    "original_position": 190,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326703373",
+    "pull_request_review_id": 5587225364,
+    "id": 4326703373,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAeRBDQ",
+    "diff_hunk": "@@ -539,55 +545,89 @@ async function supporterToken() {\n   return (await r.json()).access_token;\n }\n \n+/**\n+ * The owner, signed in to `s`: quiet hours off, then a focus and a task of theirs. The owner's\n+ * alert is written at the real time, and the default quiet window (22:00-08:00 UTC) would hold\n+ * it in those hours, so the owner keeps the defaults but quiet hours. A first save is\n+ * create-only (If-None-Match: *); a later run on the same account replaces the saved row at its\n+ * version (If-Match), as the settings page does.\n+ */\n+async function ownerTask(s) {\n+  const { status: quiet, prior } = await s.page.evaluate(async () => {\n+    const got = await fetch('/api/v1/me/alert-preferences');\n+    const prefs = await got.json();\n+    const etag = got.headers.get('ETag');\n+    const r = await fetch('/api/v1/me/alert-preferences', {\n+      method: 'PUT',\n+      headers: { 'Content-Type': 'application/json', ...(prefs.saved && etag ? { 'If-Match': etag } : { 'If-None-Match': '*' }) },\n+      body: JSON.stringify({ categories: prefs.categories, quiet_hours: { ...prefs.quiet_hours, enabled: false }, time_zone: prefs.time_zone }),\n+    });\n+    return { status: r.status, prior: { categories: prefs.categories, quiet_hours: prefs.quiet_hours, time_zone: prefs.time_zone } };\n+  });\n+  assert.ok([200, 201].includes(quiet), `the owner saved preferences with quiet hours off: ${quiet}`);\n+  // The owner's focus and task, through the app's own session, as seedGoal does.\n+  const mine = await s.page.evaluate(async () => {",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "58b951c02d5ce4c52f4088e611a485113cc76757",
+    "original_commit_id": "946a0ff29897ba52663cf0eec7e26f8c38cb0e77",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Restore preferences when owner setup fails**\n\nIf either focus/task request or the status assertion fails after the preference PUT, `ownerTask` throws before returning `prior`, so both callers leave `mine` null and their `finally` blocks skip `restorePrefs`; the reusable `FLOW_OWNER` account is then left with quiet hours disabled. Fresh evidence after the cleanup change is that restoration is registered only after this second `page.evaluate` completes; capture the snapshot before mutating or restore internally on setup failure.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/946a0ff29897ba52663cf0eec7e26f8c38cb0e77/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-20T15:17:51Z",
+    "updated_at": "2026-10-20T15:17:51Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326703373",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326703373"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326703373"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326703373/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 615,
+    "original_line": 569,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 54,
+    "position": 78,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326776777",
+    "pull_request_review_id": 5587331950,
+    "id": 4326776777,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAeVfyQ",
+    "diff_hunk": "@@ -539,55 +545,89 @@ async function supporterToken() {\n   return (await r.json()).access_token;\n }\n \n+/**\n+ * The owner, signed in to `s`: quiet hours off, then a focus and a task of theirs. The owner's\n+ * alert is written at the real time, and the default quiet window (22:00-08:00 UTC) would hold\n+ * it in those hours, so the owner keeps the defaults but quiet hours. A first save is\n+ * create-only (If-None-Match: *); a later run on the same account replaces the saved row at its\n+ * version (If-Match), as the settings page does.\n+ */\n+async function ownerTask(s) {\n+  const { status: quiet, prior } = await s.page.evaluate(async () => {\n+    const got = await fetch('/api/v1/me/alert-preferences');\n+    const prefs = await got.json();\n+    const etag = got.headers.get('ETag');\n+    const r = await fetch('/api/v1/me/alert-preferences', {\n+      method: 'PUT',\n+      headers: { 'Content-Type': 'application/json', ...(prefs.saved && etag ? { 'If-Match': etag } : { 'If-None-Match': '*' }) },\n+      body: JSON.stringify({ categories: prefs.categories, quiet_hours: { ...prefs.quiet_hours, enabled: false }, time_zone: prefs.time_zone }),\n+    });\n+    return { status: r.status, prior: { categories: prefs.categories, quiet_hours: prefs.quiet_hours, time_zone: prefs.time_zone } };\n+  });\n+  assert.ok([200, 201].includes(quiet), `the owner saved preferences with quiet hours off: ${quiet}`);\n+  // The owner's focus and task, through the app's own session, as seedGoal does.\n+  const mine = await s.page.evaluate(async () => {",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "58b951c02d5ce4c52f4088e611a485113cc76757",
+    "original_commit_id": "946a0ff29897ba52663cf0eec7e26f8c38cb0e77",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Fixed in 65cb56b94b34c7e3dd77e34c087d2af14e794d14: `ownerTask` now does the focus and task setup (`ownerFocusTask`) inside a `try`. If that fails after the preferences were changed, it puts them back (`restorePrefs`) and then rethrows the setup's own error. A failure to restore is logged, not allowed to replace that error.\n",
+    "created_at": "2026-10-20T15:24:36Z",
+    "updated_at": "2026-10-20T15:24:36Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326776777",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326776777"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326776777"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326776777/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 615,
+    "original_line": 569,
+    "side": "RIGHT",
+    "in_reply_to_id": 4326703373,
+    "author_association": "MEMBER",
+    "original_position": 54,
+    "position": 78,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326826770",
+    "pull_request_review_id": 5587404398,
+    "id": 4326826770,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAeYjEg",
+    "diff_hunk": "@@ -0,0 +1,85 @@\n+// What counts as the person's Notification Center click in the attended TXE-4684 case\n+// (e2e/alerts.e2e.mjs, OKR_E2E_NC_LATE=1): only a click asked for. `asked` is when the run said\n+// CLICK NOW (ms since the epoch); a click on the alert, or a macOS response for its request,\n+// from before then is the banner clicked early, which is not the path under test, so it fails\n+// the run rather than counting.\n+\n+/**\n+ * The app's clicks on alert `id`, split at `asked`: `early` (any click before it) and `late`\n+ * (a click in the same session at or after it).\n+ */\n+export function appClicks(events, id, asked) {\n+  const clicks = events.filter((e) => e.type === 'alert-clicked' && e.id === id);\n+  return {\n+    early: clicks.filter((e) => Date.parse(e.t) < asked),\n+    late: clicks.filter((e) => Date.parse(e.t) >= asked && e.sameSession === true),\n+  };\n+}\n+\n+/** A `log show --style compact` line's time, read as the Mac's local time, in ms. */\n+export function logLineTime(line) {\n+  const m = /^(\\d{4})-(\\d{2})-(\\d{2}) (\\d{2}):(\\d{2}):(\\d{2})\\.(\\d{3})/.exec(line);\n+  if (!m) return NaN;\n+  const [, y, mo, d, h, mi, s, ms] = m.map(Number);\n+  return new Date(y, mo - 1, d, h, mi, s, ms).getTime();\n+}\n+\n+/** usernoted's \"Received response\" lines for request `id`, split at `asked`. */\n+export function osResponses(text, id, asked) {\n+  const lines = text.split('\\n').filter((l) => l.includes('Received response') && l.includes(`req:\"${id}\"`));\n+  return {\n+    early: lines.filter((l) => logLineTime(l) < asked),\n+    late: lines.filter((l) => logLineTime(l) >= asked),\n+  };\n+}\n+\n+/** `log show --start` takes the Mac's local time, to the second. */\n+export function localStamp(d) {\n+  const z = (n) => String(n).padStart(2, '0');\n+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;\n+}\n+\n+/**\n+ * The alerts of `category` this run caused: received at or after `since` (ms) and not among\n+ * `before` (the ids received before the run caused anything), so an alert left pending by an\n+ * earlier run of the same account is never taken for this one.\n+ */\n+export function newAlerts(events, category, before, since) {\n+  return [...new Set(events\n+    .filter((e) => e.type === 'alert-received' && e.category === category && Date.parse(e.t) >= since && !before.has(e.id))\n+    .map((e) => e.id))];\n+}\n+\n+/**\n+ * Writes the run's evidence into `out` (events copied from `events` if that file exists, then\n+ * `electron` and `usernoted` as text). Throws if anything cannot be written.\n+ */\n+export function keepEvidence(fs, path, out, { events, electron, usernoted }) {\n+  fs.mkdirSync(out, { recursive: true });\n+  if (fs.existsSync(events)) fs.copyFileSync(events, path.join(out, 'nc-late-events.jsonl'));\n+  fs.writeFileSync(path.join(out, 'nc-late-electron.log'), electron);\n+  if (usernoted) fs.writeFileSync(path.join(out, 'nc-late-usernoted.log'), usernoted);",
+    "path": "okr/desktop/e2e/fixtures/click-proof.mjs",
+    "commit_id": "65cb56b94b34c7e3dd77e34c087d2af14e794d14",
+    "original_commit_id": "65cb56b94b34c7e3dd77e34c087d2af14e794d14",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Clear omitted artifacts before writing evidence**\n\nWhen an attended retry reuses `OKR_E2E_EVIDENCE_DIR` and the current run fails before creating the events file or collecting `usernoted`, these conditional writes leave the prior run's corresponding files in place while `keepEvidence` reports success. The resulting directory can mix the current Electron log with stale click evidence and misdiagnose the regression; remove optional artifacts first, write empty current files, or require a fresh output directory.\n\nAGENTS.md reference: [AGENTS.md:L133-L140](https://github.com/txehq/txe/blob/65cb56b94b34c7e3dd77e34c087d2af14e794d14/AGENTS.md#L133-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-20T15:29:08Z",
+    "updated_at": "2026-10-20T15:29:08Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326826770",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326826770"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326826770"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326826770/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 59,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 61,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 61,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326826785",
+    "pull_request_review_id": 5587404398,
+    "id": 4326826785,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAeYjIQ",
+    "diff_hunk": "@@ -597,8 +647,128 @@ test('installed: a real Flow support alert, clicked on screen, opens the support\n     await s.page.waitForURL(new RegExp(`#/flow/tasks/${support.id}$`));\n     await s.page.getByRole('region', { name: title }).waitFor({ timeout: 20000 });\n     console.log(`TXE-4402 installed ${JSON.stringify({ events: s.events().filter((e) => e.type.startsWith('alert-') || e.type === 'route-opened').map((e) => e.type) })}`);\n+  } catch (e) {\n+    runError = e;\n+    throw e;\n+  } finally {\n+    // The owner's preferences go back as they were; a run that passed fails if they cannot.\n+    let restoreError = null;\n+    if (mine) await restorePrefs(s, mine.prior).catch((e) => { restoreError = e; });\n+    await s.stop();\n+    if (restoreError && !runError) throw restoreError;",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "65cb56b94b34c7e3dd77e34c087d2af14e794d14",
+    "original_commit_id": "65cb56b94b34c7e3dd77e34c087d2af14e794d14",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Surface restoration failures after a failed attended run**\n\nWhen this attended case has already failed and the subsequent preference PUT also fails, the `restoreError && !runError` condition silently discards the cleanup failure; the TXE-4684 case has the same behavior unless evidence keeping also failed. This can leave the reusable `FLOW_OWNER` account mutated while the reported error gives no indication that later runs now start from contaminated shared state, so preserve both failures with an aggregate error or at least report the restoration failure unconditionally.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/65cb56b94b34c7e3dd77e34c087d2af14e794d14/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-20T15:29:08Z",
+    "updated_at": "2026-10-20T15:29:08Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326826785",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326826785"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326826785"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326826785/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 655,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 658,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 180,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326906485",
+    "pull_request_review_id": 5587518096,
+    "id": 4326906485,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAedadQ",
+    "diff_hunk": "@@ -0,0 +1,85 @@\n+// What counts as the person's Notification Center click in the attended TXE-4684 case\n+// (e2e/alerts.e2e.mjs, OKR_E2E_NC_LATE=1): only a click asked for. `asked` is when the run said\n+// CLICK NOW (ms since the epoch); a click on the alert, or a macOS response for its request,\n+// from before then is the banner clicked early, which is not the path under test, so it fails\n+// the run rather than counting.\n+\n+/**\n+ * The app's clicks on alert `id`, split at `asked`: `early` (any click before it) and `late`\n+ * (a click in the same session at or after it).\n+ */\n+export function appClicks(events, id, asked) {\n+  const clicks = events.filter((e) => e.type === 'alert-clicked' && e.id === id);\n+  return {\n+    early: clicks.filter((e) => Date.parse(e.t) < asked),\n+    late: clicks.filter((e) => Date.parse(e.t) >= asked && e.sameSession === true),\n+  };\n+}\n+\n+/** A `log show --style compact` line's time, read as the Mac's local time, in ms. */\n+export function logLineTime(line) {\n+  const m = /^(\\d{4})-(\\d{2})-(\\d{2}) (\\d{2}):(\\d{2}):(\\d{2})\\.(\\d{3})/.exec(line);\n+  if (!m) return NaN;\n+  const [, y, mo, d, h, mi, s, ms] = m.map(Number);\n+  return new Date(y, mo - 1, d, h, mi, s, ms).getTime();\n+}\n+\n+/** usernoted's \"Received response\" lines for request `id`, split at `asked`. */\n+export function osResponses(text, id, asked) {\n+  const lines = text.split('\\n').filter((l) => l.includes('Received response') && l.includes(`req:\"${id}\"`));\n+  return {\n+    early: lines.filter((l) => logLineTime(l) < asked),\n+    late: lines.filter((l) => logLineTime(l) >= asked),\n+  };\n+}\n+\n+/** `log show --start` takes the Mac's local time, to the second. */\n+export function localStamp(d) {\n+  const z = (n) => String(n).padStart(2, '0');\n+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;\n+}\n+\n+/**\n+ * The alerts of `category` this run caused: received at or after `since` (ms) and not among\n+ * `before` (the ids received before the run caused anything), so an alert left pending by an\n+ * earlier run of the same account is never taken for this one.\n+ */\n+export function newAlerts(events, category, before, since) {\n+  return [...new Set(events\n+    .filter((e) => e.type === 'alert-received' && e.category === category && Date.parse(e.t) >= since && !before.has(e.id))\n+    .map((e) => e.id))];\n+}\n+\n+/**\n+ * Writes the run's evidence into `out` (events copied from `events` if that file exists, then\n+ * `electron` and `usernoted` as text). Throws if anything cannot be written.\n+ */\n+export function keepEvidence(fs, path, out, { events, electron, usernoted }) {\n+  fs.mkdirSync(out, { recursive: true });\n+  if (fs.existsSync(events)) fs.copyFileSync(events, path.join(out, 'nc-late-events.jsonl'));\n+  fs.writeFileSync(path.join(out, 'nc-late-electron.log'), electron);\n+  if (usernoted) fs.writeFileSync(path.join(out, 'nc-late-usernoted.log'), usernoted);",
+    "path": "okr/desktop/e2e/fixtures/click-proof.mjs",
+    "commit_id": "65cb56b94b34c7e3dd77e34c087d2af14e794d14",
+    "original_commit_id": "65cb56b94b34c7e3dd77e34c087d2af14e794d14",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Fixed in d3025fd29d8a34d0a65f39fda2850bc94c760f5d.\n\n- The case now requires `OKR_E2E_EVIDENCE_DIR` to be fresh (not there yet, or empty) before launch (`freshDir`).\n- `keepEvidence` writes all three files every time, each empty where the run got no further.\n- So a retry can never mix its files with an earlier run's.\n",
+    "created_at": "2026-10-20T15:36:04Z",
+    "updated_at": "2026-10-20T15:36:05Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326906485",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326906485"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326906485"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326906485/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 59,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 61,
+    "side": "RIGHT",
+    "in_reply_to_id": 4326826770,
+    "author_association": "MEMBER",
+    "original_position": 61,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326906996",
+    "pull_request_review_id": 5587518740,
+    "id": 4326906996,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAedcdA",
+    "diff_hunk": "@@ -597,8 +647,128 @@ test('installed: a real Flow support alert, clicked on screen, opens the support\n     await s.page.waitForURL(new RegExp(`#/flow/tasks/${support.id}$`));\n     await s.page.getByRole('region', { name: title }).waitFor({ timeout: 20000 });\n     console.log(`TXE-4402 installed ${JSON.stringify({ events: s.events().filter((e) => e.type.startsWith('alert-') || e.type === 'route-opened').map((e) => e.type) })}`);\n+  } catch (e) {\n+    runError = e;\n+    throw e;\n+  } finally {\n+    // The owner's preferences go back as they were; a run that passed fails if they cannot.\n+    let restoreError = null;\n+    if (mine) await restorePrefs(s, mine.prior).catch((e) => { restoreError = e; });\n+    await s.stop();\n+    if (restoreError && !runError) throw restoreError;",
+    "path": "okr/desktop/e2e/alerts.e2e.mjs",
+    "commit_id": "65cb56b94b34c7e3dd77e34c087d2af14e794d14",
+    "original_commit_id": "65cb56b94b34c7e3dd77e34c087d2af14e794d14",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Fixed in d3025fd29d8a34d0a65f39fda2850bc94c760f5d.\n\n- Both installed cases now report every cleanup failure through `cleanupOutcome` (in `e2e/fixtures/click-proof.mjs`, unit-tested).\n- A cleanup failure alone fails a run that passed.\n- With a failed run, it is joined to the run's own error in an `AggregateError`, so a preferences restore that fails after a failed run is always reported.\n",
+    "created_at": "2026-10-20T15:36:07Z",
+    "updated_at": "2026-10-20T15:36:07Z",
+    "html_url": "https://github.com/txehq/txe/pull/4030#discussion_r4326906996",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4326906996"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#discussion_r4326906996"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4326906996/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 655,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 658,
+    "side": "RIGHT",
+    "in_reply_to_id": 4326826785,
+    "author_association": "MEMBER",
+    "original_position": 180,
+    "position": 1,
+    "subject_type": "line"
+  }
+]

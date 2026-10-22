@@ -1,0 +1,268 @@
+[
+  {
+    "data": {
+      "repository": {
+        "pullRequest": {
+          "reviewThreads": {
+            "pageInfo": {
+              "hasNextPage": false,
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0yMFQxODo0MToyNVrOrniOlQ=="
+            },
+            "nodes": [
+              {
+                "isResolved": true,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 381,
+                "resolvedBy": {
+                  "login": "connorwang"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4325635811,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "7ecb6260c0fb932ef28fd0e65dc1e84b47c96b2c"
+                      },
+                      "path": "okr/desktop/src/shell/alerts.cjs",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Preserve the prior holder until the replacement succeeds**\n\nWhen an alert ID is retried after its acknowledgement failed, this immediately transfers the prior notification and retires its holder before `n.show()` has succeeded. If the replacement then throws or emits `failed` before replacing the delivered OS item, the catch/failed path calls `release()`, so the still-visible earlier notification remains in Notification Center but its click handler now targets an `over` entry and opens nothing. Keep the earlier holder active until the replacement is confirmed, or restore it on replacement failure.\n\nAGENTS.md reference: [AGENTS.md:L133-L140](https://github.com/txehq/txe/blob/7ecb6260c0fb932ef28fd0e65dc1e84b47c96b2c/AGENTS.md#L133-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": true,
+                "isOutdated": false,
+                "line": null,
+                "originalLine": 485,
+                "resolvedBy": {
+                  "login": "connorwang"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4325960050,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "d3025fd29d8a34d0a65f39fda2850bc94c760f5d"
+                      },
+                      "path": "okr/desktop/test/alerts.test.cjs",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Exercise the restored-object path on real macOS**\n\nThis model injects the exact unverified premise the fix depends on—that `getHistory()` creates a competing entry which receives the click—so it passes even if Electron/macOS still drops Notification Center clicks. The existing attended test at `notifications-os.desktop.real.spec.ts:281` permits clicking either the banner or Notification Center and does not wait for the banner to disappear, so it can pass without exercising this regression. Update that native scenario to wait for the banner to leave, click the retained Notification Center item, and require `alert-clicked` before treating this behavior as covered.\n\nAGENTS.md reference: [AGENTS.md:L142-L148](https://github.com/txehq/txe/blob/ba907a0ee723624e044a2b3607e6b3bd0ceb234f/AGENTS.md#L142-L148)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": true,
+                "isOutdated": false,
+                "line": 739,
+                "originalLine": 650,
+                "resolvedBy": {
+                  "login": "connorwang"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4326055923,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "d3025fd29d8a34d0a65f39fda2850bc94c760f5d"
+                      },
+                      "path": "okr/desktop/e2e/alerts.e2e.mjs",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Reset gate markers before waiting**\n\nWhen this attended case is rerun with the same `OKR_E2E_GATE_DIR`, the prior `go-1` and `banner-gone` files still exist, so both gates open immediately and the test no longer establishes that the current banner has left before prompting for the click. This can turn a required retry into apparent Notification Center evidence even though the intended late-click condition was skipped; remove each marker before announcing its gate or require a fresh run-specific directory.\n\nAGENTS.md reference: [AGENTS.md:L133-L140](https://github.com/txehq/txe/blob/1088447bbeaac88259788da46db7d635fe54662a/AGENTS.md#L133-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": true,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 669,
+                "resolvedBy": {
+                  "login": "connorwang"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4326055930,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "1088447bbeaac88259788da46db7d635fe54662a"
+                      },
+                      "path": "okr/desktop/e2e/alerts.e2e.mjs",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Select the alert created by this attended run**\n\nIf a previous failed/interrupted run left any `flow_support` alert pending for this reused real account, it can be fetched after sign-in and this unqualified `find` permanently chooses that older alert instead of the one just created by `supportAs`. The subsequent click assertion and route assertion then refer to different alerts, making the required retry fail despite correct behavior; snapshot the received events before creating the support and select only the new event (or otherwise correlate it to the created support).\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/1088447bbeaac88259788da46db7d635fe54662a/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": true,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 698,
+                "resolvedBy": {
+                  "login": "connorwang"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4326162163,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "077016f771a09a164aeccacc3a3990fe08e4cc1a"
+                      },
+                      "path": "okr/desktop/e2e/alerts.e2e.mjs",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Capture usernoted before an app-click timeout aborts**\n\nWhen the regression under test occurs—macOS records the Notification Center response but Electron never emits `alert-clicked`—the assertion at line 692 throws before this command runs. Consequently `usernoted` remains empty, and `keepEvidence` omits `nc-late-usernoted.log`, losing the OS-side evidence needed to distinguish the target bug from a click that never reached macOS. Capture the filtered unified log in `finally` once `alertId` and `shownAt` are known so failed runs retain the required evidence too.\n\nAGENTS.md reference: [AGENTS.md:L133-L140](https://github.com/txehq/txe/blob/077016f771a09a164aeccacc3a3990fe08e4cc1a/AGENTS.md#L133-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": true,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 675,
+                "resolvedBy": {
+                  "login": "connorwang"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4326509720,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "f4bb42900bead44ff7365e4c3a9f249a5df80012"
+                      },
+                      "path": "okr/desktop/e2e/alerts.e2e.mjs",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Correlate the alert instead of using a fixed drain delay**\n\nWhen the reused real account has more than a few pending alerts, this six-second wait cannot ensure they have all arrived before `before` is captured: this test configures one-second spacing, while `MaxAlertsPerFetch` is one and the server can retain up to 100 undecided candidates. An older `flow_support` first delivered after the snapshot is therefore treated by `newAlerts` as belonging to this run, causing the exactly-one assertion to fail despite correct notification behavior. Fresh evidence beyond the prior comment is the server's explicit one-alert-per-fetch and 100-candidate bounds, which show that three intervals are not a drain guarantee; correlate the alert with the created support or use state owned by this run.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/f4bb42900bead44ff7365e4c3a9f249a5df80012/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": true,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 673,
+                "resolvedBy": {
+                  "login": "connorwang"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4326580540,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "5069a9758ded8748020f0d82e1ab844cab3dcede"
+                      },
+                      "path": "okr/desktop/e2e/alerts.e2e.mjs",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Restore the owner's alert preferences after the attended run**\n\nWhen this attended case runs against the reusable `FLOW_OWNER` account, `ownerTask` permanently sets `quiet_hours.enabled` to false, and the `finally` block only stops the app. A successful or failed run therefore changes shared account state and can alter later notification tests; snapshot the original preferences and restore them—including the previously-unsaved state—in `finally`.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/5069a9758ded8748020f0d82e1ab844cab3dcede/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": true,
+                "isOutdated": false,
+                "line": 615,
+                "originalLine": 569,
+                "resolvedBy": {
+                  "login": "connorwang"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4326703373,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "d3025fd29d8a34d0a65f39fda2850bc94c760f5d"
+                      },
+                      "path": "okr/desktop/e2e/alerts.e2e.mjs",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Restore preferences when owner setup fails**\n\nIf either focus/task request or the status assertion fails after the preference PUT, `ownerTask` throws before returning `prior`, so both callers leave `mine` null and their `finally` blocks skip `restorePrefs`; the reusable `FLOW_OWNER` account is then left with quiet hours disabled. Fresh evidence after the cleanup change is that restoration is registered only after this second `page.evaluate` completes; capture the snapshot before mutating or restore internally on setup failure.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/946a0ff29897ba52663cf0eec7e26f8c38cb0e77/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": true,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 61,
+                "resolvedBy": {
+                  "login": "connorwang"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4326826770,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "65cb56b94b34c7e3dd77e34c087d2af14e794d14"
+                      },
+                      "path": "okr/desktop/e2e/fixtures/click-proof.mjs",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Clear omitted artifacts before writing evidence**\n\nWhen an attended retry reuses `OKR_E2E_EVIDENCE_DIR` and the current run fails before creating the events file or collecting `usernoted`, these conditional writes leave the prior run's corresponding files in place while `keepEvidence` reports success. The resulting directory can mix the current Electron log with stale click evidence and misdiagnose the regression; remove optional artifacts first, write empty current files, or require a fresh output directory.\n\nAGENTS.md reference: [AGENTS.md:L133-L140](https://github.com/txehq/txe/blob/65cb56b94b34c7e3dd77e34c087d2af14e794d14/AGENTS.md#L133-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": true,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 658,
+                "resolvedBy": {
+                  "login": "connorwang"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4326826785,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "65cb56b94b34c7e3dd77e34c087d2af14e794d14"
+                      },
+                      "path": "okr/desktop/e2e/alerts.e2e.mjs",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Surface restoration failures after a failed attended run**\n\nWhen this attended case has already failed and the subsequent preference PUT also fails, the `restoreError && !runError` condition silently discards the cleanup failure; the TXE-4684 case has the same behavior unless evidence keeping also failed. This can leave the reusable `FLOW_OWNER` account mutated while the reported error gives no indication that later runs now start from contaminated shared state, so preserve both failures with an aggregate error or at least report the restoration failure unconditionally.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/65cb56b94b34c7e3dd77e34c087d2af14e794d14/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+]
