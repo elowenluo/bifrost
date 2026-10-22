@@ -112,6 +112,12 @@ jobs:
       - name: Check release scripts never write main
         run: ./.github/workflows/scripts/release-no-main-push.test.sh
 
+      # The real finalize script against a bare stand-in origin and a gh shim: it tags the
+      # checked-out commit and asks for the release, with the Go the release job sets up.
+      - name: Check the bifrost-http release finalizes
+        if: ${{ !cancelled() }}
+        run: ./.github/workflows/scripts/release-bifrost-http-finalize.test.sh
+
   helm-publish-index:
     name: Helm index publication keeps fork history
     runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
