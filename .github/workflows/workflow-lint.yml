@@ -69,6 +69,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 .github/workflows/scripts/test-docker-publish-gates.py
 
+      - name: Check every release job honours the memory-regression gate
+        if: ${{ !cancelled() }}
+        run: python3 .github/workflows/scripts/test-release-memory-gate.py
+
   helm-publish-index:
     name: Helm index publication keeps fork history
     runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
