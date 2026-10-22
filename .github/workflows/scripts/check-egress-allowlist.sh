@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Two guards on harden-runner egress allowlists:
+# Three guards on harden-runner egress allowlists:
 #
 #   1. every job that runs apt-get under `egress-policy: block` allowlists the
 #      Ubuntu APT hosts it will need;
 #   2. every job that runs the provider harness allowlists each external host
 #      the harness will dial - see the second python block for why that is not
-#      the same set as "the hosts the collection sends requests to".
+#      the same set as "the hosts the collection sends requests to";
+#   3. every job that builds the release binaries allowlists the Go module proxy
+#      and checksum database the workspace build verifies modules against.
 #
 # harden-runner's `egress-policy: block` drops every destination absent from
 # `allowed-endpoints`, so a job that shells out to `apt-get update` fails at the
@@ -295,4 +297,80 @@ else:
         f"OK: all {checked} harness-running blocked-egress job(s) allowlist the "
         f"{len(required)} host(s) the harness dials."
     )
+PY
+
+# ---------------------------------------------------------------------------
+# 3. Go module hosts for the release binary build
+# ---------------------------------------------------------------------------
+#
+# build-executables.sh builds through go.work. In workspace mode go verifies
+# every module that no workspace go.sum lists against the checksum database,
+# and go.work.sum is not committed, so the build dials sum.golang.org as well
+# as proxy.golang.org. With sum.golang.org blocked the build fails with
+# "verifying module: ... connection refused" (TXE-4972), and only on push to
+# main, after every test has passed.
+
+python3 - "${FILES[@]}" <<'PY'
+import sys
+import yaml
+
+BUILD_MARKERS = ("build-executables.sh",)
+REQUIRED_GO_HOSTS = ("proxy.golang.org:443", "sum.golang.org:443")
+
+failures = []
+checked = 0
+
+for path in sys.argv[1:]:
+    with open(path, encoding="utf-8") as fh:
+        doc = yaml.safe_load(fh) or {}
+
+    for job_name, job in (doc.get("jobs") or {}).items():
+        if not isinstance(job, dict):
+            continue
+        steps = job.get("steps") or []
+
+        builds_binaries = any(
+            any(marker in (step.get("run") or "") for marker in BUILD_MARKERS)
+            for step in steps
+            if isinstance(step, dict)
+        )
+        if not builds_binaries:
+            continue
+
+        harden = next(
+            (
+                step
+                for step in steps
+                if isinstance(step, dict)
+                and "step-security/harden-runner" in (step.get("uses") or "")
+            ),
+            None,
+        )
+        if harden is None:
+            continue
+
+        with_block = harden.get("with") or {}
+        if str(with_block.get("egress-policy", "")).strip() != "block":
+            continue
+
+        checked += 1
+        allowed = set((with_block.get("allowed-endpoints") or "").split())
+        missing = [host for host in REQUIRED_GO_HOSTS if host not in allowed]
+        if missing:
+            failures.append((path, job_name, missing))
+
+for path, job_name, missing in failures:
+    print(
+        f"FAIL {path} :: job '{job_name}' builds the release binaries under "
+        f"egress-policy: block but omits {', '.join(missing)}",
+        file=sys.stderr,
+    )
+
+if failures:
+    sys.exit(1)
+
+if checked == 0:
+    print("OK: no binary-building blocked-egress jobs found.")
+else:
+    print(f"OK: all {checked} binary-building blocked-egress job(s) allowlist the Go module hosts.")
 PY
