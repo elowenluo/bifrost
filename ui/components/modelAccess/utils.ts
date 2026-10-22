@@ -13,6 +13,10 @@ export type ModelAccessMode = "allow" | "block";
 
 const NAMED_GROUP = /\(\?P?<[A-Za-z0-9_]+>/g;
 const NAMED_BACKREF = /(?:^|[^\\])(?:\\\\)*\\k</;
+// Go's inline flags: a flag-setting group "(?i)" and a scoped one "(?i:...)". JavaScript
+// supports neither form here, and the flags do not change whether the syntax is valid.
+const GO_FLAG_GROUP = /\(\?(?:[imsU]+(?:-[imsU]*)?|-[imsU]+)\)/g;
+const GO_SCOPED_FLAGS = /\(\?(?:[imsU]+(?:-[imsU]*)?|-[imsU]+):/g;
 
 export function isWildcardEntry(entry: string): boolean {
 	return entry === MODEL_WILDCARD;
@@ -62,7 +66,7 @@ export function validateModelRegex(pattern: string): string | null {
 		return "RE2 incompatible: named backreferences (\\k<name>) are not supported";
 	}
 	// Go accepts (?P<name>...) and names that start with a digit, JavaScript neither; the name is irrelevant to the syntax check.
-	return validateRegexPattern(trimmed.replace(NAMED_GROUP, "("));
+	return validateRegexPattern(trimmed.replace(NAMED_GROUP, "(").replace(GO_FLAG_GROUP, "").replace(GO_SCOPED_FLAGS, "(?:"));
 }
 
 /**
