@@ -5318,3 +5318,29 @@ func TestTracingMiddleware_CapturesTraceState(t *testing.T) {
 		t.Errorf("tracestate stored with no traceparent: %q", got)
 	}
 }
+
+// dataWithEOFReader returns all of its data together with io.EOF in one call, as
+// some readers (iotest.DataErrReader) are allowed to.
+type dataWithEOFReader struct{ data []byte }
+
+func (r *dataWithEOFReader) Read(p []byte) (int, error) {
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	if len(r.data) == 0 {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+// TestLimitedBodyReader_OverLimitWithEOFFails pins that a body one byte over the
+// limit fails even when its last byte arrives with io.EOF in the same read.
+func TestLimitedBodyReader_OverLimitWithEOFFails(t *testing.T) {
+	_, err := io.ReadAll(newLimitedBodyReader(&dataWithEOFReader{data: bytes.Repeat([]byte("x"), 17)}, 16))
+	if !errors.Is(err, errRequestBodyTooLarge) {
+		t.Fatalf("17 bytes against a 16-byte limit: err = %v, want errRequestBodyTooLarge", err)
+	}
+	got, err := io.ReadAll(newLimitedBodyReader(&dataWithEOFReader{data: bytes.Repeat([]byte("x"), 16)}, 16))
+	if err != nil || len(got) != 16 {
+		t.Fatalf("exactly the limit: got %d bytes, err %v", len(got), err)
+	}
+}
