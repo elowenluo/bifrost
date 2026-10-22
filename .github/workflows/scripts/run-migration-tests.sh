@@ -75,6 +75,8 @@ NC='\033[0m' # No Color
 # Temp directory for test artifacts
 TEMP_DIR=""
 BIFROST_PID=""
+# Set once this run starts a bifrost server; cleanup only sweeps the port after that.
+BIFROST_STARTED=false
 
 # ============================================================================
 # Utility Functions
@@ -127,8 +129,11 @@ cleanup() {
     wait "$BIFROST_PID" 2>/dev/null || true
   fi
 
-  # Also kill any bifrost processes on our port
-  if [ -n "${BIFROST_PORT:-}" ]; then
+  # Also kill any bifrost processes on our port (npx runs the server as a child, so
+  # its PID is not BIFROST_PID). Only once this run started a server: a run that
+  # stopped earlier, such as on an invalid MIGRATION_LOCAL_BINARIES entry, holds
+  # nothing on the port, and whatever listens there belongs to someone else.
+  if [ "$BIFROST_STARTED" = true ] && [ -n "${BIFROST_PORT:-}" ]; then
     local pids
     pids=$(lsof -t -i ":$BIFROST_PORT" 2>/dev/null || true)
     if [ -n "$pids" ]; then
@@ -217,6 +222,7 @@ start_previous_bifrost() {
       --app-dir "$TEMP_DIR" --port "$BIFROST_PORT" > "$server_log" 2>&1 &
   fi
   BIFROST_PID=$!
+  BIFROST_STARTED=true
 }
 
 # Wait for bifrost to start
@@ -6209,6 +6215,7 @@ EOF
     local current_log="$TEMP_DIR/server-current-$version.log"
     "$current_binary" --app-dir "$TEMP_DIR" --port "$BIFROST_PORT" > "$current_log" 2>&1 &
     BIFROST_PID=$!
+    BIFROST_STARTED=true
 
     if ! wait_for_bifrost "$current_log" 300; then
       log_error "Current version failed to start after migrating from $version"
@@ -6418,6 +6425,7 @@ EOF
     local current_log="$TEMP_DIR/server-current-$version.log"
     "$current_binary" --app-dir "$TEMP_DIR" --port "$BIFROST_PORT" > "$current_log" 2>&1 &
     BIFROST_PID=$!
+    BIFROST_STARTED=true
 
     if ! wait_for_bifrost "$current_log" 300; then
       log_error "Current version failed to start after migrating from $version"
