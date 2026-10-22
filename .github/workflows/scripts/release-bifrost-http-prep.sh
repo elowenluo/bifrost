@@ -1,8 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Prepare bifrost-http release: update dependencies, build UI, validate, commit/push
+# Verify a bifrost-http release's dependency metadata and build, without changing it.
 # Usage: ./release-bifrost-http-prep.sh <version>
+#
+# Verify only: this never edits a tracked file, and never pulls, commits or pushes.
+# main requires a reviewed codex-review check, and the release has to build exactly
+# the commit its tests ran on, so a dependency bump lands through a reviewed PR first.
+#
+# transports/go.mod must require core, framework and every plugin that has a version
+# file at that version, under the go directive below. That is compared textually with
+# `go mod edit -json`: no module lookups and no `go mod tidy`. Tidy ignores go.work,
+# and the fork publishes none of these module versions as tags, so it cannot resolve
+# them; the release builds the checked-out modules through go.work either way.
+#
+# On drift the exact go.mod change is written as a patch outside the checkout (see
+# release-patch-utils.sh) and the script fails before building anything: the release
+# waits until that patch has merged through a reviewed PR.
 
 # Get the absolute path of the script directory
 # Use readlink if available (Linux), otherwise use cd/pwd (macOS compatible)
@@ -12,8 +26,7 @@ else
   SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 fi
 
-# Source Go utilities for exponential backoff
-source "$SCRIPT_DIR/go-utils.sh"
+source "$SCRIPT_DIR/release-patch-utils.sh"
 
 # Validate input argument
 if [ "${1:-}" = "" ]; then
@@ -22,143 +35,106 @@ if [ "${1:-}" = "" ]; then
 fi
 
 VERSION="$1"
-REPO_SLUG="${GITHUB_REPOSITORY:-capsohq/bifrost}"
+# The Go the release jobs set up; the go directive is held to it.
+GO_DIRECTIVE="1.27.0"
 MODULE_ROOT="$(go mod edit -json core/go.mod | jq -r '.Module.Path | sub("/core$"; "")')"
 
-echo "🚀 Preparing bifrost-http v$VERSION release..."
+assert_tested_checkout
+TRACKED_BEFORE="$(git status --porcelain=v1 --untracked-files=no)"
 
-# Get core and framework versions from version files
-CORE_VERSION="v$(tr -d '\n\r' < core/version)"
-FRAMEWORK_VERSION="v$(tr -d '\n\r' < framework/version)"
+echo "🔍 Verifying transports/go.mod for bifrost-http v$VERSION..."
 
-echo "🔍 DEBUG: CORE_VERSION: $CORE_VERSION"
-echo "🔍 DEBUG: FRAMEWORK_VERSION: $FRAMEWORK_VERSION"
-
-
-# Get plugin versions from version files
-echo "🔌 Getting plugin versions from version files..."
-declare -A PLUGIN_VERSIONS
-
-# Get versions for plugins that exist in the plugins/ directory
-for plugin_dir in plugins/*/; do
-  if [ -d "$plugin_dir" ]; then
-    plugin_name=$(basename "$plugin_dir")
-    version_file="${plugin_dir}version"
-    if [ -f "$version_file" ]; then
-      PLUGIN_VERSION="v$(tr -d '\n\r' < "$version_file")"
-      PLUGIN_VERSIONS["$plugin_name"]="$PLUGIN_VERSION"
-      echo "   📦 $plugin_name: $PLUGIN_VERSION (from version file)"
-    else
-      echo "   ⚠️  $plugin_name: no version file, will fall back to transports/go.mod if referenced"
-    fi
+# Expected version per internal module, from the version files.
+declare -A EXPECTED
+EXPECTED["$MODULE_ROOT/core"]="v$(tr -d '\n\r' < core/version)"
+EXPECTED["$MODULE_ROOT/framework"]="v$(tr -d '\n\r' < framework/version)"
+for version_file in plugins/*/version; do
+  if [ -f "$version_file" ]; then
+    plugin_name="$(basename "$(dirname "$version_file")")"
+    EXPECTED["$MODULE_ROOT/plugins/$plugin_name"]="v$(tr -d '\n\r' < "$version_file")"
   fi
 done
 
-# Also check for any plugins already in transport go.mod that might not be in plugins/ directory
-cd transports
-echo "🔍 Checking for additional plugins in transport go.mod..."
-# Parse go.mod plugin lines and add missing ones
-while IFS= read -r plugin_line; do
-  plugin_name=$(echo "$plugin_line" | awk -F'/' '{print $NF}' | awk '{print $1}')
-  current_version=$(echo "$plugin_line" | awk '{print $NF}')
+GOMOD_JSON="$(go mod edit -json transports/go.mod)"
+EDITS=()
 
-  # Only add if we don't already have this plugin
-  if [[ -z "${PLUGIN_VERSIONS[$plugin_name]:-}" ]]; then
-    echo "   📦 $plugin_name: $current_version (from transport go.mod)"
-    PLUGIN_VERSIONS["$plugin_name"]="$current_version"
-  fi
-done < <(grep "${MODULE_ROOT}/plugins/" go.mod)
-cd ..
-
-echo "🔧 Using versions:"
-echo "   Core: $CORE_VERSION"
-echo "   Framework: $FRAMEWORK_VERSION"
-echo "   Plugins:"
-for plugin_name in "${!PLUGIN_VERSIONS[@]}"; do
-  echo "     - $plugin_name: ${PLUGIN_VERSIONS[$plugin_name]}"
-done
-
-# Update transport dependencies to use plugin versions from version files
-echo "🔧 Using plugin versions from version files for transport..."
-
-# Track which plugins are actually used by the transport
-cd transports
-
-# Normalize the local go.mod directive up front so prior-release artifacts
-# (e.g. `go 1.27.0` written by earlier `go get` runs) don't trip GOTOOLCHAIN=local.
-go mod edit -go=1.27.0 -toolchain=none
-
-for plugin_name in "${!PLUGIN_VERSIONS[@]}"; do
-  plugin_version="${PLUGIN_VERSIONS[$plugin_name]}"
-
-  # Check if transport depends on this plugin
-  if grep -q "${MODULE_ROOT}/plugins/$plugin_name" go.mod; then
-    echo "  📦 Using $plugin_name plugin $plugin_version"
-    # Textual require bump — skips loading the currently-declared version's go.mod
-    set_internal_module_version "${MODULE_ROOT}/plugins/$plugin_name" "$plugin_version"
-  fi
-done
-
-# Also ensure core and framework are up to date
-
-echo "  🔧 Updating core to $CORE_VERSION"
-set_internal_module_version "${MODULE_ROOT}/core" "$CORE_VERSION"
-
-echo "  📦 Updating framework to $FRAMEWORK_VERSION"
-set_internal_module_version "${MODULE_ROOT}/framework" "$FRAMEWORK_VERSION"
-
-# Re-normalize before tidy in case any edit reintroduced a toolchain line
-go mod edit -go=1.27.0 -toolchain=none
-go mod tidy
-
-cd ..
-
-# We need to build UI first before we can validate the transport build
-echo "🎨 Building UI..."
-make build-ui
-
-# Building hello-world plugin
-echo "🔨 Building hello-world plugin..."
-cd examples/plugins/hello-world
-make build
-cd ../../..
-
-# Validate transport build
-echo "🔨 Validating transport build..."
-cd transports
-go build ./...
-cd ..
-echo "✅ Transport build validation successful"
-
-# Note: Migration tests run as a separate CI job (test-migrations) before this release job
-
-# Commit and push changes if any
-# First, pull latest changes to avoid conflicts
-CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if [ "$CURRENT_BRANCH" = "HEAD" ]; then
-  # In detached HEAD state (common in CI), use GITHUB_REF_NAME or default to main
-  CURRENT_BRANCH="${GITHUB_REF_NAME:-main}"
+current_go="$(jq -r '.Go // ""' <<<"$GOMOD_JSON")"
+if [ "$current_go" != "$GO_DIRECTIVE" ]; then
+  echo "   ✗ go directive is '$current_go', expected $GO_DIRECTIVE"
+  EDITS+=("-go=$GO_DIRECTIVE")
+fi
+current_toolchain="$(jq -r '.Toolchain // ""' <<<"$GOMOD_JSON")"
+if [ -n "$current_toolchain" ]; then
+  echo "   ✗ toolchain line '$current_toolchain', expected none"
+  EDITS+=("-toolchain=none")
 fi
 
-echo "Pulling latest changes from origin/$CURRENT_BRANCH..."
-if ! git pull origin "$CURRENT_BRANCH"; then
-  echo "❌ Error: git pull origin $CURRENT_BRANCH failed"
+# A plugin the transport requires without a version file keeps its pin, as before.
+# core and framework are required whether or not the transport lists them yet.
+declare -A SEEN
+while IFS=$'\t' read -r path version; do
+  SEEN["$path"]=1
+  expected="${EXPECTED[$path]:-}"
+  if [ -z "$expected" ]; then
+    echo "   - $path $version (no version file)"
+  elif [ "$version" = "$expected" ]; then
+    echo "   ✓ $path $version"
+  else
+    echo "   ✗ $path $version, expected $expected"
+    EDITS+=("-require=$path@$expected")
+  fi
+done < <(jq -r --arg root "$MODULE_ROOT/" '.Require[]? | select(.Path | startswith($root)) | [.Path, .Version] | @tsv' <<<"$GOMOD_JSON")
+for path in "$MODULE_ROOT/core" "$MODULE_ROOT/framework"; do
+  if [ -z "${SEEN[$path]:-}" ]; then
+    echo "   ✗ $path is not required, expected ${EXPECTED[$path]}"
+    EDITS+=("-require=$path@${EXPECTED[$path]}")
+  fi
+done
+
+if [ "${#EDITS[@]}" -gt 0 ]; then
+  # The change is made on copies outside the checkout, by `go mod edit` alone.
+  WORK="$(mktemp -d)"
+  trap 'rm -rf "$WORK"' EXIT
+  mkdir -p "$WORK/a/transports" "$WORK/b/transports"
+  cp transports/go.mod "$WORK/a/transports/go.mod"
+  cp transports/go.mod "$WORK/b/transports/go.mod"
+  go mod edit "${EDITS[@]}" "$WORK/b/transports/go.mod"
+
+  PATCH_DIR="$(release_patch_dir)"
+  PATCH="$PATCH_DIR/$(release_patch_name release-prep "$VERSION")"
+  status=0
+  (cd "$WORK" && git diff --no-index --no-prefix --no-color --no-ext-diff a/transports/go.mod b/transports/go.mod) > "$PATCH" || status=$?
+  if [ "$status" -ne 1 ]; then
+    echo "::error::could not write the transports/go.mod patch (git diff exited $status)" >&2
+    exit 1
+  fi
+  assert_patch_allowlist "$PATCH" transports/go.mod
+
+  release_summary \
+    "### bifrost-http v$VERSION release prep: pending reviewed PR" \
+    "" \
+    "transports/go.mod at $(git rev-parse HEAD) does not match the module version files, so nothing was built or published from this commit." \
+    "Patch artifact: \`$(basename "$PATCH")\`. Apply it in a reviewed PR for this release's dependency ticket; the merged commit then releases."
+  echo "::error::release prep pending: transports/go.mod needs a reviewed PR (patch $(basename "$PATCH"))"
   exit 1
 fi
 
-# Stage any changes made to transports/
-git add transports/
+# Build what the release ships, from the checked-out modules through go.work. The
+# UI and plugin outputs are gitignored; -mod=readonly keeps go from rewriting go.mod.
+echo "🎨 Building UI..."
+make build-ui
 
-# Check if there are staged changes after pulling
-if ! git diff --cached --quiet; then
-  git config user.name "github-actions[bot]"
-  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-  echo "🔧 Committing and pushing changes..."
-  git commit -m "transports: update dependencies --skip-ci"
-  git push -u origin HEAD
-else
-  echo "ℹ️ No staged changes to commit"
+echo "🔨 Building hello-world plugin..."
+(cd examples/plugins/hello-world && make build)
+
+echo "🔨 Validating transport build..."
+(cd transports && go build -mod=readonly ./...)
+
+if [ "$(git status --porcelain=v1 --untracked-files=no)" != "$TRACKED_BEFORE" ]; then
+  echo "::error::the prep build changed tracked files:" >&2
+  git status --short --untracked-files=no >&2
+  exit 1
 fi
 
-echo "✅ Prep complete for bifrost-http v$VERSION"
-echo "success=true" >> "$GITHUB_OUTPUT"
+release_summary "### bifrost-http v$VERSION release prep: verified" "" "transports/go.mod matches the module version files at $(git rev-parse HEAD); no changes."
+echo "success=true" >> "${GITHUB_OUTPUT:-/dev/null}"

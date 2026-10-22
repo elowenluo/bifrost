@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-VERSION=$1
+# Generates the Mintlify changelog for a transport release as a patch. It never
+# commits, pulls or pushes: main requires a reviewed codex-review check, so the patch
+# reaches main only through a reviewed PR for the release's docs ticket.
+#
+# The patch is written outside the checkout (see release-patch-utils.sh), is named
+# for the version and the tested commit, and may touch only the new changelog page,
+# docs/docs.json and the module changelogs it clears. The page is dated from the
+# commit, so a rerun for the same commit and version writes the same patch.
+
+VERSION=${1:-}
 
 if [ -z "$VERSION" ]; then
   echo "Usage: $0 <version>"
@@ -11,17 +21,31 @@ fi
 VERSION="v$VERSION"
 DOCKER_IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER:-capsohq}/bifrost"
 
+source "$(dirname "$0")/release-patch-utils.sh"
+assert_tested_checkout
+
 # Check if this page already exists in docs/changelogs/
 if [ -f "docs/changelogs/$VERSION.mdx" ]; then
-  echo "✅ Changelog for $VERSION already exists"
+  release_summary "### Docs changelog $VERSION: already on this commit" "" "docs/changelogs/$VERSION.mdx exists at $(git rev-parse HEAD); no patch."
   exit 0
+fi
+
+# Everything the patch may touch. Anything else dirty, before or after, fails the run.
+ALLOWLIST=("docs/changelogs/$VERSION.mdx" docs/docs.json transports/changelog.md core/changelog.md framework/changelog.md)
+for plugin in plugins/*; do
+  ALLOWLIST+=("$plugin/changelog.md")
+done
+if [ -n "$(git status --porcelain=v1 --untracked-files=all)" ]; then
+  echo "::error::the checkout has changes before the changelog is generated:" >&2
+  git status --short --untracked-files=all >&2
+  exit 1
 fi
 
 # Source changelog utilities
 source "$(dirname "$0")/changelog-utils.sh"
 
-# Get current date
-CURRENT_DATE=$(date +"%Y-%m-%d")
+# The commit's date, not the wall clock, so a rerun writes the same page.
+CURRENT_DATE=$(TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y-%m-%d HEAD)
 
 # Preparing changelog file
 CHANGELOG_BODY="---
@@ -147,9 +171,6 @@ else
   echo "⚠️  TEST_REPORTS_BASE_URL unset - omitting the test reports table from $VERSION"
 fi
 
-# Array to track cleaned changelog files
-CLEANED_CHANGELOG_FILES=()
-
 # Helper to append a section if changelog file exists and is non-empty
 append_section () {
   label=$1
@@ -170,8 +191,6 @@ append_section () {
     CHANGELOG_BODY+=$'\n'"<Update label=\"$label\" description=\"$version_body\">"$'\n'"$content"$'\n\n'"</Update>"
     # Clear the changelog file after processing
     printf '' > "$path"
-    # Track this file for git commit
-    CLEANED_CHANGELOG_FILES+=("$path")
   fi
 }
 
@@ -365,27 +384,10 @@ if ! grep -q "\"$route\"" docs/docs.json; then
   "
 fi
 
-# Pulling again before committing
-CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if [ "$CURRENT_BRANCH" = "HEAD" ]; then
-  # In detached HEAD state (common in CI), use GITHUB_REF_NAME or default to main
-  CURRENT_BRANCH="${GITHUB_REF_NAME:-main}"
-fi
-
-echo "Pulling latest changes from origin/$CURRENT_BRANCH..."
-if ! git pull origin "$CURRENT_BRANCH"; then
-  echo "❌ Error: git pull origin $CURRENT_BRANCH failed"
-  exit 1
-fi
-
-# Commit and push changes
-git add docs/changelogs/$VERSION.mdx
-git add docs/docs.json
-# Add all cleaned changelog files
-for file in "${CLEANED_CHANGELOG_FILES[@]}"; do
-  git add "$file"
-done
-git config user.name "github-actions[bot]"
-git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-git commit -m "Adds changelog for $VERSION --skip-ci"
-git push origin "$CURRENT_BRANCH"
+write_release_patch docs-changelog "${VERSION#v}" "${ALLOWLIST[@]}"
+release_summary \
+  "### Docs changelog $VERSION: pending, not published" \
+  "" \
+  "Generated from $(git rev-parse HEAD) but not committed: main takes it only through a reviewed PR." \
+  "Patch artifact: \`$(basename "$RELEASE_PATCH")\` (blob $(git hash-object "$RELEASE_PATCH"))."
+echo "::warning::docs changelog $VERSION is pending, not published: apply $(basename "$RELEASE_PATCH") in a reviewed PR"

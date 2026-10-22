@@ -80,6 +80,38 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./.github/workflows/scripts/build-executables.test.sh
 
+  release-no-main-push:
+    name: Release scripts leave main to reviewed PRs
+    runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            release-assets.githubusercontent.com:443
+            storage.googleapis.com:443
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # The fixture's shims hand `go mod edit` to a real go: the one the release jobs use.
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version: "1.27.0"
+          cache: false
+
+      # Local fixtures only: a bare origin whose hook rejects main, and shims for the
+      # network and build commands. Nothing is pushed, pulled or published.
+      - name: Check release scripts never write main
+        run: ./.github/workflows/scripts/release-no-main-push.test.sh
+
   helm-publish-index:
     name: Helm index publication keeps fork history
     runs-on: ${{ vars.BIFROST_RUNNER_AMD64 || 'ubuntu-24.04' }}
