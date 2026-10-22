@@ -1,0 +1,67 @@
+name: Codex review
+
+# codex-review (TXE-4892, ported from txehq/action-runner-ops): passes a PR only when the
+# Codex GitHub connector has reviewed its current head with no P0 or P1 finding, or a person
+# has added the review-override label. scripts/codex-review-check.sh decides; docs/review.md
+# is the procedure.
+#
+# `edited` is here for one edit, a change of base (TXE-4801): the head does not move but the
+# diff does, and the check then holds until the connector has reviewed a force-push made after
+# the change (rule 3 in the script). A title or body edit re-runs a check that decides at once
+# once the head is reviewed. Never on labeled or unlabeled: each would start another run of
+# every check. After adding review-override, re-run this workflow's latest run on the PR.
+# A force-push of a stacked PR's base fires no event on the PR at all: re-run this workflow's
+# latest run on the PR after one (docs/review.md).
+#
+# This repository is public: GitHub-hosted runners only, and the token only reads. A
+# pull_request run from a fork gets a read-only token, which is all the check needs.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, edited]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: codex-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  codex-review:
+    name: codex-review
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # The script comes from the base branch tip, so a PR cannot pass its own check by
+      # editing it. The job has no if: a skipped required check counts as passing.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          persist-credentials: false
+      - name: Connector review of the PR head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          # A clean review emits no pull_request_review event, so a run waits for the
+          # connector's state block on the head. Any review event cancels the run in
+          # progress (concurrency above) and waits again, never deciding early.
+          CODEX_REVIEW_WAIT_SECONDS: "900"
+        run: bash scripts/codex-review-check.sh "$REPO" "$PR"
+
+  check-test:
+    name: codex-review check fixtures
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - run: bash tests/codex_review_check_test.sh
+      - name: The runner has the gh and jq the check calls
+        run: gh --version && jq --version

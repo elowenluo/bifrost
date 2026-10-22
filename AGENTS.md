@@ -660,6 +660,8 @@ Investigate a GitHub issue from `maximhq/bifrost`. Fetches issue details, classi
 ### `/resolve-pr-comments <pr-number>`
 Systematically address unresolved PR review comments. Uses GraphQL to get unresolved threads, presents each with FIX/REPLY/SKIP options, collects fixes locally, and only posts replies **after code is pushed** to remote.
 
+**PR review in txehq/bifrost (this fork):** the Codex GitHub connector reviews every PR on open and on every push, and the required `codex-review` check gates on its P0/P1 findings. The procedure is `docs/review.md`. The `rpr` and `rprf` skills post nothing that counts here.
+
 ---
 
 ## Common Workflows

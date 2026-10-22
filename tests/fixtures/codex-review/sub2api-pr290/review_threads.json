@@ -1,0 +1,118 @@
+[
+  {
+    "data": {
+      "repository": {
+        "pullRequest": {
+          "reviewThreads": {
+            "pageInfo": {
+              "hasNextPage": false,
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0xNlQxNjo0Nzo0N1rOrUsBMQ=="
+            },
+            "nodes": [
+              {
+                "isResolved": true,
+                "isOutdated": false,
+                "line": 519,
+                "originalLine": 519,
+                "resolvedBy": {
+                  "login": "ding113"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4296627722,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "c6f314a3806a7acbadf6b906b2b95c7afbcff82d"
+                      },
+                      "path": "services/api/internal/service/billing_service.go",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Normalize aggregate modality tokens before zero-pricing them**\n\nWhen first-call reconciliation processes OpenAI Realtime usage containing audio or image modalities, `firstCallUsageTokens` copies the aggregate `usage.InputTokens`/`usage.OutputTokens` and also populates the modality fields separately. Newly accepting those fields here therefore does not actually bill them at zero: `calculateExactCatalogTokenCost` later charges the aggregate input at the text input price and subtracts only image—not audio—from aggregate output. Such requests now produce inflated official-price snapshots instead of the previous unavailable result; use the normalized text quantities (and uncached modality quantities) before allowing this path to continue.\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": true,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 233,
+                "resolvedBy": {
+                  "login": "ding113"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4296859146,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "17299111c10bb4db65f42755d2dac242bc1c9850"
+                      },
+                      "path": "services/api/internal/service/first_call_pricing_reconciler.go",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Reject unpriced web-search usage during reconciliation**\n\nWhen a first-call usage log reports `NormalizedUsage.WebSearch`, `firstCallUsageTokens` sets `WebSearchCalls`, but this guard permits it to reach the exact-catalog calculator without a `WebSearchPricePerCall`. That calculator now treats the missing price as zero and returns success, so reconciliation records an available official-price snapshot that excludes the request's web-search charge; include web-search usage in this unavailable check (or otherwise detect the unpriced component) as is already done for unsupported modalities.\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": true,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 233,
+                "resolvedBy": {
+                  "login": "ding113"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4297056843,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "2bf1311d2bb87741c536af0694229f85e885be44"
+                      },
+                      "path": "services/api/internal/service/first_call_pricing_reconciler.go",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Limit modality rejection to token-priced first calls**\n\nWhen the matched catalog variant uses `BillingModeImage` or `BillingModePerRequest`, normalized image input is not an unpriced component—the official cost is determined by the per-request price and request count. Image edit flows populate `NormalizedUsage.ImageInput`, so this unconditional guard marks those otherwise priceable first calls unavailable before `calculatePerRequestCost` can run. Apply this rejection only to token-billed variants.\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": true,
+                "isOutdated": false,
+                "line": 815,
+                "originalLine": 815,
+                "resolvedBy": {
+                  "login": "ding113"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4297056859,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "c6f314a3806a7acbadf6b906b2b95c7afbcff82d"
+                      },
+                      "path": "services/api/internal/service/billing_service.go",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Normalize audio-only output before treating it as text**\n\nWhen a Realtime-compatible upstream reports aggregate `output_tokens` and an `audio_tokens` detail but omits the zero-valued `text_tokens` field, `validateOpenAIRealtimeUsage` accepts the payload, while `RecordUsage` leaves `UsageTokens.OutputTokens` equal to the aggregate and also sets `AudioOutputTokens`. This calculation consequently classifies the aggregate as priced text output; after this change no longer rejects the missing audio price, the request succeeds and bills every audio token at the text output rate instead of zero. Normalize the aggregate to zero/text-only before allowing the unpriced audio component to proceed.\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+]
