@@ -721,6 +721,10 @@ func acquireSkillsCorpusServeSlot(ctx *fasthttp.RequestCtx) (release func(), ok 
 // through the store; the TTL is the safety net for anything it does not.
 const skillsGitRepoCacheTTL = time.Minute
 
+// skillsGitRepoCacheMaxEntries bounds how many exported repositories are kept on
+// disk at once; past it the oldest idle ones are removed.
+const skillsGitRepoCacheMaxEntries = 32
+
 // exportBareRepo is the export step serveGitRepo runs on a cache miss; tests
 // swap it to count exports.
 var exportBareRepo = exportToTempBareRepo
@@ -768,6 +772,7 @@ func (c *skillsGitRepoCache) acquire(key, version string, build func() (string, 
 		}
 		c.version = version
 	}
+	c.sweepLocked(key)
 	entry := c.entries[key]
 	if entry != nil && entry.isBuilt() && time.Since(entry.builtAt) >= skillsGitRepoCacheTTL {
 		c.dropLocked(key, entry)
@@ -853,6 +858,35 @@ func (e *skillsGitRepoCacheEntry) isBuilt() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// sweepLocked removes idle exports, other than keep's, that have expired, then the
+// oldest idle ones while more than skillsGitRepoCacheMaxEntries remain. Without it
+// an export was only reclaimed when its own repository was requested again, so
+// distinct idle repositories accumulated on disk. Entries a request is reading or
+// building are never removed here.
+func (c *skillsGitRepoCache) sweepLocked(keep string) {
+	idle := func(entry *skillsGitRepoCacheEntry) bool {
+		return entry.isBuilt() && entry.err == nil && entry.refs == 0 && entry.waiters == 0
+	}
+	for key, entry := range c.entries {
+		if key != keep && idle(entry) && time.Since(entry.builtAt) >= skillsGitRepoCacheTTL {
+			c.dropLocked(key, entry)
+		}
+	}
+	for len(c.entries) > skillsGitRepoCacheMaxEntries {
+		oldestKey := ""
+		var oldest *skillsGitRepoCacheEntry
+		for key, entry := range c.entries {
+			if key != keep && idle(entry) && (oldest == nil || entry.builtAt.Before(oldest.builtAt)) {
+				oldestKey, oldest = key, entry
+			}
+		}
+		if oldest == nil {
+			return
+		}
+		c.dropLocked(oldestKey, oldest)
 	}
 }
 

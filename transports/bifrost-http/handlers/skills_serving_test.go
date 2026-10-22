@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -639,5 +640,55 @@ func BenchmarkSkillsMarketplaceURLGate(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		handler(ctx)
+	}
+}
+
+// TestSkillsGitRepoCacheReclaimsIdleExportsOfOtherRepositories: an expired export is
+// removed on the next request for any repository, not only its own, and the number
+// of idle exports kept is bounded; an export a request still reads is left alone.
+func TestSkillsGitRepoCacheReclaimsIdleExportsOfOtherRepositories(t *testing.T) {
+	cache := newSkillsGitRepoCache()
+	build := func() (string, error) { return os.MkdirTemp(t.TempDir(), "export") }
+
+	idleDir, releaseIdle, err := cache.acquire("idle", "v1", build)
+	if err != nil {
+		t.Fatalf("acquire idle: %v", err)
+	}
+	releaseIdle()
+	readDir, releaseRead, err := cache.acquire("reading", "v1", build)
+	if err != nil {
+		t.Fatalf("acquire reading: %v", err)
+	}
+	defer releaseRead()
+	cache.mu.Lock()
+	for _, key := range []string{"idle", "reading"} {
+		cache.entries[key].builtAt = time.Now().Add(-2 * skillsGitRepoCacheTTL)
+	}
+	cache.mu.Unlock()
+
+	_, releaseOther, err := cache.acquire("other", "v1", build)
+	if err != nil {
+		t.Fatalf("acquire other: %v", err)
+	}
+	releaseOther()
+	if _, err := os.Stat(idleDir); !os.IsNotExist(err) {
+		t.Fatalf("an expired idle export of another repository must be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(readDir); err != nil {
+		t.Fatalf("an export still being read must stay: %v", err)
+	}
+
+	for i := range skillsGitRepoCacheMaxEntries + 5 {
+		_, release, err := cache.acquire(fmt.Sprintf("repo-%d", i), "v1", build)
+		if err != nil {
+			t.Fatalf("acquire repo-%d: %v", i, err)
+		}
+		release()
+	}
+	cache.mu.Lock()
+	kept := len(cache.entries)
+	cache.mu.Unlock()
+	if kept > skillsGitRepoCacheMaxEntries+1 {
+		t.Fatalf("cache kept %d exports, want at most %d plus the one being served", kept, skillsGitRepoCacheMaxEntries)
 	}
 }
