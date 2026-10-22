@@ -31,7 +31,7 @@ git -C "$WORK/src" init -q -b main
 git -C "$WORK/src" add -A
 git -C "$WORK/src" "${GIT_ID[@]}" commit -q -m snapshot
 git -C "$WORK/src" "${GIT_ID[@]}" tag -a transports/v0.0.1 -m "Release transports v0.0.1" -m "- an older release"
-git init -q --bare "$WORK/origin.git"
+git init -q --bare -b main "$WORK/origin.git"
 git -C "$WORK/src" push -q "$WORK/origin.git" main 'refs/tags/*'
 git clone -q "$WORK/origin.git" "$WORK/clone"
 git -C "$WORK/clone" config user.name test
