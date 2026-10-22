@@ -5166,7 +5166,8 @@ func TestDropAgentRegistrationOptions(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&tables.TableAgentRegistration{}, &tables.TableAgentPushConfig{}))
 	require.NoError(t, db.Exec("ALTER TABLE config_agent_registrations ADD COLUMN tenant TEXT").Error)
 	require.NoError(t, db.Exec("ALTER TABLE config_agent_registrations ADD COLUMN extension_uris TEXT").Error)
-	require.NoError(t, db.Exec("INSERT INTO config_agent_registrations (name, agent_card_url, tenant, extension_uris, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", "fixture", "https://example.com/card", "unused", "[]", time.Now(), time.Now()).Error)
+	// enabled has no column default (GORM would substitute it for an explicit false), so the fixture sets it.
+	require.NoError(t, db.Exec("INSERT INTO config_agent_registrations (name, agent_card_url, enabled, tenant, extension_uris, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", "fixture", "https://example.com/card", true, "unused", "[]", time.Now(), time.Now()).Error)
 	require.NoError(t, migrationDropAgentRegistrationOptions(ctx, db, testMigrationLogger))
 	require.False(t, db.Migrator().HasColumn(&tables.TableAgentRegistration{}, "tenant"))
 	require.False(t, db.Migrator().HasColumn(&tables.TableAgentRegistration{}, "extension_uris"))
