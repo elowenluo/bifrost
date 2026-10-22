@@ -1,0 +1,340 @@
+[
+  {
+    "data": {
+      "repository": {
+        "pullRequest": {
+          "reviewThreads": {
+            "pageInfo": {
+              "hasNextPage": false,
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0xN1QyMDo0OTo1OFrOrZErzA=="
+            },
+            "nodes": [
+              {
+                "isResolved": false,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 29,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304226721,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "828845b6dc902132e783a2c0d318e9a992db86f5"
+                      },
+                      "path": ".github/workflows/codex-review.yml",
+                      "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Revalidate the gate when the base branch changes**\n\nWhen an already-green PR is retargeted from another branch to `main`, its effective diff can expand without changing `.head.sha`; [GitHub explicitly warns that changing the base can make existing review comments outdated](https://docs.github.com/en/enterprise-cloud@latest/pull-requests/how-tos/create-pull-requests/changing-the-base-branch-of-a-pull-request). Because `edited` is excluded here and both the check script and `merge-pr.sh` validate the connector state only against the unchanged head SHA, the old `codex-review` success can authorize merging code the connector never reviewed. Trigger and invalidate/review on base changes, or bind the gate evidence to the reviewed base/diff as well as the head.\n\nAGENTS.md reference: [AGENTS.md:L133-L140](https://github.com/txehq/txe/blob/828845b6dc902132e783a2c0d318e9a992db86f5/AGENTS.md#L133-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 63,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304253271,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "7f294a489f85b0b2fc672cf58bfd00f1a67d4957"
+                      },
+                      "path": ".github/workflows/codex-review.yml",
+                      "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Keep polling after unrelated review events**\n\nIf any human submits or dismisses a review while the connector is still processing a new head, this `pull_request_review` run cancels the existing polling run via the workflow concurrency group and then checks immediately because the wait is zero. It records a failure against the required context, while the connector's later clean state-block update emits no event to refresh that result, leaving the PR blocked until someone manually reruns the job or pushes again. Continue polling when the state has not reached the head, even when the triggering review is already present.\n\nAGENTS.md reference: [AGENTS.md:L135-L140](https://github.com/txehq/txe/blob/7f294a489f85b0b2fc672cf58bfd00f1a67d4957/AGENTS.md#L135-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 135,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304267249,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "f40da6a530ea332f122506618bd284b15ba66ba6"
+                      },
+                      "path": "ops/ci/codex-review-check.sh",
+                      "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Date base changes against the code review itself**\n\nWhen a code review completes, the base changes, and a later `@codex security review` rewrites the shared summary comment, `updated_at` advances even though `.code_review` still describes the pre-change pass; this comparison then treats the stale code review as newer and lets the required gate pass for an unreviewed diff. The second-resolution timestamps also make a base change in the same second compare equal and pass. Fresh evidence after the earlier fix is that the new implementation dates the whole multi-review summary comment rather than the code-review result, so bind the evidence to the code review's own completion/base or fail closed on ambiguous ordering.\n\nAGENTS.md reference: [AGENTS.md:L135-L140](https://github.com/txehq/txe/blob/f40da6a530ea332f122506618bd284b15ba66ba6/AGENTS.md#L135-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 144,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304291775,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "c725d70dea1fa801d915b811a23d72e511c05592"
+                      },
+                      "path": "ops/ci/codex-review-check.sh",
+                      "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Reject base changes during an in-flight review**\n\nWhen the base changes after the connector starts reviewing but before it completes, the event timestamp is still strictly earlier than `$reviewed`, so this branch accepts the result even though the connector may have captured the old diff at review start. Because the head SHA remains unchanged, both the workflow and `merge-pr.sh` can then authorize an unreviewed effective diff; bind the review to the base/diff it actually inspected, or require evidence that the review was started after the latest base event.\n\nAGENTS.md reference: [AGENTS.md:L135-L140](https://github.com/txehq/txe/blob/c725d70dea1fa801d915b811a23d72e511c05592/AGENTS.md#L135-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 200,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304322748,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "34dcfbdd5f7f26d6caa6af1e7317fefba6483a90"
+                      },
+                      "path": "ops/ci/codex-review-check.sh",
+                      "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Require explicit clean-state evidence before passing**\n\nWhen a clean head has no review object—the normal connector behavior—an omitted or malformed `code_review.has_any_findings` value makes this comparison false and immediately reaches the success verdict. A partial state block or connector schema change is therefore interpreted as “no findings”; require this field to be exactly the boolean `false` and reject every other shape.\n\nAGENTS.md reference: [AGENTS.md:L135-L140](https://github.com/txehq/txe/blob/34dcfbdd5f7f26d6caa6af1e7317fefba6483a90/AGENTS.md#L135-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 164,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304322750,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "34dcfbdd5f7f26d6caa6af1e7317fefba6483a90"
+                      },
+                      "path": "ops/ci/codex-review-check.sh",
+                      "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Stop inferring review start time from a fixed margin**\n\nIf a connector review starts before a base change but is queued or stalled long enough to complete at least 30 minutes afterward, this calculation clears the hold even though that review may have captured the old diff. Fresh evidence in this revision is the new fixed 1,800-second inference: it is justified only by an observed 11:49 maximum, not by an enforced connector timeout, and the Actions timeout does not cancel the external review. Bind the result to the reviewed base/start event, or require an unambiguous post-change head/review signal.\n\nAGENTS.md reference: [AGENTS.md:L135-L140](https://github.com/txehq/txe/blob/34dcfbdd5f7f26d6caa6af1e7317fefba6483a90/AGENTS.md#L135-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 199,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304322755,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "34dcfbdd5f7f26d6caa6af1e7317fefba6483a90"
+                      },
+                      "path": ".github/scripts/sentry_recovery_publish.py",
+                      "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Restrict the legacy review gate to pre-cutover merges**\n\nThe compatibility tuple accepts `review-fix` for every source PR, not only PRs merged before TXE-4666. For a post-cutover head carrying a failed `codex-review` and a later rerun of an old same-App `review-fix` job, `max(..., id)` selects the legacy success and authorizes the recovery-image publication. Gate the legacy name using the PR's merge time/cutover, or require `codex-review` whenever it should exist; the added legacy test only renames the check and never dates the merge, so it also passes with this behavior broken.\n\nAGENTS.md reference: [AGENTS.md:L142-L148](https://github.com/txehq/txe/blob/34dcfbdd5f7f26d6caa6af1e7317fefba6483a90/AGENTS.md#L142-L148)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 145,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304345194,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "839c3bc973752c5ceb7c105daa707089cbc4e09d"
+                      },
+                      "path": "ops/ci/codex-review-check.sh",
+                      "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Exclude retarget runs from head-arrival evidence**\n\nWhen the earlier runs for a head have expired or been deleted, the `edited` run started by the retarget itself is returned with `.event == \"pull_request\"` and a `created_at` after the base-change event, so this `min` incorrectly proves that the unchanged head arrived afterward. The existing completed state block can then make both this workflow and `merge-pr.sh`'s origin/main recheck pass without a connector review of the new diff. Fresh evidence beyond the earlier base-change findings is that the new `edited` workflow's own run is indistinguishable here from a run caused by the head arriving; require a new head SHA or evidence bound to the specific synchronization instead.\n\nAGENTS.md reference: [AGENTS.md:L133-L140](https://github.com/txehq/txe/blob/839c3bc973752c5ceb7c105daa707089cbc4e09d/AGENTS.md#L133-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": false,
+                "line": 172,
+                "originalLine": 151,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304368919,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "aa8cb80110c02f4bb829fa95db19af657a40be85"
+                      },
+                      "path": "ops/ci/codex-review-check.sh",
+                      "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Reject restored pre-change head SHAs**\n\nAfter a base change, a branch can be force-pushed away from an already-reviewed head `H` and then force-pushed back to `H`; the latest `head_ref_force_pushed` event is newer than the base event and names the current head, so this condition accepts the stale state block that still says `H` was completed before the connector can re-review it. Fresh evidence beyond the earlier base-change threads is that accepting `pushed_sha == head` does not prove that this SHA first became the head after the base changed; require review evidence that cannot be reused when a previously reviewed SHA is restored.\n\nAGENTS.md reference: [AGENTS.md:L135-L140](https://github.com/txehq/txe/blob/5b92902be3884d52b6393fbbb3b62ec0490d57b3/AGENTS.md#L135-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": false,
+                "line": 35,
+                "originalLine": 35,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304368926,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "aa8cb80110c02f4bb829fa95db19af657a40be85"
+                      },
+                      "path": ".github/workflows/codex-review.yml",
+                      "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Revoke green gates when the override label is removed**\n\nWhen `review-override` is removed after a rerun has turned `codex-review` green, no workflow runs to replace that success. `merge-pr.sh` catches removals that precede its initial `codex_main_verdict`, but if the label is removed while its later merged-result checks are running, it never revalidates the override and can merge the unreviewed head with the stale green check; trigger on `unlabeled` or recheck the gate at the merge boundary.\n\nAGENTS.md reference: [AGENTS.md:L135-L140](https://github.com/txehq/txe/blob/5b92902be3884d52b6393fbbb3b62ec0490d57b3/AGENTS.md#L135-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": false,
+                "line": 49,
+                "originalLine": 49,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304368932,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "aa8cb80110c02f4bb829fa95db19af657a40be85"
+                      },
+                      "path": ".github/workflows/codex-review.yml",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Add codex-review to scorecard sampling**\n\nThe weekly scorecard samples job timings only for the explicit `JOBS_SAMPLE_WORKFLOWS` tuple in `ops/ci/scorecard.py:99`, which still contains the deleted `review-fix-gate` and `review` workflows but not this replacement. Consequently `codex-review` runner queue and job-duration data are absent from the scorecard even though it is now a PR-critical required check, making the CI-speed report incomplete after the cutover.\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": false,
+                "line": 167,
+                "originalLine": 154,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304400846,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "aa8cb80110c02f4bb829fa95db19af657a40be85"
+                      },
+                      "path": "ops/ci/codex-review-check.sh",
+                      "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Read the force-push's after SHA instead of commit_id**\n\nFor a retargeted or stacked PR that follows the prescribed force-push recovery, this assumes the issue event's `commit_id` is the commit that the push set. GitHub's REST contract instead defines that field as [the commit that referenced the issue](https://docs.github.com/en/rest/using-the-rest-api/issue-event-types#head_ref_force_pushed), while the force-push-specific post-push value is exposed separately as [`afterCommit`](https://docs.github.com/en/enterprise-cloud@latest/graphql/reference/pulls#headrefforcepushedevent). A real event with a null or non-after `commit_id` therefore exits 2 here or fails the later ancestry test, leaving the required gate permanently blocked even after a rebase and fresh review. The tests currently manufacture this field rather than recording an actual force-push event; read the event's authoritative after-commit value instead.\n\nAGENTS.md reference: [AGENTS.md:L200-L201](https://github.com/txehq/txe/blob/2fc3031c4f7b5ac75267c668946c07864ed6028c/AGENTS.md#L200-L201)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 200,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304447937,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "0fd56af3462134bc79bb06bc9197816382c12e45"
+                      },
+                      "path": "ops/ci/test-codex-review-check.sh",
+                      "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Make the polling test independent of wall-clock seconds**\n\nWhen process startup crosses a one-second boundary before the first status message, the script reports `(1 s of 20 s)` rather than the hard-coded `(0 s of 20 s)`, so this assertion fails even though polling succeeds. This reproduced locally as `31 passed, 1 failed`; because the required `codex-review` workflow runs this test before evaluating the connector, the timing race can spuriously block every PR. Assert the stable message content instead of the exact elapsed second.\n\nAGENTS.md reference: [AGENTS.md:L142-L148](https://github.com/txehq/txe/blob/0fd56af3462134bc79bb06bc9197816382c12e45/AGENTS.md#L142-L148)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": false,
+                "line": 35,
+                "originalLine": 35,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4304447938,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "aa8cb80110c02f4bb829fa95db19af657a40be85"
+                      },
+                      "path": ".github/workflows/codex-review.yml",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Run the review gate when a PR is reopened**\n\nIf a PR's `codex-review` run fails or times out before the PR is closed, reopening it without changing the head emits `reopened`, which is absent from this trigger list. The connector's later state-comment update emits no workflow event, so the failed required check remains on the unchanged head until somebody manually reruns it or makes an unrelated edit or push; include `reopened` so this normal lifecycle retries the gate.\n\nAGENTS.md reference: [AGENTS.md:L135-L140](https://github.com/txehq/txe/blob/0fd56af3462134bc79bb06bc9197816382c12e45/AGENTS.md#L135-L140)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+]

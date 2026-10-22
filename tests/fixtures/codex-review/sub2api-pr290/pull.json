@@ -1,0 +1,17 @@
+{
+  "number": 290,
+  "state": "open",
+  "draft": false,
+  "head": {
+    "sha": "c6f314a3806a7acbadf6b906b2b95c7afbcff82d",
+    "ref": "fix/billing-missing-component-price"
+  },
+  "base": {
+    "ref": "main"
+  },
+  "user": {
+    "login": "ding113",
+    "type": "User"
+  },
+  "labels": []
+}

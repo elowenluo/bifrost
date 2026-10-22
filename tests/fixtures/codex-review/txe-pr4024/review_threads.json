@@ -1,0 +1,225 @@
+[
+  {
+    "data": {
+      "repository": {
+        "pullRequest": {
+          "reviewThreads": {
+            "pageInfo": {
+              "hasNextPage": false,
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0xOVQxMTozNDo0MFrOreYA-Q=="
+            },
+            "nodes": [
+              {
+                "isResolved": false,
+                "isOutdated": false,
+                "line": 423,
+                "originalLine": 379,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4312476492,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "3d9840757246a2459c526c4a93735649c08bc2dc"
+                      },
+                      "path": "okr/web/apps/web/e2e/real/notifications-m2.desktop.real.spec.ts",
+                      "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Include the M2 client support before enabling this journey**\n\nWhen `run <dir> nc m2` packages this commit's own tree, the first alert click cannot reach `path`: `src/notifications/contract.ts` still declares only `CLIENT_GROUPS = ['okr']`, and the desktop proxy in `src/shell/policy.cjs` also drops `X-OKR-Notification-Groups`, while every row exercised here belongs to `flow` or `replies`. The entry route therefore resolves as `update_required` and this URL assertion times out, so the newly advertised test does not pass alone until the client and proxy changes are included.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/cdc736305680f31259ad9eb0390a65d5a51c12e9/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 124,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4312476497,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "cdc736305680f31259ad9eb0390a65d5a51c12e9"
+                      },
+                      "path": "okr/web/apps/web/e2e/real/notifications-m2.desktop.real.spec.ts",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Restore the activated source groups after the test**\n\nAfter this spec runs on a kept database, `flow` and `replies` remain active because no failure-safe teardown reverses this update. Running an existing NC spec that calls `ncReal.activateOkrGroup()` afterward, such as `notifications-ui.real.spec.ts`, then fails its exact `flow=false,okr=true,replies=false` precondition before testing anything; restore these shared rows in `afterAll`, including on failure, as the existing M2 real-stack spec does.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/cdc736305680f31259ad9eb0390a65d5a51c12e9/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": false,
+                "line": 318,
+                "originalLine": 317,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4312517853,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "3d9840757246a2459c526c4a93735649c08bc2dc"
+                      },
+                      "path": "okr/desktop/e2e/tab-readiness-native.sh",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Explicitly clear the recording notifier for the OS run**\n\nWhen the operator already has `OKR_DESKTOP_NOTIFY_LOG` exported, assigning `notify=()` merely omits a command-line override; `env` and then `desktopTarget` still inherit the variable from the caller. The `os` spec consequently stops at its assertion that the variable is unset instead of exercising macOS. Pass an explicit empty value or remove the variable from the environment for this branch.\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": false,
+                "line": 260,
+                "originalLine": 179,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4312517862,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "3d9840757246a2459c526c4a93735649c08bc2dc"
+                      },
+                      "path": "okr/web/apps/web/e2e/real/notifications-os.desktop.real.spec.ts",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Retire the warm-up alert before restarting**\n\nWhen macOS drops the first notification while displaying the permission prompt—the case this warm-up explicitly permits—`alert-not-presented` or `alert-not-shown` is not acknowledged, so closing here leaves `warm.candidate` pending. After the fresh launch acquires the lease, that warm-up can be presented before the counted candidate; both banners have the same text, so the person can click the wrong one and the test times out without proving the advertised single-notification journey. Cancel, read, or otherwise finish the warm-up candidate before reopening the app.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/c2068f5452660e9d034864141b9ef21fde727b9c/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 138,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4312517870,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "c2068f5452660e9d034864141b9ef21fde727b9c"
+                      },
+                      "path": "okr/web/apps/web/e2e/real/notifications-os.desktop.real.spec.ts",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Restore source-group activation after the OS spec**\n\nWhen `run <dir> nc os` is followed by the ordinary `run <dir> nc` on the same kept native stack, this update leaves `flow` and `replies` active. The latter spec's `activateOkrGroup()` requires the exact state `flow=false,okr=true,replies=false`, so it aborts before exercising its journey. Add failure-safe teardown that restores the groups changed by this spec.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/c2068f5452660e9d034864141b9ef21fde727b9c/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 359,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4312517878,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "c2068f5452660e9d034864141b9ef21fde727b9c"
+                      },
+                      "path": "okr/web/apps/web/e2e/real/notifications-m2.desktop.real.spec.ts",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Exclude stale candidates from the M2 delivery assertion**\n\nUnder Playwright `--retries`, or a second invocation after an attempt failed after creating candidates but before acknowledging them, Ben still has pending alerts from the earlier attempt. The desktop fetches those alerts too, and `recorded().slice(before)` therefore contains IDs outside the newly built `expected` array, making this exact equality fail even when the current attempt behaves correctly. Retire prior pending candidates or otherwise isolate the delivery queue before opening the desktop.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/c2068f5452660e9d034864141b9ef21fde727b9c/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": false,
+                "line": 167,
+                "originalLine": 159,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4312627901,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "3d9840757246a2459c526c4a93735649c08bc2dc"
+                      },
+                      "path": "okr/web/apps/web/e2e/real/notifications-m2.desktop.real.spec.ts",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Restore Ben's alert preferences after both specs**\n\nOn a kept database, this write permanently disables Ben's quiet hours—and creates a saved-preferences row when `prefs.saved` was false—because the failure-safe teardown restores only source groups. The OS spec performs the same mutation, so a later spec in the shared run observes settings left by whichever spec ran first; snapshot and restore the original preferences (including removing a newly inserted row) in teardown.\n\nAGENTS.md reference: [AGENTS.md:L152-L156](https://github.com/txehq/txe/blob/90a7cf6f35042dd845b6d8381ecbbceac9915330/AGENTS.md#L152-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": false,
+                "line": 233,
+                "originalLine": 179,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4312627914,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "3d9840757246a2459c526c4a93735649c08bc2dc"
+                      },
+                      "path": "okr/web/apps/web/e2e/real/notifications-os.desktop.real.spec.ts",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Retire stale alerts before opening the OS notifier**\n\nOn a retry or second run against a kept database, an earlier attempt can have failed after creating a candidate but before the desktop fetched it. This initial `open()` immediately fetches such pending alerts before the new warm-up candidate is created, so macOS can show multiple indistinguishable Flow banners and the person may click an old one, invalidating the advertised single-notification journey. Settle existing pending candidates or otherwise isolate the queue before launching the real notifier.\n\nAGENTS.md reference: [AGENTS.md:L152-L156](https://github.com/txehq/txe/blob/90a7cf6f35042dd845b6d8381ecbbceac9915330/AGENTS.md#L152-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              },
+              {
+                "isResolved": false,
+                "isOutdated": true,
+                "line": null,
+                "originalLine": 204,
+                "resolvedBy": null,
+                "comments": {
+                  "nodes": [
+                    {
+                      "databaseId": 4312691615,
+                      "author": {
+                        "__typename": "Bot",
+                        "login": "chatgpt-codex-connector"
+                      },
+                      "commit": {
+                        "oid": "02672fd2668754dfa45420ca7b3c6385fd16b3cc"
+                      },
+                      "path": "okr/web/apps/web/e2e/real/notifications-os.desktop.real.spec.ts",
+                      "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Restore rows changed by stale-alert cleanup**\n\nWhen this runs on a kept database after a partial or failed NC attempt, `/read-all` marks every visible unread notification belonging to Ben as read and increments its version, including rows this spec did not create. The `afterAll` teardown restores only source groups and preferences, so a later retry or NC spec observes the earlier attempt's inbox permanently altered. Snapshot and restore those rows, or isolate stale alert candidates without changing unrelated inbox state.\n\nAGENTS.md reference: [AGENTS.md:L152-L156](https://github.com/txehq/txe/blob/359a8ef454e81111253346fb442054eb6afdfa92/AGENTS.md#L152-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+]

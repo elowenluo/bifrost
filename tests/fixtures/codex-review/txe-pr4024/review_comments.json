@@ -1,0 +1,693 @@
+[
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312476492",
+    "pull_request_review_id": 5569827718,
+    "id": 4312476492,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAQsrTA",
+    "diff_hunk": "@@ -0,0 +1,402 @@\n+import { randomUUID } from 'node:crypto';\n+import { existsSync, readFileSync } from 'node:fs';\n+import { expect, test, type APIRequestContext } from '@playwright/test';\n+import { destinationPath, type OkrTarget } from '../../src/notifications/targets';\n+import { desktopTarget, type DesktopOptions } from './desktopTarget';\n+import { evidenceLine, runSource } from './evidence';\n+import { keyed } from './keyed';\n+import { ADA, BEN, DB, MEMBER, OWNER, doc, match, mention, sql, words } from './ncReal';\n+\n+/**\n+ * M2's alerts in the packaged desktop app (TXE-4673, NC-08h, for TXE-4500): for each Flow kind\n+ * and both reply kinds, a real command makes Ben's row, the desktop signed in as Ben is handed\n+ * exactly one alert for it, with that kind's text, and clicking it opens the row's entry route,\n+ * which reveals the exact item, focused, and reads the row. A row Ben read before its alert was\n+ * due is never alerted (NC-D09). Run only by okr/desktop/e2e/tab-readiness-native.sh in its NC\n+ * profile (`run <run-dir> nc m2`), under a native UI lease, in a run-owned test package. macOS\n+ * evidence only.\n+ *\n+ * What an alert is here: the shell's test notifier (OKR_DESKTOP_NOTIFY_LOG) records what the app\n+ * handed to the OS and reports it shown; nothing reaches the person's screen. That is evidence of\n+ * what the app asked the OS to show, never of a banner the OS displayed.\n+ *\n+ * The click's last step, from the entry route to the destination, needs a renderer that declares\n+ * the flow and replies groups (contract.ts CLIENT_GROUPS, CC1's TXE-4672). On a build that\n+ * declares okr only, those rows open as update_required and that step fails: this spec is the\n+ * check that the switch closes the journey, and is run on a build that has it.\n+ *\n+ * Setup: all three source groups on, in this run's own database only; Ben's quiet hours off (the\n+ * default 22:00-08:00 in the desktop's own zone would defer mentions and replies by the clock).\n+ */\n+test.describe.configure({ mode: 'serial' });\n+\n+const GROUPS = { 'X-OKR-Notification-Groups': 'okr,flow,replies' };\n+type Json = Record<string, unknown>;\n+\n+const options = (): DesktopOptions => ({\n+  app: process.env.OKR_TAB_APP ?? '',\n+  tokenFile: process.env.OKR_TAB_TOKEN_FILE ?? '',\n+  server: process.env.OKR_TAB_SERVER ?? '',\n+  user: process.env.OKR_TAB_USER ?? '',\n+  passwordFile: process.env.OKR_TAB_USER_PW_FILE ?? '',\n+  runDir: process.env.OKR_TAB_RUN_DIR ?? '',\n+});\n+\n+/** The run's dev-fixture okr-api, where setup writes as a principal. */\n+async function dev(\n+  request: APIRequestContext,\n+  who: string,\n+  method: string,\n+  url: string,\n+  data?: unknown,\n+  headers: Record<string, string> = {},\n+): Promise<Json> {\n+  const answer = await request.fetch(`${process.env.OKR_NC_DEV_API}/api/v1${url}`, {\n+    method,\n+    data,\n+    headers: {\n+      'X-OKR-Dev-Principal': who,\n+      'Idempotency-Key': randomUUID(),\n+      ...keyed(method, url),\n+      ...headers,\n+    },\n+  });\n+  expect(answer.status(), `${method} ${url}: ${await answer.text()}`).toBeLessThan(300);\n+  return answer.status() === 204 ? {} : ((await answer.json()) as Json);\n+}\n+\n+const record = (what: string, fields: Record<string, string>) =>\n+  console.log(\n+    evidenceLine({\n+      record: what,\n+      database: DB,\n+      source: runSource(),\n+      at: new Date().toISOString(),\n+      fields,\n+    }),\n+  );\n+\n+const day = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);\n+const tag = () => randomUUID().slice(0, 6);\n+\n+/** Ben's one unwithdrawn row a subject caused, of `kind`, from this run's database. */\n+function benRow(subject: string, kind: string): string {\n+  const id = sql(\n+    `SELECT id FROM ok_notifications WHERE subject_id = '${subject}' AND recipient_principal_id = '${BEN}' AND kind = '${kind}' AND withdrawn_at IS NULL ORDER BY arrival_seq DESC LIMIT 1`,\n+  );\n+  expect(id, `${kind} row for Ben on ${subject}`).toMatch(/^[0-9a-f-]{36}$/);\n+  return id;\n+}\n+\n+/** The alert candidate a row was recorded with: the id the desktop's alert carries. */\n+const candidateOf = (row: string) =>\n+  sql(`SELECT coalesce(candidate_id::text, '') FROM ok_notifications WHERE id = '${row}'`);\n+\n+/** The alerts the app handed to the (recording) OS notifier, in order. */\n+function recorded(): { id: string; title: string; body: string }[] {\n+  const file = process.env.OKR_DESKTOP_NOTIFY_LOG ?? '';\n+  if (!existsSync(file)) return [];\n+  return readFileSync(file, 'utf8')\n+    .split('\\n')\n+    .filter(Boolean)\n+    .map((l) => JSON.parse(l) as { id: string; title: string; body: string });\n+}\n+\n+interface Expected {\n+  kind: string;\n+  row: string;\n+  candidate: string;\n+  text: string;\n+  /** What the revealed item holds. */\n+  shows: RegExp;\n+}\n+\n+test('M2 alerts: each Flow kind and both reply kinds alert once, open their exact item and read it; a row read first is never alerted', async ({\n+  request,\n+}) => {\n+  test.skip(process.env.OKR_NC_DESKTOP_M2 !== '1', 'a native run, by name, under a lease');\n+  test.setTimeout(12 * 60_000);\n+  expect(process.env.OKR_DESKTOP_NOTIFY_LOG, 'alerts must be recorded, never shown').toBeTruthy();\n+\n+  // All three groups on, in this run's own database only; repeatable.\n+  sql(\n+    `UPDATE ok_notification_source_groups SET activated_at = now() WHERE source_group IN ('okr', 'flow', 'replies') AND activated_at IS NULL`,\n+  );\n+  const groups = sql(\n+    `SELECT string_agg(source_group || '=' || (activated_at IS NOT NULL), ',' ORDER BY source_group) FROM ok_notification_source_groups`,\n+  );\n+  expect(groups).toBe('flow=true,okr=true,replies=true');\n+  record('group activation (run database only)', { groups });\n+\n+  // Ben's quiet hours off, everything else as saved.\n+  const prefs = await dev(request, BEN, 'GET', '/me/alert-preferences');\n+  const quiet = prefs.quiet_hours as { start: string; end: string };\n+  await dev(\n+    request,\n+    BEN,\n+    'PUT',\n+    '/me/alert-preferences',\n+    {\n+      categories: prefs.categories,\n+      quiet_hours: { enabled: false, start: quiet.start, end: quiet.end },\n+      time_zone: prefs.time_zone,\n+    },\n+    // The first save of a person's preferences is made with If-None-Match: *.\n+    prefs.saved === true ? match(Number(prefs.row_version)) : { 'If-None-Match': '*' },\n+  );\n+  record('Ben quiet hours off (run database only)', {\n+    categories: JSON.stringify(prefs.categories),\n+    quiet_was: JSON.stringify(prefs.quiet_hours),\n+  });\n+\n+  // Flow: Ada's focus and task, and Ben's own.\n+  const adaFocus = await dev(request, ADA, 'POST', '/flow/focuses', { title: `Launch ${tag()}` });\n+  const adaTask = await dev(request, ADA, 'POST', `/flow/focuses/${String(adaFocus.id)}/tasks`, {\n+    title: 'Plan the launch',\n+  });\n+  const benFocus = await dev(request, BEN, 'POST', '/flow/focuses', { title: `Ben's ${tag()}` });\n+  const benTask = await dev(request, BEN, 'POST', `/flow/focuses/${String(benFocus.id)}/tasks`, {\n+    title: 'Write the brief',\n+  });\n+  // OKR: a published goal of Member's that Ben can read.\n+  const cycle = await dev(request, OWNER, 'POST', '/cycles', {\n+    kind: 'custom',\n+    label: 'NC desktop M2',\n+    timezone: 'UTC',\n+    start_date: day(-10),\n+    end_date: day(80),\n+    planning_starts: day(-10),\n+    execution_starts: day(-9),\n+    review_starts: day(70),\n+  });\n+  const draft = await dev(request, MEMBER, 'POST', '/objectives', {\n+    cycle_id: cycle.id,\n+    home_kind: 'personal',\n+    title: `Alerted on the desktop ${tag()}`,\n+    key_results: [{ title: 'Alerted', kind: 'percentage' }],\n+  });\n+  await dev(\n+    request,\n+    MEMBER,\n+    'POST',\n+    `/objectives/${String(draft.id)}/publish`,\n+    undefined,\n+    match(Number(draft.row_version)),\n+  );\n+\n+  // The control: a Flow mention of Ben that Ben reads before the desktop is running.\n+  const early = `Read this first ${tag()}`;\n+  const earlyThread = await dev(request, ADA, 'POST', `/flow/tasks/${String(adaTask.id)}/threads`, {\n+    body: doc(words(`${early} `), mention(BEN)),\n+  });\n+  const earlyRow = benRow((earlyThread.comments as { id: string }[])[0]!.id, 'flow_mention');\n+  const earlyItem = await dev(\n+    request,\n+    BEN,\n+    'GET',\n+    `/me/notifications/${earlyRow}`,\n+    undefined,\n+    GROUPS,\n+  );\n+  await dev(\n+    request,\n+    BEN,\n+    'PATCH',\n+    `/me/notifications/${earlyRow}`,\n+    { read: true },\n+    { ...GROUPS, ...match(Number(earlyItem.version)) },\n+  );\n+  const earlyCandidate = candidateOf(earlyRow);\n+  expect(earlyCandidate, 'the read row is linked to an alert candidate').toMatch(/^[0-9a-f-]{36}$/);\n+\n+  // One row of each kind, for Ben.\n+  const expected: Expected[] = [];\n+  const add = (kind: string, row: string, text: string, shows: RegExp) => {\n+    const candidate = candidateOf(row);\n+    expect(candidate, `${kind} row ${row} is linked to an alert candidate`).toMatch(\n+      /^[0-9a-f-]{36}$/,\n+    );\n+    expected.push({ kind, row, candidate, text, shows });\n+  };\n+\n+  const said = `Ben, can you take the venue? ${tag()}`;\n+  const mentioned = await dev(request, ADA, 'POST', `/flow/tasks/${String(adaTask.id)}/threads`, {\n+    body: doc(words(`${said} `), mention(BEN)),\n+  });\n+  add(\n+    'flow_mention',\n+    benRow((mentioned.comments as { id: string }[])[0]!.id, 'flow_mention'),\n+    'You were mentioned in Flow',\n+    new RegExp(said.replace(/[?]/g, '\\\\?')),\n+  );\n+\n+  // A support of a task watches the task and its focus, and names both as seen.\n+  const benTaskNow = await dev(request, BEN, 'GET', `/flow/tasks/${String(benTask.id)}`);\n+  const benFocusNow = await dev(request, BEN, 'GET', `/flow/focuses/${String(benFocus.id)}`);\n+  const supportTitle = `Draft the outline ${tag()}`;\n+  const support = await dev(request, ADA, 'POST', '/flow/supports', {\n+    target: { kind: 'task', task_id: benTask.id },\n+    title: supportTitle,\n+    seen: [\n+      { kind: 'task', id: benTask.id, content_version: benTaskNow.content_version },\n+      { kind: 'focus', id: benFocus.id, content_version: benFocusNow.content_version },\n+    ],\n+  });\n+  add(\n+    'flow_support_added',\n+    benRow(String(support.id), 'flow_support_added'),\n+    'Someone is now supporting your work in Flow',\n+    new RegExp(`Supported by[\\\\s\\\\S]*${supportTitle}`),\n+  );\n+  const supportNow = await dev(request, ADA, 'GET', `/flow/tasks/${String(support.id)}`);\n+  await dev(\n+    request,\n+    ADA,\n+    'PATCH',\n+    `/flow/tasks/${String(support.id)}`,\n+    { state: 'done' },\n+    match(Number(supportNow.row_version)),\n+  );\n+  add(\n+    'flow_support_done',\n+    benRow(String(support.id), 'flow_support_done'),\n+    'Work supporting yours in Flow was completed',\n+    new RegExp(`Supported by[\\\\s\\\\S]*${supportTitle}`),\n+  );\n+\n+  const adaFocusNow = await dev(request, ADA, 'GET', `/flow/focuses/${String(adaFocus.id)}`);\n+  const supporting = `Arrange transport ${tag()}`;\n+  const benSupport = await dev(request, BEN, 'POST', '/flow/supports', {\n+    target: { kind: 'focus', focus_id: adaFocus.id },\n+    title: supporting,\n+    seen: [{ kind: 'focus', id: adaFocus.id, content_version: adaFocusNow.content_version }],\n+  });\n+  const renamed = `Launch ${tag()}`;\n+  const adaFocusThen = await dev(request, ADA, 'GET', `/flow/focuses/${String(adaFocus.id)}`);\n+  await dev(\n+    request,\n+    ADA,\n+    'PATCH',\n+    `/flow/focuses/${String(adaFocus.id)}`,\n+    { title: renamed },\n+    match(Number(adaFocusThen.row_version)),\n+  );\n+  add(\n+    'flow_source_changed',\n+    benRow(String(benSupport.id), 'flow_source_changed'),\n+    'Work you support in Flow changed',\n+    /What this supports has changed/,\n+  );\n+\n+  const okrStarted = await dev(request, BEN, 'POST', `/objectives/${String(draft.id)}/threads`, {\n+    body: doc(words('Who has the keys? ')),\n+  });\n+  const okrAnswer = `Ada has them ${tag()}`;\n+  const okrReplied = await dev(request, ADA, 'POST', `/threads/${String(okrStarted.id)}/comments`, {\n+    body: doc(words(`${okrAnswer} `)),\n+  });\n+  add(\n+    'discussion_reply',\n+    benRow(String(okrReplied.created_comment_id), 'discussion_reply'),\n+    'Someone replied in an OKR discussion',\n+    new RegExp(okrAnswer),\n+  );\n+\n+  const flowStarted = await dev(request, BEN, 'POST', `/flow/tasks/${String(adaTask.id)}/threads`, {\n+    body: doc(words('Status? ')),\n+  });\n+  const flowAnswer = `On it ${tag()}`;\n+  const flowReplied = await dev(\n+    request,\n+    ADA,\n+    'POST',\n+    `/flow/threads/${String(flowStarted.id)}/comments`,\n+    { body: doc(words(`${flowAnswer} `)) },\n+  );\n+  add(\n+    'flow_discussion_reply',\n+    benRow(String(flowReplied.created_comment_id), 'flow_discussion_reply'),\n+    'Someone replied in a Flow discussion',\n+    new RegExp(flowAnswer),\n+  );\n+\n+  // Where each row leads, as Ben's API answers it with all three groups declared.\n+  const paths = new Map<string, string>();\n+  for (const e of expected) {\n+    const t = (await dev(\n+      request,\n+      BEN,\n+      'GET',\n+      `/me/notifications/${e.row}/target`,\n+      undefined,\n+      GROUPS,\n+    )) as {\n+      status: string;\n+      target: OkrTarget;\n+    };\n+    expect(t.status, `${e.kind} target`).toBe('available');\n+    paths.set(e.row, destinationPath(t.target));\n+  }\n+  record('M2 alert rows', {\n+    rows: expected.map((e) => `${e.kind}:${e.row}:${e.candidate}`).join(';'),\n+    control: `${earlyRow}:${earlyCandidate}`,\n+  });\n+\n+  // The desktop, signed in as Ben: every alert it is handed is recorded.\n+  const before = recorded().length;\n+  const target = desktopTarget(options());\n+  const s = await target.open(null);\n+  try {\n+    // Every expected alert, then a while longer for anything else to arrive.\n+    await expect\n+      .poll(() => recorded().slice(before).length, { timeout: 4 * 60_000, intervals: [1000] })\n+      .toBeGreaterThanOrEqual(expected.length);\n+    await s.page.waitForTimeout(10_000);\n+    const alerts = recorded().slice(before);\n+    expect(\n+      alerts.map((a) => `${a.id} ${a.body}`).sort(),\n+      'exactly one alert per row, with its kind text, and none for the row read first',\n+    ).toEqual(expected.map((e) => `${e.candidate} ${e.text}`).sort());\n+    expect(alerts.every((a) => a.title === 'OKR')).toBe(true);\n+    // The control was decided, as read, not left pending.\n+    expect(\n+      sql(\n+        `SELECT status || ':' || coalesce(reason, '') FROM ok_alert_deliveries WHERE candidate_id = '${earlyCandidate}' AND recipient_principal_id = '${BEN}'`,\n+      ),\n+    ).toBe('cancelled:read');\n+    record('M2 alerts handed to the recording OS notifier', {\n+      alerts: alerts.map((a) => `${a.id}=${a.body}`).join(';'),\n+      control: 'cancelled:read',\n+      notifier: 'OKR_DESKTOP_NOTIFY_LOG (recorded, not an observed OS banner)',\n+    });\n+\n+    // Each click opens the entry route, which reveals the exact item, focused, and reads the row.\n+    for (const e of expected) {\n+      const path = paths.get(e.row)!;\n+      expect(await target.clickAlert(e.candidate), `${e.kind} alert is clickable`).toBe(true);\n+      await expect(s.page).toHaveURL(\n+        new RegExp(`#${path.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}$`),\n+        { timeout: 30_000 },",
+    "path": "okr/web/apps/web/e2e/real/notifications-m2.desktop.real.spec.ts",
+    "commit_id": "3d9840757246a2459c526c4a93735649c08bc2dc",
+    "original_commit_id": "cdc736305680f31259ad9eb0390a65d5a51c12e9",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Include the M2 client support before enabling this journey**\n\nWhen `run <dir> nc m2` packages this commit's own tree, the first alert click cannot reach `path`: `src/notifications/contract.ts` still declares only `CLIENT_GROUPS = ['okr']`, and the desktop proxy in `src/shell/policy.cjs` also drops `X-OKR-Notification-Groups`, while every row exercised here belongs to `flow` or `replies`. The entry route therefore resolves as `update_required` and this URL assertion times out, so the newly advertised test does not pass alone until the client and proxy changes are included.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/cdc736305680f31259ad9eb0390a65d5a51c12e9/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-19T09:56:58Z",
+    "updated_at": "2026-10-19T09:56:58Z",
+    "html_url": "https://github.com/txehq/txe/pull/4024#discussion_r4312476492",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4024",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4312476492"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4024#discussion_r4312476492"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4024"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312476492/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": 420,
+    "original_start_line": 376,
+    "start_side": "RIGHT",
+    "line": 423,
+    "original_line": 379,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 379,
+    "position": 423,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312476497",
+    "pull_request_review_id": 5569827718,
+    "id": 4312476497,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAQsrUQ",
+    "diff_hunk": "@@ -0,0 +1,402 @@\n+import { randomUUID } from 'node:crypto';\n+import { existsSync, readFileSync } from 'node:fs';\n+import { expect, test, type APIRequestContext } from '@playwright/test';\n+import { destinationPath, type OkrTarget } from '../../src/notifications/targets';\n+import { desktopTarget, type DesktopOptions } from './desktopTarget';\n+import { evidenceLine, runSource } from './evidence';\n+import { keyed } from './keyed';\n+import { ADA, BEN, DB, MEMBER, OWNER, doc, match, mention, sql, words } from './ncReal';\n+\n+/**\n+ * M2's alerts in the packaged desktop app (TXE-4673, NC-08h, for TXE-4500): for each Flow kind\n+ * and both reply kinds, a real command makes Ben's row, the desktop signed in as Ben is handed\n+ * exactly one alert for it, with that kind's text, and clicking it opens the row's entry route,\n+ * which reveals the exact item, focused, and reads the row. A row Ben read before its alert was\n+ * due is never alerted (NC-D09). Run only by okr/desktop/e2e/tab-readiness-native.sh in its NC\n+ * profile (`run <run-dir> nc m2`), under a native UI lease, in a run-owned test package. macOS\n+ * evidence only.\n+ *\n+ * What an alert is here: the shell's test notifier (OKR_DESKTOP_NOTIFY_LOG) records what the app\n+ * handed to the OS and reports it shown; nothing reaches the person's screen. That is evidence of\n+ * what the app asked the OS to show, never of a banner the OS displayed.\n+ *\n+ * The click's last step, from the entry route to the destination, needs a renderer that declares\n+ * the flow and replies groups (contract.ts CLIENT_GROUPS, CC1's TXE-4672). On a build that\n+ * declares okr only, those rows open as update_required and that step fails: this spec is the\n+ * check that the switch closes the journey, and is run on a build that has it.\n+ *\n+ * Setup: all three source groups on, in this run's own database only; Ben's quiet hours off (the\n+ * default 22:00-08:00 in the desktop's own zone would defer mentions and replies by the clock).\n+ */\n+test.describe.configure({ mode: 'serial' });\n+\n+const GROUPS = { 'X-OKR-Notification-Groups': 'okr,flow,replies' };\n+type Json = Record<string, unknown>;\n+\n+const options = (): DesktopOptions => ({\n+  app: process.env.OKR_TAB_APP ?? '',\n+  tokenFile: process.env.OKR_TAB_TOKEN_FILE ?? '',\n+  server: process.env.OKR_TAB_SERVER ?? '',\n+  user: process.env.OKR_TAB_USER ?? '',\n+  passwordFile: process.env.OKR_TAB_USER_PW_FILE ?? '',\n+  runDir: process.env.OKR_TAB_RUN_DIR ?? '',\n+});\n+\n+/** The run's dev-fixture okr-api, where setup writes as a principal. */\n+async function dev(\n+  request: APIRequestContext,\n+  who: string,\n+  method: string,\n+  url: string,\n+  data?: unknown,\n+  headers: Record<string, string> = {},\n+): Promise<Json> {\n+  const answer = await request.fetch(`${process.env.OKR_NC_DEV_API}/api/v1${url}`, {\n+    method,\n+    data,\n+    headers: {\n+      'X-OKR-Dev-Principal': who,\n+      'Idempotency-Key': randomUUID(),\n+      ...keyed(method, url),\n+      ...headers,\n+    },\n+  });\n+  expect(answer.status(), `${method} ${url}: ${await answer.text()}`).toBeLessThan(300);\n+  return answer.status() === 204 ? {} : ((await answer.json()) as Json);\n+}\n+\n+const record = (what: string, fields: Record<string, string>) =>\n+  console.log(\n+    evidenceLine({\n+      record: what,\n+      database: DB,\n+      source: runSource(),\n+      at: new Date().toISOString(),\n+      fields,\n+    }),\n+  );\n+\n+const day = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);\n+const tag = () => randomUUID().slice(0, 6);\n+\n+/** Ben's one unwithdrawn row a subject caused, of `kind`, from this run's database. */\n+function benRow(subject: string, kind: string): string {\n+  const id = sql(\n+    `SELECT id FROM ok_notifications WHERE subject_id = '${subject}' AND recipient_principal_id = '${BEN}' AND kind = '${kind}' AND withdrawn_at IS NULL ORDER BY arrival_seq DESC LIMIT 1`,\n+  );\n+  expect(id, `${kind} row for Ben on ${subject}`).toMatch(/^[0-9a-f-]{36}$/);\n+  return id;\n+}\n+\n+/** The alert candidate a row was recorded with: the id the desktop's alert carries. */\n+const candidateOf = (row: string) =>\n+  sql(`SELECT coalesce(candidate_id::text, '') FROM ok_notifications WHERE id = '${row}'`);\n+\n+/** The alerts the app handed to the (recording) OS notifier, in order. */\n+function recorded(): { id: string; title: string; body: string }[] {\n+  const file = process.env.OKR_DESKTOP_NOTIFY_LOG ?? '';\n+  if (!existsSync(file)) return [];\n+  return readFileSync(file, 'utf8')\n+    .split('\\n')\n+    .filter(Boolean)\n+    .map((l) => JSON.parse(l) as { id: string; title: string; body: string });\n+}\n+\n+interface Expected {\n+  kind: string;\n+  row: string;\n+  candidate: string;\n+  text: string;\n+  /** What the revealed item holds. */\n+  shows: RegExp;\n+}\n+\n+test('M2 alerts: each Flow kind and both reply kinds alert once, open their exact item and read it; a row read first is never alerted', async ({\n+  request,\n+}) => {\n+  test.skip(process.env.OKR_NC_DESKTOP_M2 !== '1', 'a native run, by name, under a lease');\n+  test.setTimeout(12 * 60_000);\n+  expect(process.env.OKR_DESKTOP_NOTIFY_LOG, 'alerts must be recorded, never shown').toBeTruthy();\n+\n+  // All three groups on, in this run's own database only; repeatable.\n+  sql(\n+    `UPDATE ok_notification_source_groups SET activated_at = now() WHERE source_group IN ('okr', 'flow', 'replies') AND activated_at IS NULL`,\n+  );",
+    "path": "okr/web/apps/web/e2e/real/notifications-m2.desktop.real.spec.ts",
+    "commit_id": "cdc736305680f31259ad9eb0390a65d5a51c12e9",
+    "original_commit_id": "cdc736305680f31259ad9eb0390a65d5a51c12e9",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Restore the activated source groups after the test**\n\nAfter this spec runs on a kept database, `flow` and `replies` remain active because no failure-safe teardown reverses this update. Running an existing NC spec that calls `ncReal.activateOkrGroup()` afterward, such as `notifications-ui.real.spec.ts`, then fails its exact `flow=false,okr=true,replies=false` precondition before testing anything; restore these shared rows in `afterAll`, including on failure, as the existing M2 real-stack spec does.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/cdc736305680f31259ad9eb0390a65d5a51c12e9/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-19T09:56:58Z",
+    "updated_at": "2026-10-19T09:56:58Z",
+    "html_url": "https://github.com/txehq/txe/pull/4024#discussion_r4312476497",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4024",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4312476497"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4024#discussion_r4312476497"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4024"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312476497/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 121,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 124,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 124,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312517853",
+    "pull_request_review_id": 5569892724,
+    "id": 4312517853,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAQvM3Q",
+    "diff_hunk": "@@ -299,20 +305,30 @@ run)\n   load; what=\"${3:?smoke|measure|nc}\"\n   if [ \"$what\" = nc ] || [ \"${PROFILE:-tab}\" = nc ]; then\n     [ \"$what\" = nc ] && [ \"${PROFILE:-tab}\" = nc ] || { echo \"run nc needs a run packaged with OKR_NATIVE_PROFILE=nc, and that run takes only nc\"; exit 2; }\n+    # Which spec: the M1 one, or with `m2` M2's alerts (TXE-4673), each switched on by its own variable.\n+    case \"${4:-}\" in\n+      '') spec=e2e/real/notifications.desktop.real.spec.ts; switch=(OKR_NC_DESKTOP=1); tag=nc ;;\n+      m2) spec=e2e/real/notifications-m2.desktop.real.spec.ts; switch=(OKR_NC_DESKTOP_M2=1 OKR_DESKTOP_ALERT_INTERVAL_MS=2000); tag=nc-m2 ;;\n+      os) spec=e2e/real/notifications-os.desktop.real.spec.ts; switch=(OKR_NC_DESKTOP_OS=1 OKR_DESKTOP_ALERT_INTERVAL_MS=60000); tag=nc-os ;;\n+      *) echo \"run <run-dir> nc takes nothing, m2 or os, not ${4}\"; exit 2 ;;\n+    esac\n+    [ -n \"${ROLE:-}\" ] || { echo \"run.env names no database role for $DB; stop\"; exit 1; }\n+    # Alerts are recorded to a file, never shown, except in the os step, where the OS shows one.\n+    notify=(OKR_DESKTOP_NOTIFY_LOG=\"$RUN/notify.log\"); [ \"$tag\" = nc-os ] && notify=()",
+    "path": "okr/desktop/e2e/tab-readiness-native.sh",
+    "commit_id": "3d9840757246a2459c526c4a93735649c08bc2dc",
+    "original_commit_id": "c2068f5452660e9d034864141b9ef21fde727b9c",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Explicitly clear the recording notifier for the OS run**\n\nWhen the operator already has `OKR_DESKTOP_NOTIFY_LOG` exported, assigning `notify=()` merely omits a command-line override; `env` and then `desktopTarget` still inherit the variable from the caller. The `os` spec consequently stops at its assertion that the variable is unset instead of exercising macOS. Pass an explicit empty value or remove the variable from the environment for this branch.\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-19T10:01:38Z",
+    "updated_at": "2026-10-19T10:01:38Z",
+    "html_url": "https://github.com/txehq/txe/pull/4024#discussion_r4312517853",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4024",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4312517853"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4024#discussion_r4312517853"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4024"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312517853/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 318,
+    "original_line": 317,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 37,
+    "position": 38,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312517862",
+    "pull_request_review_id": 5569892724,
+    "id": 4312517862,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAQvM5g",
+    "diff_hunk": "@@ -0,0 +1,236 @@\n+import { randomUUID } from 'node:crypto';\n+import { existsSync, readFileSync, writeFileSync } from 'node:fs';\n+import { expect, test, type APIRequestContext } from '@playwright/test';\n+import { destinationPath, type OkrTarget } from '../../src/notifications/targets';\n+import { desktopTarget, type DesktopOptions } from './desktopTarget';\n+import { evidenceLine, runSource } from './evidence';\n+import { keyed } from './keyed';\n+import { ADA, BEN, DB, doc, match, mention, sql, words } from './ncReal';\n+\n+/**\n+ * ONE real macOS notification of the Notification Center, shown by the OS and clicked by a person\n+ * (TXE-4673, NC-08h, for TXE-4500's installed-desktop observation). Run only by\n+ * okr/desktop/e2e/tab-readiness-native.sh `run <run-dir> nc os`, under a native UI lease, with a\n+ * person at the Mac: the run-owned test package (a bundle id of its own, so macOS asks once\n+ * whether it may notify) shows the alert on the person's screen with its generic text, and the\n+ * person clicks Allow when asked, then the banner. Nothing is recorded in place of the OS here:\n+ * OKR_DESKTOP_NOTIFY_LOG is unset.\n+ *\n+ * What it proves, from the shell's own events: the OS reported the notification presented\n+ * (alert-shown, after the packaged app's delivered-list check, TXE-4276), the OS delivered the\n+ * person's click (alert-clicked), and the app opened the entry route, revealing the exact\n+ * comment, and read the row. What it does not prove: that the person saw it; that is the person's\n+ * own observation, recorded beside the run.\n+ *\n+ * A warm-up mention comes first: the permission question appears with the first notification,\n+ * which macOS may drop while it waits. Whatever happens to it is recorded; the app is then\n+ * started again (the permission stays with the bundle id) and the mention that counts is made.\n+ */\n+test.describe.configure({ mode: 'serial' });\n+\n+const GROUPS = { 'X-OKR-Notification-Groups': 'okr,flow,replies' };\n+type Json = Record<string, unknown>;\n+type Event = { t: string; type: string; id?: string; hash?: string; ok?: boolean };\n+\n+const options = (): DesktopOptions => ({\n+  app: process.env.OKR_TAB_APP ?? '',\n+  tokenFile: process.env.OKR_TAB_TOKEN_FILE ?? '',\n+  server: process.env.OKR_TAB_SERVER ?? '',\n+  user: process.env.OKR_TAB_USER ?? '',\n+  passwordFile: process.env.OKR_TAB_USER_PW_FILE ?? '',\n+  runDir: process.env.OKR_TAB_RUN_DIR ?? '',\n+});\n+\n+async function dev(\n+  request: APIRequestContext,\n+  who: string,\n+  method: string,\n+  url: string,\n+  data?: unknown,\n+  headers: Record<string, string> = {},\n+): Promise<Json> {\n+  const answer = await request.fetch(`${process.env.OKR_NC_DEV_API}/api/v1${url}`, {\n+    method,\n+    data,\n+    headers: {\n+      'X-OKR-Dev-Principal': who,\n+      'Idempotency-Key': randomUUID(),\n+      ...keyed(method, url),\n+      ...headers,\n+    },\n+  });\n+  expect(answer.status(), `${method} ${url}: ${await answer.text()}`).toBeLessThan(300);\n+  return answer.status() === 204 ? {} : ((await answer.json()) as Json);\n+}\n+\n+const record = (what: string, fields: Record<string, string>) =>\n+  console.log(\n+    evidenceLine({\n+      record: what,\n+      database: DB,\n+      source: runSource(),\n+      at: new Date().toISOString(),\n+      fields,\n+    }),\n+  );\n+\n+/** What the person at the Mac is asked to do, in the run's log, as it is asked. */\n+const ask = (what: string) => console.log(`PERSON (${new Date().toISOString()}): ${what}`);\n+\n+const events = (file: string): Event[] =>\n+  existsSync(file)\n+    ? readFileSync(file, 'utf8')\n+        .split('\\n')\n+        .filter(Boolean)\n+        .map((l) => JSON.parse(l) as Event)\n+    : [];\n+\n+/** The first of `types` the shell logged for alert `id`, waited for up to `ms`. */\n+async function outcome(file: string, id: string, types: string[], ms: number) {\n+  let found: Event | undefined;\n+  await expect\n+    .poll(\n+      () => {\n+        found = events(file).find((e) => e.id === id && types.includes(e.type));\n+        return found !== undefined;\n+      },\n+      { timeout: ms, intervals: [1000] },\n+    )\n+    .toBe(true)\n+    .catch(() => undefined);\n+  return found;\n+}\n+\n+const ENDS = ['alert-shown', 'alert-not-presented', 'alert-not-shown', 'alert-failed'];\n+\n+/** A Flow mention of Ben by Ada, and the alert candidate it was recorded with. */\n+async function mentionBen(request: APIRequestContext, task: string, said: string) {\n+  const thread = await dev(request, ADA, 'POST', `/flow/tasks/${task}/threads`, {\n+    body: doc(words(`${said} `), mention(BEN)),\n+  });\n+  const comment = (thread.comments as { id: string }[])[0]!.id;\n+  const row = sql(\n+    `SELECT id FROM ok_notifications WHERE subject_id = '${comment}' AND recipient_principal_id = '${BEN}' AND kind = 'flow_mention' AND withdrawn_at IS NULL`,\n+  );\n+  expect(row).toMatch(/^[0-9a-f-]{36}$/);\n+  const candidate = sql(\n+    `SELECT coalesce(candidate_id::text, '') FROM ok_notifications WHERE id = '${row}'`,\n+  );\n+  expect(candidate).toMatch(/^[0-9a-f-]{36}$/);\n+  return { row, candidate };\n+}\n+\n+test('one real macOS notification: shown by the OS, clicked by the person, opens the exact comment and reads it', async ({\n+  request,\n+}) => {\n+  test.skip(\n+    process.env.OKR_NC_DESKTOP_OS !== '1',\n+    'a native run with a person present, by name, under a lease',\n+  );\n+  test.setTimeout(20 * 60_000);\n+  expect(\n+    process.env.OKR_DESKTOP_NOTIFY_LOG ?? '',\n+    'the OS shows this alert: nothing may record it instead',\n+  ).toBe('');\n+\n+  sql(\n+    `UPDATE ok_notification_source_groups SET activated_at = now() WHERE source_group IN ('okr', 'flow', 'replies') AND activated_at IS NULL`,\n+  );\n+  expect(\n+    sql(\n+      `SELECT string_agg(source_group || '=' || (activated_at IS NOT NULL), ',' ORDER BY source_group) FROM ok_notification_source_groups`,\n+    ),\n+  ).toBe('flow=true,okr=true,replies=true');\n+  const prefs = await dev(request, BEN, 'GET', '/me/alert-preferences');\n+  const quiet = prefs.quiet_hours as { start: string; end: string };\n+  await dev(\n+    request,\n+    BEN,\n+    'PUT',\n+    '/me/alert-preferences',\n+    {\n+      categories: prefs.categories,\n+      quiet_hours: { enabled: false, start: quiet.start, end: quiet.end },\n+      time_zone: prefs.time_zone,\n+    },\n+    prefs.saved === true ? match(Number(prefs.row_version)) : { 'If-None-Match': '*' },\n+  );\n+  const focus = await dev(request, ADA, 'POST', '/flow/focuses', {\n+    title: `OS check ${randomUUID().slice(0, 6)}`,\n+  });\n+  const task = String(\n+    (\n+      await dev(request, ADA, 'POST', `/flow/focuses/${String(focus.id)}/tasks`, {\n+        title: 'Seen by the OS',\n+      })\n+    ).id,\n+  );\n+\n+  const target = desktopTarget(options());\n+  // Warm-up: macOS asks whether this test package may notify with its first notification.\n+  let s = await target.open(null);\n+  ask('macOS will ask whether \"OKR-e2e-…\" may send notifications: click Allow.');\n+  const warm = await mentionBen(request, task, `Warm-up ${randomUUID().slice(0, 6)}`);\n+  const warmed = await outcome(target.eventLog(), warm.candidate, ENDS, 5 * 60_000);\n+  record('OS warm-up alert', {\n+    alert: warm.candidate,\n+    outcome: warmed?.type ?? 'no answer in 5 min',\n+  });\n+  await s.close();",
+    "path": "okr/web/apps/web/e2e/real/notifications-os.desktop.real.spec.ts",
+    "commit_id": "3d9840757246a2459c526c4a93735649c08bc2dc",
+    "original_commit_id": "c2068f5452660e9d034864141b9ef21fde727b9c",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Retire the warm-up alert before restarting**\n\nWhen macOS drops the first notification while displaying the permission prompt—the case this warm-up explicitly permits—`alert-not-presented` or `alert-not-shown` is not acknowledged, so closing here leaves `warm.candidate` pending. After the fresh launch acquires the lease, that warm-up can be presented before the counted candidate; both banners have the same text, so the person can click the wrong one and the test times out without proving the advertised single-notification journey. Cancel, read, or otherwise finish the warm-up candidate before reopening the app.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/c2068f5452660e9d034864141b9ef21fde727b9c/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-19T10:01:38Z",
+    "updated_at": "2026-10-19T10:01:38Z",
+    "html_url": "https://github.com/txehq/txe/pull/4024#discussion_r4312517862",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4024",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4312517862"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4024#discussion_r4312517862"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4024"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312517862/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": 236,
+    "original_start_line": 174,
+    "start_side": "RIGHT",
+    "line": 260,
+    "original_line": 179,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 179,
+    "position": 260,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312517870",
+    "pull_request_review_id": 5569892724,
+    "id": 4312517870,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAQvM7g",
+    "diff_hunk": "@@ -0,0 +1,236 @@\n+import { randomUUID } from 'node:crypto';\n+import { existsSync, readFileSync, writeFileSync } from 'node:fs';\n+import { expect, test, type APIRequestContext } from '@playwright/test';\n+import { destinationPath, type OkrTarget } from '../../src/notifications/targets';\n+import { desktopTarget, type DesktopOptions } from './desktopTarget';\n+import { evidenceLine, runSource } from './evidence';\n+import { keyed } from './keyed';\n+import { ADA, BEN, DB, doc, match, mention, sql, words } from './ncReal';\n+\n+/**\n+ * ONE real macOS notification of the Notification Center, shown by the OS and clicked by a person\n+ * (TXE-4673, NC-08h, for TXE-4500's installed-desktop observation). Run only by\n+ * okr/desktop/e2e/tab-readiness-native.sh `run <run-dir> nc os`, under a native UI lease, with a\n+ * person at the Mac: the run-owned test package (a bundle id of its own, so macOS asks once\n+ * whether it may notify) shows the alert on the person's screen with its generic text, and the\n+ * person clicks Allow when asked, then the banner. Nothing is recorded in place of the OS here:\n+ * OKR_DESKTOP_NOTIFY_LOG is unset.\n+ *\n+ * What it proves, from the shell's own events: the OS reported the notification presented\n+ * (alert-shown, after the packaged app's delivered-list check, TXE-4276), the OS delivered the\n+ * person's click (alert-clicked), and the app opened the entry route, revealing the exact\n+ * comment, and read the row. What it does not prove: that the person saw it; that is the person's\n+ * own observation, recorded beside the run.\n+ *\n+ * A warm-up mention comes first: the permission question appears with the first notification,\n+ * which macOS may drop while it waits. Whatever happens to it is recorded; the app is then\n+ * started again (the permission stays with the bundle id) and the mention that counts is made.\n+ */\n+test.describe.configure({ mode: 'serial' });\n+\n+const GROUPS = { 'X-OKR-Notification-Groups': 'okr,flow,replies' };\n+type Json = Record<string, unknown>;\n+type Event = { t: string; type: string; id?: string; hash?: string; ok?: boolean };\n+\n+const options = (): DesktopOptions => ({\n+  app: process.env.OKR_TAB_APP ?? '',\n+  tokenFile: process.env.OKR_TAB_TOKEN_FILE ?? '',\n+  server: process.env.OKR_TAB_SERVER ?? '',\n+  user: process.env.OKR_TAB_USER ?? '',\n+  passwordFile: process.env.OKR_TAB_USER_PW_FILE ?? '',\n+  runDir: process.env.OKR_TAB_RUN_DIR ?? '',\n+});\n+\n+async function dev(\n+  request: APIRequestContext,\n+  who: string,\n+  method: string,\n+  url: string,\n+  data?: unknown,\n+  headers: Record<string, string> = {},\n+): Promise<Json> {\n+  const answer = await request.fetch(`${process.env.OKR_NC_DEV_API}/api/v1${url}`, {\n+    method,\n+    data,\n+    headers: {\n+      'X-OKR-Dev-Principal': who,\n+      'Idempotency-Key': randomUUID(),\n+      ...keyed(method, url),\n+      ...headers,\n+    },\n+  });\n+  expect(answer.status(), `${method} ${url}: ${await answer.text()}`).toBeLessThan(300);\n+  return answer.status() === 204 ? {} : ((await answer.json()) as Json);\n+}\n+\n+const record = (what: string, fields: Record<string, string>) =>\n+  console.log(\n+    evidenceLine({\n+      record: what,\n+      database: DB,\n+      source: runSource(),\n+      at: new Date().toISOString(),\n+      fields,\n+    }),\n+  );\n+\n+/** What the person at the Mac is asked to do, in the run's log, as it is asked. */\n+const ask = (what: string) => console.log(`PERSON (${new Date().toISOString()}): ${what}`);\n+\n+const events = (file: string): Event[] =>\n+  existsSync(file)\n+    ? readFileSync(file, 'utf8')\n+        .split('\\n')\n+        .filter(Boolean)\n+        .map((l) => JSON.parse(l) as Event)\n+    : [];\n+\n+/** The first of `types` the shell logged for alert `id`, waited for up to `ms`. */\n+async function outcome(file: string, id: string, types: string[], ms: number) {\n+  let found: Event | undefined;\n+  await expect\n+    .poll(\n+      () => {\n+        found = events(file).find((e) => e.id === id && types.includes(e.type));\n+        return found !== undefined;\n+      },\n+      { timeout: ms, intervals: [1000] },\n+    )\n+    .toBe(true)\n+    .catch(() => undefined);\n+  return found;\n+}\n+\n+const ENDS = ['alert-shown', 'alert-not-presented', 'alert-not-shown', 'alert-failed'];\n+\n+/** A Flow mention of Ben by Ada, and the alert candidate it was recorded with. */\n+async function mentionBen(request: APIRequestContext, task: string, said: string) {\n+  const thread = await dev(request, ADA, 'POST', `/flow/tasks/${task}/threads`, {\n+    body: doc(words(`${said} `), mention(BEN)),\n+  });\n+  const comment = (thread.comments as { id: string }[])[0]!.id;\n+  const row = sql(\n+    `SELECT id FROM ok_notifications WHERE subject_id = '${comment}' AND recipient_principal_id = '${BEN}' AND kind = 'flow_mention' AND withdrawn_at IS NULL`,\n+  );\n+  expect(row).toMatch(/^[0-9a-f-]{36}$/);\n+  const candidate = sql(\n+    `SELECT coalesce(candidate_id::text, '') FROM ok_notifications WHERE id = '${row}'`,\n+  );\n+  expect(candidate).toMatch(/^[0-9a-f-]{36}$/);\n+  return { row, candidate };\n+}\n+\n+test('one real macOS notification: shown by the OS, clicked by the person, opens the exact comment and reads it', async ({\n+  request,\n+}) => {\n+  test.skip(\n+    process.env.OKR_NC_DESKTOP_OS !== '1',\n+    'a native run with a person present, by name, under a lease',\n+  );\n+  test.setTimeout(20 * 60_000);\n+  expect(\n+    process.env.OKR_DESKTOP_NOTIFY_LOG ?? '',\n+    'the OS shows this alert: nothing may record it instead',\n+  ).toBe('');\n+\n+  sql(\n+    `UPDATE ok_notification_source_groups SET activated_at = now() WHERE source_group IN ('okr', 'flow', 'replies') AND activated_at IS NULL`,\n+  );",
+    "path": "okr/web/apps/web/e2e/real/notifications-os.desktop.real.spec.ts",
+    "commit_id": "c2068f5452660e9d034864141b9ef21fde727b9c",
+    "original_commit_id": "c2068f5452660e9d034864141b9ef21fde727b9c",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Restore source-group activation after the OS spec**\n\nWhen `run <dir> nc os` is followed by the ordinary `run <dir> nc` on the same kept native stack, this update leaves `flow` and `replies` active. The latter spec's `activateOkrGroup()` requires the exact state `flow=false,okr=true,replies=false`, so it aborts before exercising its journey. Add failure-safe teardown that restores the groups changed by this spec.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/c2068f5452660e9d034864141b9ef21fde727b9c/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-19T10:01:38Z",
+    "updated_at": "2026-10-19T10:01:38Z",
+    "html_url": "https://github.com/txehq/txe/pull/4024#discussion_r4312517870",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4024",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4312517870"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4024#discussion_r4312517870"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4024"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312517870/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 136,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 138,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 138,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312517878",
+    "pull_request_review_id": 5569892724,
+    "id": 4312517878,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAQvM9g",
+    "diff_hunk": "@@ -0,0 +1,402 @@\n+import { randomUUID } from 'node:crypto';\n+import { existsSync, readFileSync } from 'node:fs';\n+import { expect, test, type APIRequestContext } from '@playwright/test';\n+import { destinationPath, type OkrTarget } from '../../src/notifications/targets';\n+import { desktopTarget, type DesktopOptions } from './desktopTarget';\n+import { evidenceLine, runSource } from './evidence';\n+import { keyed } from './keyed';\n+import { ADA, BEN, DB, MEMBER, OWNER, doc, match, mention, sql, words } from './ncReal';\n+\n+/**\n+ * M2's alerts in the packaged desktop app (TXE-4673, NC-08h, for TXE-4500): for each Flow kind\n+ * and both reply kinds, a real command makes Ben's row, the desktop signed in as Ben is handed\n+ * exactly one alert for it, with that kind's text, and clicking it opens the row's entry route,\n+ * which reveals the exact item, focused, and reads the row. A row Ben read before its alert was\n+ * due is never alerted (NC-D09). Run only by okr/desktop/e2e/tab-readiness-native.sh in its NC\n+ * profile (`run <run-dir> nc m2`), under a native UI lease, in a run-owned test package. macOS\n+ * evidence only.\n+ *\n+ * What an alert is here: the shell's test notifier (OKR_DESKTOP_NOTIFY_LOG) records what the app\n+ * handed to the OS and reports it shown; nothing reaches the person's screen. That is evidence of\n+ * what the app asked the OS to show, never of a banner the OS displayed.\n+ *\n+ * The click's last step, from the entry route to the destination, needs a renderer that declares\n+ * the flow and replies groups (contract.ts CLIENT_GROUPS, CC1's TXE-4672). On a build that\n+ * declares okr only, those rows open as update_required and that step fails: this spec is the\n+ * check that the switch closes the journey, and is run on a build that has it.\n+ *\n+ * Setup: all three source groups on, in this run's own database only; Ben's quiet hours off (the\n+ * default 22:00-08:00 in the desktop's own zone would defer mentions and replies by the clock).\n+ */\n+test.describe.configure({ mode: 'serial' });\n+\n+const GROUPS = { 'X-OKR-Notification-Groups': 'okr,flow,replies' };\n+type Json = Record<string, unknown>;\n+\n+const options = (): DesktopOptions => ({\n+  app: process.env.OKR_TAB_APP ?? '',\n+  tokenFile: process.env.OKR_TAB_TOKEN_FILE ?? '',\n+  server: process.env.OKR_TAB_SERVER ?? '',\n+  user: process.env.OKR_TAB_USER ?? '',\n+  passwordFile: process.env.OKR_TAB_USER_PW_FILE ?? '',\n+  runDir: process.env.OKR_TAB_RUN_DIR ?? '',\n+});\n+\n+/** The run's dev-fixture okr-api, where setup writes as a principal. */\n+async function dev(\n+  request: APIRequestContext,\n+  who: string,\n+  method: string,\n+  url: string,\n+  data?: unknown,\n+  headers: Record<string, string> = {},\n+): Promise<Json> {\n+  const answer = await request.fetch(`${process.env.OKR_NC_DEV_API}/api/v1${url}`, {\n+    method,\n+    data,\n+    headers: {\n+      'X-OKR-Dev-Principal': who,\n+      'Idempotency-Key': randomUUID(),\n+      ...keyed(method, url),\n+      ...headers,\n+    },\n+  });\n+  expect(answer.status(), `${method} ${url}: ${await answer.text()}`).toBeLessThan(300);\n+  return answer.status() === 204 ? {} : ((await answer.json()) as Json);\n+}\n+\n+const record = (what: string, fields: Record<string, string>) =>\n+  console.log(\n+    evidenceLine({\n+      record: what,\n+      database: DB,\n+      source: runSource(),\n+      at: new Date().toISOString(),\n+      fields,\n+    }),\n+  );\n+\n+const day = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);\n+const tag = () => randomUUID().slice(0, 6);\n+\n+/** Ben's one unwithdrawn row a subject caused, of `kind`, from this run's database. */\n+function benRow(subject: string, kind: string): string {\n+  const id = sql(\n+    `SELECT id FROM ok_notifications WHERE subject_id = '${subject}' AND recipient_principal_id = '${BEN}' AND kind = '${kind}' AND withdrawn_at IS NULL ORDER BY arrival_seq DESC LIMIT 1`,\n+  );\n+  expect(id, `${kind} row for Ben on ${subject}`).toMatch(/^[0-9a-f-]{36}$/);\n+  return id;\n+}\n+\n+/** The alert candidate a row was recorded with: the id the desktop's alert carries. */\n+const candidateOf = (row: string) =>\n+  sql(`SELECT coalesce(candidate_id::text, '') FROM ok_notifications WHERE id = '${row}'`);\n+\n+/** The alerts the app handed to the (recording) OS notifier, in order. */\n+function recorded(): { id: string; title: string; body: string }[] {\n+  const file = process.env.OKR_DESKTOP_NOTIFY_LOG ?? '';\n+  if (!existsSync(file)) return [];\n+  return readFileSync(file, 'utf8')\n+    .split('\\n')\n+    .filter(Boolean)\n+    .map((l) => JSON.parse(l) as { id: string; title: string; body: string });\n+}\n+\n+interface Expected {\n+  kind: string;\n+  row: string;\n+  candidate: string;\n+  text: string;\n+  /** What the revealed item holds. */\n+  shows: RegExp;\n+}\n+\n+test('M2 alerts: each Flow kind and both reply kinds alert once, open their exact item and read it; a row read first is never alerted', async ({\n+  request,\n+}) => {\n+  test.skip(process.env.OKR_NC_DESKTOP_M2 !== '1', 'a native run, by name, under a lease');\n+  test.setTimeout(12 * 60_000);\n+  expect(process.env.OKR_DESKTOP_NOTIFY_LOG, 'alerts must be recorded, never shown').toBeTruthy();\n+\n+  // All three groups on, in this run's own database only; repeatable.\n+  sql(\n+    `UPDATE ok_notification_source_groups SET activated_at = now() WHERE source_group IN ('okr', 'flow', 'replies') AND activated_at IS NULL`,\n+  );\n+  const groups = sql(\n+    `SELECT string_agg(source_group || '=' || (activated_at IS NOT NULL), ',' ORDER BY source_group) FROM ok_notification_source_groups`,\n+  );\n+  expect(groups).toBe('flow=true,okr=true,replies=true');\n+  record('group activation (run database only)', { groups });\n+\n+  // Ben's quiet hours off, everything else as saved.\n+  const prefs = await dev(request, BEN, 'GET', '/me/alert-preferences');\n+  const quiet = prefs.quiet_hours as { start: string; end: string };\n+  await dev(\n+    request,\n+    BEN,\n+    'PUT',\n+    '/me/alert-preferences',\n+    {\n+      categories: prefs.categories,\n+      quiet_hours: { enabled: false, start: quiet.start, end: quiet.end },\n+      time_zone: prefs.time_zone,\n+    },\n+    // The first save of a person's preferences is made with If-None-Match: *.\n+    prefs.saved === true ? match(Number(prefs.row_version)) : { 'If-None-Match': '*' },\n+  );\n+  record('Ben quiet hours off (run database only)', {\n+    categories: JSON.stringify(prefs.categories),\n+    quiet_was: JSON.stringify(prefs.quiet_hours),\n+  });\n+\n+  // Flow: Ada's focus and task, and Ben's own.\n+  const adaFocus = await dev(request, ADA, 'POST', '/flow/focuses', { title: `Launch ${tag()}` });\n+  const adaTask = await dev(request, ADA, 'POST', `/flow/focuses/${String(adaFocus.id)}/tasks`, {\n+    title: 'Plan the launch',\n+  });\n+  const benFocus = await dev(request, BEN, 'POST', '/flow/focuses', { title: `Ben's ${tag()}` });\n+  const benTask = await dev(request, BEN, 'POST', `/flow/focuses/${String(benFocus.id)}/tasks`, {\n+    title: 'Write the brief',\n+  });\n+  // OKR: a published goal of Member's that Ben can read.\n+  const cycle = await dev(request, OWNER, 'POST', '/cycles', {\n+    kind: 'custom',\n+    label: 'NC desktop M2',\n+    timezone: 'UTC',\n+    start_date: day(-10),\n+    end_date: day(80),\n+    planning_starts: day(-10),\n+    execution_starts: day(-9),\n+    review_starts: day(70),\n+  });\n+  const draft = await dev(request, MEMBER, 'POST', '/objectives', {\n+    cycle_id: cycle.id,\n+    home_kind: 'personal',\n+    title: `Alerted on the desktop ${tag()}`,\n+    key_results: [{ title: 'Alerted', kind: 'percentage' }],\n+  });\n+  await dev(\n+    request,\n+    MEMBER,\n+    'POST',\n+    `/objectives/${String(draft.id)}/publish`,\n+    undefined,\n+    match(Number(draft.row_version)),\n+  );\n+\n+  // The control: a Flow mention of Ben that Ben reads before the desktop is running.\n+  const early = `Read this first ${tag()}`;\n+  const earlyThread = await dev(request, ADA, 'POST', `/flow/tasks/${String(adaTask.id)}/threads`, {\n+    body: doc(words(`${early} `), mention(BEN)),\n+  });\n+  const earlyRow = benRow((earlyThread.comments as { id: string }[])[0]!.id, 'flow_mention');\n+  const earlyItem = await dev(\n+    request,\n+    BEN,\n+    'GET',\n+    `/me/notifications/${earlyRow}`,\n+    undefined,\n+    GROUPS,\n+  );\n+  await dev(\n+    request,\n+    BEN,\n+    'PATCH',\n+    `/me/notifications/${earlyRow}`,\n+    { read: true },\n+    { ...GROUPS, ...match(Number(earlyItem.version)) },\n+  );\n+  const earlyCandidate = candidateOf(earlyRow);\n+  expect(earlyCandidate, 'the read row is linked to an alert candidate').toMatch(/^[0-9a-f-]{36}$/);\n+\n+  // One row of each kind, for Ben.\n+  const expected: Expected[] = [];\n+  const add = (kind: string, row: string, text: string, shows: RegExp) => {\n+    const candidate = candidateOf(row);\n+    expect(candidate, `${kind} row ${row} is linked to an alert candidate`).toMatch(\n+      /^[0-9a-f-]{36}$/,\n+    );\n+    expected.push({ kind, row, candidate, text, shows });\n+  };\n+\n+  const said = `Ben, can you take the venue? ${tag()}`;\n+  const mentioned = await dev(request, ADA, 'POST', `/flow/tasks/${String(adaTask.id)}/threads`, {\n+    body: doc(words(`${said} `), mention(BEN)),\n+  });\n+  add(\n+    'flow_mention',\n+    benRow((mentioned.comments as { id: string }[])[0]!.id, 'flow_mention'),\n+    'You were mentioned in Flow',\n+    new RegExp(said.replace(/[?]/g, '\\\\?')),\n+  );\n+\n+  // A support of a task watches the task and its focus, and names both as seen.\n+  const benTaskNow = await dev(request, BEN, 'GET', `/flow/tasks/${String(benTask.id)}`);\n+  const benFocusNow = await dev(request, BEN, 'GET', `/flow/focuses/${String(benFocus.id)}`);\n+  const supportTitle = `Draft the outline ${tag()}`;\n+  const support = await dev(request, ADA, 'POST', '/flow/supports', {\n+    target: { kind: 'task', task_id: benTask.id },\n+    title: supportTitle,\n+    seen: [\n+      { kind: 'task', id: benTask.id, content_version: benTaskNow.content_version },\n+      { kind: 'focus', id: benFocus.id, content_version: benFocusNow.content_version },\n+    ],\n+  });\n+  add(\n+    'flow_support_added',\n+    benRow(String(support.id), 'flow_support_added'),\n+    'Someone is now supporting your work in Flow',\n+    new RegExp(`Supported by[\\\\s\\\\S]*${supportTitle}`),\n+  );\n+  const supportNow = await dev(request, ADA, 'GET', `/flow/tasks/${String(support.id)}`);\n+  await dev(\n+    request,\n+    ADA,\n+    'PATCH',\n+    `/flow/tasks/${String(support.id)}`,\n+    { state: 'done' },\n+    match(Number(supportNow.row_version)),\n+  );\n+  add(\n+    'flow_support_done',\n+    benRow(String(support.id), 'flow_support_done'),\n+    'Work supporting yours in Flow was completed',\n+    new RegExp(`Supported by[\\\\s\\\\S]*${supportTitle}`),\n+  );\n+\n+  const adaFocusNow = await dev(request, ADA, 'GET', `/flow/focuses/${String(adaFocus.id)}`);\n+  const supporting = `Arrange transport ${tag()}`;\n+  const benSupport = await dev(request, BEN, 'POST', '/flow/supports', {\n+    target: { kind: 'focus', focus_id: adaFocus.id },\n+    title: supporting,\n+    seen: [{ kind: 'focus', id: adaFocus.id, content_version: adaFocusNow.content_version }],\n+  });\n+  const renamed = `Launch ${tag()}`;\n+  const adaFocusThen = await dev(request, ADA, 'GET', `/flow/focuses/${String(adaFocus.id)}`);\n+  await dev(\n+    request,\n+    ADA,\n+    'PATCH',\n+    `/flow/focuses/${String(adaFocus.id)}`,\n+    { title: renamed },\n+    match(Number(adaFocusThen.row_version)),\n+  );\n+  add(\n+    'flow_source_changed',\n+    benRow(String(benSupport.id), 'flow_source_changed'),\n+    'Work you support in Flow changed',\n+    /What this supports has changed/,\n+  );\n+\n+  const okrStarted = await dev(request, BEN, 'POST', `/objectives/${String(draft.id)}/threads`, {\n+    body: doc(words('Who has the keys? ')),\n+  });\n+  const okrAnswer = `Ada has them ${tag()}`;\n+  const okrReplied = await dev(request, ADA, 'POST', `/threads/${String(okrStarted.id)}/comments`, {\n+    body: doc(words(`${okrAnswer} `)),\n+  });\n+  add(\n+    'discussion_reply',\n+    benRow(String(okrReplied.created_comment_id), 'discussion_reply'),\n+    'Someone replied in an OKR discussion',\n+    new RegExp(okrAnswer),\n+  );\n+\n+  const flowStarted = await dev(request, BEN, 'POST', `/flow/tasks/${String(adaTask.id)}/threads`, {\n+    body: doc(words('Status? ')),\n+  });\n+  const flowAnswer = `On it ${tag()}`;\n+  const flowReplied = await dev(\n+    request,\n+    ADA,\n+    'POST',\n+    `/flow/threads/${String(flowStarted.id)}/comments`,\n+    { body: doc(words(`${flowAnswer} `)) },\n+  );\n+  add(\n+    'flow_discussion_reply',\n+    benRow(String(flowReplied.created_comment_id), 'flow_discussion_reply'),\n+    'Someone replied in a Flow discussion',\n+    new RegExp(flowAnswer),\n+  );\n+\n+  // Where each row leads, as Ben's API answers it with all three groups declared.\n+  const paths = new Map<string, string>();\n+  for (const e of expected) {\n+    const t = (await dev(\n+      request,\n+      BEN,\n+      'GET',\n+      `/me/notifications/${e.row}/target`,\n+      undefined,\n+      GROUPS,\n+    )) as {\n+      status: string;\n+      target: OkrTarget;\n+    };\n+    expect(t.status, `${e.kind} target`).toBe('available');\n+    paths.set(e.row, destinationPath(t.target));\n+  }\n+  record('M2 alert rows', {\n+    rows: expected.map((e) => `${e.kind}:${e.row}:${e.candidate}`).join(';'),\n+    control: `${earlyRow}:${earlyCandidate}`,\n+  });\n+\n+  // The desktop, signed in as Ben: every alert it is handed is recorded.\n+  const before = recorded().length;\n+  const target = desktopTarget(options());\n+  const s = await target.open(null);\n+  try {\n+    // Every expected alert, then a while longer for anything else to arrive.\n+    await expect\n+      .poll(() => recorded().slice(before).length, { timeout: 4 * 60_000, intervals: [1000] })\n+      .toBeGreaterThanOrEqual(expected.length);\n+    await s.page.waitForTimeout(10_000);\n+    const alerts = recorded().slice(before);\n+    expect(\n+      alerts.map((a) => `${a.id} ${a.body}`).sort(),\n+      'exactly one alert per row, with its kind text, and none for the row read first',\n+    ).toEqual(expected.map((e) => `${e.candidate} ${e.text}`).sort());",
+    "path": "okr/web/apps/web/e2e/real/notifications-m2.desktop.real.spec.ts",
+    "commit_id": "c2068f5452660e9d034864141b9ef21fde727b9c",
+    "original_commit_id": "c2068f5452660e9d034864141b9ef21fde727b9c",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Exclude stale candidates from the M2 delivery assertion**\n\nUnder Playwright `--retries`, or a second invocation after an attempt failed after creating candidates but before acknowledging them, Ben still has pending alerts from the earlier attempt. The desktop fetches those alerts too, and `recorded().slice(before)` therefore contains IDs outside the newly built `expected` array, making this exact equality fail even when the current attempt behaves correctly. Retire prior pending candidates or otherwise isolate the delivery queue before opening the desktop.\n\nAGENTS.md reference: [AGENTS.md:L150-L156](https://github.com/txehq/txe/blob/c2068f5452660e9d034864141b9ef21fde727b9c/AGENTS.md#L150-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-19T10:01:38Z",
+    "updated_at": "2026-10-19T10:01:38Z",
+    "html_url": "https://github.com/txehq/txe/pull/4024#discussion_r4312517878",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4024",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4312517878"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4024#discussion_r4312517878"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4024"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312517878/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 355,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 359,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 359,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312599374",
+    "pull_request_review_id": 5570016243,
+    "id": 4312599374,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAQ0LTg",
+    "diff_hunk": "@@ -0,0 +1,402 @@\n+import { randomUUID } from 'node:crypto';\n+import { existsSync, readFileSync } from 'node:fs';\n+import { expect, test, type APIRequestContext } from '@playwright/test';\n+import { destinationPath, type OkrTarget } from '../../src/notifications/targets';\n+import { desktopTarget, type DesktopOptions } from './desktopTarget';\n+import { evidenceLine, runSource } from './evidence';\n+import { keyed } from './keyed';\n+import { ADA, BEN, DB, MEMBER, OWNER, doc, match, mention, sql, words } from './ncReal';\n+\n+/**\n+ * M2's alerts in the packaged desktop app (TXE-4673, NC-08h, for TXE-4500): for each Flow kind\n+ * and both reply kinds, a real command makes Ben's row, the desktop signed in as Ben is handed\n+ * exactly one alert for it, with that kind's text, and clicking it opens the row's entry route,\n+ * which reveals the exact item, focused, and reads the row. A row Ben read before its alert was\n+ * due is never alerted (NC-D09). Run only by okr/desktop/e2e/tab-readiness-native.sh in its NC\n+ * profile (`run <run-dir> nc m2`), under a native UI lease, in a run-owned test package. macOS\n+ * evidence only.\n+ *\n+ * What an alert is here: the shell's test notifier (OKR_DESKTOP_NOTIFY_LOG) records what the app\n+ * handed to the OS and reports it shown; nothing reaches the person's screen. That is evidence of\n+ * what the app asked the OS to show, never of a banner the OS displayed.\n+ *\n+ * The click's last step, from the entry route to the destination, needs a renderer that declares\n+ * the flow and replies groups (contract.ts CLIENT_GROUPS, CC1's TXE-4672). On a build that\n+ * declares okr only, those rows open as update_required and that step fails: this spec is the\n+ * check that the switch closes the journey, and is run on a build that has it.\n+ *\n+ * Setup: all three source groups on, in this run's own database only; Ben's quiet hours off (the\n+ * default 22:00-08:00 in the desktop's own zone would defer mentions and replies by the clock).\n+ */\n+test.describe.configure({ mode: 'serial' });\n+\n+const GROUPS = { 'X-OKR-Notification-Groups': 'okr,flow,replies' };\n+type Json = Record<string, unknown>;\n+\n+const options = (): DesktopOptions => ({\n+  app: process.env.OKR_TAB_APP ?? '',\n+  tokenFile: process.env.OKR_TAB_TOKEN_FILE ?? '',\n+  server: process.env.OKR_TAB_SERVER ?? '',\n+  user: process.env.OKR_TAB_USER ?? '',\n+  passwordFile: process.env.OKR_TAB_USER_PW_FILE ?? '',\n+  runDir: process.env.OKR_TAB_RUN_DIR ?? '',\n+});\n+\n+/** The run's dev-fixture okr-api, where setup writes as a principal. */\n+async function dev(\n+  request: APIRequestContext,\n+  who: string,\n+  method: string,\n+  url: string,\n+  data?: unknown,\n+  headers: Record<string, string> = {},\n+): Promise<Json> {\n+  const answer = await request.fetch(`${process.env.OKR_NC_DEV_API}/api/v1${url}`, {\n+    method,\n+    data,\n+    headers: {\n+      'X-OKR-Dev-Principal': who,\n+      'Idempotency-Key': randomUUID(),\n+      ...keyed(method, url),\n+      ...headers,\n+    },\n+  });\n+  expect(answer.status(), `${method} ${url}: ${await answer.text()}`).toBeLessThan(300);\n+  return answer.status() === 204 ? {} : ((await answer.json()) as Json);\n+}\n+\n+const record = (what: string, fields: Record<string, string>) =>\n+  console.log(\n+    evidenceLine({\n+      record: what,\n+      database: DB,\n+      source: runSource(),\n+      at: new Date().toISOString(),\n+      fields,\n+    }),\n+  );\n+\n+const day = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);\n+const tag = () => randomUUID().slice(0, 6);\n+\n+/** Ben's one unwithdrawn row a subject caused, of `kind`, from this run's database. */\n+function benRow(subject: string, kind: string): string {\n+  const id = sql(\n+    `SELECT id FROM ok_notifications WHERE subject_id = '${subject}' AND recipient_principal_id = '${BEN}' AND kind = '${kind}' AND withdrawn_at IS NULL ORDER BY arrival_seq DESC LIMIT 1`,\n+  );\n+  expect(id, `${kind} row for Ben on ${subject}`).toMatch(/^[0-9a-f-]{36}$/);\n+  return id;\n+}\n+\n+/** The alert candidate a row was recorded with: the id the desktop's alert carries. */\n+const candidateOf = (row: string) =>\n+  sql(`SELECT coalesce(candidate_id::text, '') FROM ok_notifications WHERE id = '${row}'`);\n+\n+/** The alerts the app handed to the (recording) OS notifier, in order. */\n+function recorded(): { id: string; title: string; body: string }[] {\n+  const file = process.env.OKR_DESKTOP_NOTIFY_LOG ?? '';\n+  if (!existsSync(file)) return [];\n+  return readFileSync(file, 'utf8')\n+    .split('\\n')\n+    .filter(Boolean)\n+    .map((l) => JSON.parse(l) as { id: string; title: string; body: string });\n+}\n+\n+interface Expected {\n+  kind: string;\n+  row: string;\n+  candidate: string;\n+  text: string;\n+  /** What the revealed item holds. */\n+  shows: RegExp;\n+}\n+\n+test('M2 alerts: each Flow kind and both reply kinds alert once, open their exact item and read it; a row read first is never alerted', async ({\n+  request,\n+}) => {\n+  test.skip(process.env.OKR_NC_DESKTOP_M2 !== '1', 'a native run, by name, under a lease');\n+  test.setTimeout(12 * 60_000);\n+  expect(process.env.OKR_DESKTOP_NOTIFY_LOG, 'alerts must be recorded, never shown').toBeTruthy();\n+\n+  // All three groups on, in this run's own database only; repeatable.\n+  sql(\n+    `UPDATE ok_notification_source_groups SET activated_at = now() WHERE source_group IN ('okr', 'flow', 'replies') AND activated_at IS NULL`,\n+  );\n+  const groups = sql(\n+    `SELECT string_agg(source_group || '=' || (activated_at IS NOT NULL), ',' ORDER BY source_group) FROM ok_notification_source_groups`,\n+  );\n+  expect(groups).toBe('flow=true,okr=true,replies=true');\n+  record('group activation (run database only)', { groups });\n+\n+  // Ben's quiet hours off, everything else as saved.\n+  const prefs = await dev(request, BEN, 'GET', '/me/alert-preferences');\n+  const quiet = prefs.quiet_hours as { start: string; end: string };\n+  await dev(\n+    request,\n+    BEN,\n+    'PUT',\n+    '/me/alert-preferences',\n+    {\n+      categories: prefs.categories,\n+      quiet_hours: { enabled: false, start: quiet.start, end: quiet.end },\n+      time_zone: prefs.time_zone,\n+    },\n+    // The first save of a person's preferences is made with If-None-Match: *.\n+    prefs.saved === true ? match(Number(prefs.row_version)) : { 'If-None-Match': '*' },\n+  );\n+  record('Ben quiet hours off (run database only)', {\n+    categories: JSON.stringify(prefs.categories),\n+    quiet_was: JSON.stringify(prefs.quiet_hours),\n+  });\n+\n+  // Flow: Ada's focus and task, and Ben's own.\n+  const adaFocus = await dev(request, ADA, 'POST', '/flow/focuses', { title: `Launch ${tag()}` });\n+  const adaTask = await dev(request, ADA, 'POST', `/flow/focuses/${String(adaFocus.id)}/tasks`, {\n+    title: 'Plan the launch',\n+  });\n+  const benFocus = await dev(request, BEN, 'POST', '/flow/focuses', { title: `Ben's ${tag()}` });\n+  const benTask = await dev(request, BEN, 'POST', `/flow/focuses/${String(benFocus.id)}/tasks`, {\n+    title: 'Write the brief',\n+  });\n+  // OKR: a published goal of Member's that Ben can read.\n+  const cycle = await dev(request, OWNER, 'POST', '/cycles', {\n+    kind: 'custom',\n+    label: 'NC desktop M2',\n+    timezone: 'UTC',\n+    start_date: day(-10),\n+    end_date: day(80),\n+    planning_starts: day(-10),\n+    execution_starts: day(-9),\n+    review_starts: day(70),\n+  });\n+  const draft = await dev(request, MEMBER, 'POST', '/objectives', {\n+    cycle_id: cycle.id,\n+    home_kind: 'personal',\n+    title: `Alerted on the desktop ${tag()}`,\n+    key_results: [{ title: 'Alerted', kind: 'percentage' }],\n+  });\n+  await dev(\n+    request,\n+    MEMBER,\n+    'POST',\n+    `/objectives/${String(draft.id)}/publish`,\n+    undefined,\n+    match(Number(draft.row_version)),\n+  );\n+\n+  // The control: a Flow mention of Ben that Ben reads before the desktop is running.\n+  const early = `Read this first ${tag()}`;\n+  const earlyThread = await dev(request, ADA, 'POST', `/flow/tasks/${String(adaTask.id)}/threads`, {\n+    body: doc(words(`${early} `), mention(BEN)),\n+  });\n+  const earlyRow = benRow((earlyThread.comments as { id: string }[])[0]!.id, 'flow_mention');\n+  const earlyItem = await dev(\n+    request,\n+    BEN,\n+    'GET',\n+    `/me/notifications/${earlyRow}`,\n+    undefined,\n+    GROUPS,\n+  );\n+  await dev(\n+    request,\n+    BEN,\n+    'PATCH',\n+    `/me/notifications/${earlyRow}`,\n+    { read: true },\n+    { ...GROUPS, ...match(Number(earlyItem.version)) },\n+  );\n+  const earlyCandidate = candidateOf(earlyRow);\n+  expect(earlyCandidate, 'the read row is linked to an alert candidate').toMatch(/^[0-9a-f-]{36}$/);\n+\n+  // One row of each kind, for Ben.\n+  const expected: Expected[] = [];\n+  const add = (kind: string, row: string, text: string, shows: RegExp) => {\n+    const candidate = candidateOf(row);\n+    expect(candidate, `${kind} row ${row} is linked to an alert candidate`).toMatch(\n+      /^[0-9a-f-]{36}$/,\n+    );\n+    expected.push({ kind, row, candidate, text, shows });\n+  };\n+\n+  const said = `Ben, can you take the venue? ${tag()}`;\n+  const mentioned = await dev(request, ADA, 'POST', `/flow/tasks/${String(adaTask.id)}/threads`, {\n+    body: doc(words(`${said} `), mention(BEN)),\n+  });\n+  add(\n+    'flow_mention',\n+    benRow((mentioned.comments as { id: string }[])[0]!.id, 'flow_mention'),\n+    'You were mentioned in Flow',\n+    new RegExp(said.replace(/[?]/g, '\\\\?')),\n+  );\n+\n+  // A support of a task watches the task and its focus, and names both as seen.\n+  const benTaskNow = await dev(request, BEN, 'GET', `/flow/tasks/${String(benTask.id)}`);\n+  const benFocusNow = await dev(request, BEN, 'GET', `/flow/focuses/${String(benFocus.id)}`);\n+  const supportTitle = `Draft the outline ${tag()}`;\n+  const support = await dev(request, ADA, 'POST', '/flow/supports', {\n+    target: { kind: 'task', task_id: benTask.id },\n+    title: supportTitle,\n+    seen: [\n+      { kind: 'task', id: benTask.id, content_version: benTaskNow.content_version },\n+      { kind: 'focus', id: benFocus.id, content_version: benFocusNow.content_version },\n+    ],\n+  });\n+  add(\n+    'flow_support_added',\n+    benRow(String(support.id), 'flow_support_added'),\n+    'Someone is now supporting your work in Flow',\n+    new RegExp(`Supported by[\\\\s\\\\S]*${supportTitle}`),\n+  );\n+  const supportNow = await dev(request, ADA, 'GET', `/flow/tasks/${String(support.id)}`);\n+  await dev(\n+    request,\n+    ADA,\n+    'PATCH',\n+    `/flow/tasks/${String(support.id)}`,\n+    { state: 'done' },\n+    match(Number(supportNow.row_version)),\n+  );\n+  add(\n+    'flow_support_done',\n+    benRow(String(support.id), 'flow_support_done'),\n+    'Work supporting yours in Flow was completed',\n+    new RegExp(`Supported by[\\\\s\\\\S]*${supportTitle}`),\n+  );\n+\n+  const adaFocusNow = await dev(request, ADA, 'GET', `/flow/focuses/${String(adaFocus.id)}`);\n+  const supporting = `Arrange transport ${tag()}`;\n+  const benSupport = await dev(request, BEN, 'POST', '/flow/supports', {\n+    target: { kind: 'focus', focus_id: adaFocus.id },\n+    title: supporting,\n+    seen: [{ kind: 'focus', id: adaFocus.id, content_version: adaFocusNow.content_version }],\n+  });\n+  const renamed = `Launch ${tag()}`;\n+  const adaFocusThen = await dev(request, ADA, 'GET', `/flow/focuses/${String(adaFocus.id)}`);\n+  await dev(\n+    request,\n+    ADA,\n+    'PATCH',\n+    `/flow/focuses/${String(adaFocus.id)}`,\n+    { title: renamed },\n+    match(Number(adaFocusThen.row_version)),\n+  );\n+  add(\n+    'flow_source_changed',\n+    benRow(String(benSupport.id), 'flow_source_changed'),\n+    'Work you support in Flow changed',\n+    /What this supports has changed/,\n+  );\n+\n+  const okrStarted = await dev(request, BEN, 'POST', `/objectives/${String(draft.id)}/threads`, {\n+    body: doc(words('Who has the keys? ')),\n+  });\n+  const okrAnswer = `Ada has them ${tag()}`;\n+  const okrReplied = await dev(request, ADA, 'POST', `/threads/${String(okrStarted.id)}/comments`, {\n+    body: doc(words(`${okrAnswer} `)),\n+  });\n+  add(\n+    'discussion_reply',\n+    benRow(String(okrReplied.created_comment_id), 'discussion_reply'),\n+    'Someone replied in an OKR discussion',\n+    new RegExp(okrAnswer),\n+  );\n+\n+  const flowStarted = await dev(request, BEN, 'POST', `/flow/tasks/${String(adaTask.id)}/threads`, {\n+    body: doc(words('Status? ')),\n+  });\n+  const flowAnswer = `On it ${tag()}`;\n+  const flowReplied = await dev(\n+    request,\n+    ADA,\n+    'POST',\n+    `/flow/threads/${String(flowStarted.id)}/comments`,\n+    { body: doc(words(`${flowAnswer} `)) },\n+  );\n+  add(\n+    'flow_discussion_reply',\n+    benRow(String(flowReplied.created_comment_id), 'flow_discussion_reply'),\n+    'Someone replied in a Flow discussion',\n+    new RegExp(flowAnswer),\n+  );\n+\n+  // Where each row leads, as Ben's API answers it with all three groups declared.\n+  const paths = new Map<string, string>();\n+  for (const e of expected) {\n+    const t = (await dev(\n+      request,\n+      BEN,\n+      'GET',\n+      `/me/notifications/${e.row}/target`,\n+      undefined,\n+      GROUPS,\n+    )) as {\n+      status: string;\n+      target: OkrTarget;\n+    };\n+    expect(t.status, `${e.kind} target`).toBe('available');\n+    paths.set(e.row, destinationPath(t.target));\n+  }\n+  record('M2 alert rows', {\n+    rows: expected.map((e) => `${e.kind}:${e.row}:${e.candidate}`).join(';'),\n+    control: `${earlyRow}:${earlyCandidate}`,\n+  });\n+\n+  // The desktop, signed in as Ben: every alert it is handed is recorded.\n+  const before = recorded().length;\n+  const target = desktopTarget(options());\n+  const s = await target.open(null);\n+  try {\n+    // Every expected alert, then a while longer for anything else to arrive.\n+    await expect\n+      .poll(() => recorded().slice(before).length, { timeout: 4 * 60_000, intervals: [1000] })\n+      .toBeGreaterThanOrEqual(expected.length);\n+    await s.page.waitForTimeout(10_000);\n+    const alerts = recorded().slice(before);\n+    expect(\n+      alerts.map((a) => `${a.id} ${a.body}`).sort(),\n+      'exactly one alert per row, with its kind text, and none for the row read first',\n+    ).toEqual(expected.map((e) => `${e.candidate} ${e.text}`).sort());\n+    expect(alerts.every((a) => a.title === 'OKR')).toBe(true);\n+    // The control was decided, as read, not left pending.\n+    expect(\n+      sql(\n+        `SELECT status || ':' || coalesce(reason, '') FROM ok_alert_deliveries WHERE candidate_id = '${earlyCandidate}' AND recipient_principal_id = '${BEN}'`,\n+      ),\n+    ).toBe('cancelled:read');\n+    record('M2 alerts handed to the recording OS notifier', {\n+      alerts: alerts.map((a) => `${a.id}=${a.body}`).join(';'),\n+      control: 'cancelled:read',\n+      notifier: 'OKR_DESKTOP_NOTIFY_LOG (recorded, not an observed OS banner)',\n+    });\n+\n+    // Each click opens the entry route, which reveals the exact item, focused, and reads the row.\n+    for (const e of expected) {\n+      const path = paths.get(e.row)!;\n+      expect(await target.clickAlert(e.candidate), `${e.kind} alert is clickable`).toBe(true);\n+      await expect(s.page).toHaveURL(\n+        new RegExp(`#${path.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}$`),\n+        { timeout: 30_000 },",
+    "path": "okr/web/apps/web/e2e/real/notifications-m2.desktop.real.spec.ts",
+    "commit_id": "3d9840757246a2459c526c4a93735649c08bc2dc",
+    "original_commit_id": "cdc736305680f31259ad9eb0390a65d5a51c12e9",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "Right, and intended: this PR's own tree has no M2 client, so the click journey cannot pass from it alone. It depends on #4023 (TXE-4672: `CLIENT_GROUPS = ['okr','flow','replies']` plus the desktop proxy forwarding `X-OKR-Notification-Groups`, at 1b0357298). This PR is not merged before #4023.\n\nAddressed in 90a7cf6f3: the spec now checks `CLIENT_GROUPS` first and stops with \"this build must declare the flow and replies groups (TXE-4672)\" rather than failing at the first click. The spec is skipped everywhere except the native harness (`OKR_NC_DESKTOP_M2=1`).\n\nEvidence: on a composition with #4023 at c1012bd56 the first click stopped at update_required (the proxy defect, since fixed in 1b0357298); on the composition with 1b0357298 (0aa66512c) the full journey passed, run n2.",
+    "created_at": "2026-10-19T10:11:22Z",
+    "updated_at": "2026-10-19T10:11:23Z",
+    "html_url": "https://github.com/txehq/txe/pull/4024#discussion_r4312599374",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4024",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4312599374"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4024#discussion_r4312599374"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4024"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312599374/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": 420,
+    "original_start_line": 376,
+    "start_side": "RIGHT",
+    "line": 423,
+    "original_line": 379,
+    "side": "RIGHT",
+    "in_reply_to_id": 4312476492,
+    "author_association": "MEMBER",
+    "original_position": 379,
+    "position": 423,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312627901",
+    "pull_request_review_id": 5570050558,
+    "id": 4312627901,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAQ16vQ",
+    "diff_hunk": "@@ -0,0 +1,438 @@\n+import { randomUUID } from 'node:crypto';\n+import { existsSync, readFileSync } from 'node:fs';\n+import { expect, test, type APIRequestContext } from '@playwright/test';\n+import { CLIENT_GROUPS } from '../../src/notifications/contract';\n+import { destinationPath, type OkrTarget } from '../../src/notifications/targets';\n+import { desktopTarget, type DesktopOptions } from './desktopTarget';\n+import { evidenceLine, runSource } from './evidence';\n+import { keyed } from './keyed';\n+import {\n+  ADA,\n+  BEN,\n+  DB,\n+  MEMBER,\n+  OWNER,\n+  activateAllGroups,\n+  doc,\n+  match,\n+  mention,\n+  restoreGroups,\n+  sql,\n+  words,\n+} from './ncReal';\n+\n+/**\n+ * M2's alerts in the packaged desktop app (TXE-4673, NC-08h, for TXE-4500): for each Flow kind\n+ * and both reply kinds, a real command makes Ben's row, the desktop signed in as Ben is handed\n+ * exactly one alert for it, with that kind's text, and clicking it opens the row's entry route,\n+ * which reveals the exact item, focused, and reads the row. A row Ben read before its alert was\n+ * due is never alerted (NC-D09). Run only by okr/desktop/e2e/tab-readiness-native.sh in its NC\n+ * profile (`run <run-dir> nc m2`), under a native UI lease, in a run-owned test package. macOS\n+ * evidence only.\n+ *\n+ * What an alert is here: the shell's test notifier (OKR_DESKTOP_NOTIFY_LOG) records what the app\n+ * handed to the OS and reports it shown; nothing reaches the person's screen. That is evidence of\n+ * what the app asked the OS to show, never of a banner the OS displayed.\n+ *\n+ * The click's last step, from the entry route to the destination, needs a renderer that declares\n+ * the flow and replies groups (contract.ts CLIENT_GROUPS, CC1's TXE-4672). On a build that\n+ * declares okr only, those rows open as update_required and that step fails: this spec is the\n+ * check that the switch closes the journey, and is run on a build that has it.\n+ *\n+ * Setup: all three source groups on, in this run's own database only; Ben's quiet hours off (the\n+ * default 22:00-08:00 in the desktop's own zone would defer mentions and replies by the clock).\n+ */\n+test.describe.configure({ mode: 'serial' });\n+\n+// The groups this spec turned on, turned off again when it ends (a kept database stays as found).\n+let turnedOn: string[] = [];\n+test.afterAll(() => restoreGroups(turnedOn));\n+\n+const GROUPS = { 'X-OKR-Notification-Groups': 'okr,flow,replies' };\n+type Json = Record<string, unknown>;\n+\n+const options = (): DesktopOptions => ({\n+  app: process.env.OKR_TAB_APP ?? '',\n+  tokenFile: process.env.OKR_TAB_TOKEN_FILE ?? '',\n+  server: process.env.OKR_TAB_SERVER ?? '',\n+  user: process.env.OKR_TAB_USER ?? '',\n+  passwordFile: process.env.OKR_TAB_USER_PW_FILE ?? '',\n+  runDir: process.env.OKR_TAB_RUN_DIR ?? '',\n+});\n+\n+/** The run's dev-fixture okr-api, where setup writes as a principal. */\n+async function dev(\n+  request: APIRequestContext,\n+  who: string,\n+  method: string,\n+  url: string,\n+  data?: unknown,\n+  headers: Record<string, string> = {},\n+): Promise<Json> {\n+  const answer = await request.fetch(`${process.env.OKR_NC_DEV_API}/api/v1${url}`, {\n+    method,\n+    data,\n+    headers: {\n+      'X-OKR-Dev-Principal': who,\n+      'Idempotency-Key': randomUUID(),\n+      ...keyed(method, url),\n+      ...headers,\n+    },\n+  });\n+  expect(answer.status(), `${method} ${url}: ${await answer.text()}`).toBeLessThan(300);\n+  return answer.status() === 204 ? {} : ((await answer.json()) as Json);\n+}\n+\n+const record = (what: string, fields: Record<string, string>) =>\n+  console.log(\n+    evidenceLine({\n+      record: what,\n+      database: DB,\n+      source: runSource(),\n+      at: new Date().toISOString(),\n+      fields,\n+    }),\n+  );\n+\n+const day = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);\n+const tag = () => randomUUID().slice(0, 6);\n+\n+/** Ben's one unwithdrawn row a subject caused, of `kind`, from this run's database. */\n+function benRow(subject: string, kind: string): string {\n+  const id = sql(\n+    `SELECT id FROM ok_notifications WHERE subject_id = '${subject}' AND recipient_principal_id = '${BEN}' AND kind = '${kind}' AND withdrawn_at IS NULL ORDER BY arrival_seq DESC LIMIT 1`,\n+  );\n+  expect(id, `${kind} row for Ben on ${subject}`).toMatch(/^[0-9a-f-]{36}$/);\n+  return id;\n+}\n+\n+/** The alert candidate a row was recorded with: the id the desktop's alert carries. */\n+const candidateOf = (row: string) =>\n+  sql(`SELECT coalesce(candidate_id::text, '') FROM ok_notifications WHERE id = '${row}'`);\n+\n+/** The alerts the app handed to the (recording) OS notifier, in order. */\n+function recorded(): { id: string; title: string; body: string }[] {\n+  const file = process.env.OKR_DESKTOP_NOTIFY_LOG ?? '';\n+  if (!existsSync(file)) return [];\n+  return readFileSync(file, 'utf8')\n+    .split('\\n')\n+    .filter(Boolean)\n+    .map((l) => JSON.parse(l) as { id: string; title: string; body: string });\n+}\n+\n+interface Expected {\n+  kind: string;\n+  row: string;\n+  candidate: string;\n+  text: string;\n+  /** What the revealed item holds. */\n+  shows: RegExp;\n+}\n+\n+test('M2 alerts: each Flow kind and both reply kinds alert once, open their exact item and read it; a row read first is never alerted', async ({\n+  request,\n+}) => {\n+  test.skip(process.env.OKR_NC_DESKTOP_M2 !== '1', 'a native run, by name, under a lease');\n+  test.setTimeout(12 * 60_000);\n+  expect(process.env.OKR_DESKTOP_NOTIFY_LOG, 'alerts must be recorded, never shown').toBeTruthy();\n+  // The packaged renderer is built from this tree: without the M2 client (TXE-4672) every Flow\n+  // and reply row would open as update_required, so say that rather than fail at the first click.\n+  expect(\n+    [...CLIENT_GROUPS],\n+    'this build must declare the flow and replies groups (TXE-4672) for the click journey',\n+  ).toEqual(['okr', 'flow', 'replies']);\n+\n+  // All three groups on, in this run's own database only; repeatable.\n+  turnedOn = activateAllGroups();\n+  record('group activation (run database only)', { turned_on: turnedOn.join(',') || 'none' });\n+\n+  // Ben's quiet hours off, everything else as saved.\n+  const prefs = await dev(request, BEN, 'GET', '/me/alert-preferences');\n+  const quiet = prefs.quiet_hours as { start: string; end: string };\n+  await dev(\n+    request,\n+    BEN,\n+    'PUT',\n+    '/me/alert-preferences',\n+    {\n+      categories: prefs.categories,\n+      quiet_hours: { enabled: false, start: quiet.start, end: quiet.end },",
+    "path": "okr/web/apps/web/e2e/real/notifications-m2.desktop.real.spec.ts",
+    "commit_id": "3d9840757246a2459c526c4a93735649c08bc2dc",
+    "original_commit_id": "90a7cf6f35042dd845b6d8381ecbbceac9915330",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Restore Ben's alert preferences after both specs**\n\nOn a kept database, this write permanently disables Ben's quiet hours—and creates a saved-preferences row when `prefs.saved` was false—because the failure-safe teardown restores only source groups. The OS spec performs the same mutation, so a later spec in the shared run observes settings left by whichever spec ran first; snapshot and restore the original preferences (including removing a newly inserted row) in teardown.\n\nAGENTS.md reference: [AGENTS.md:L152-L156](https://github.com/txehq/txe/blob/90a7cf6f35042dd845b6d8381ecbbceac9915330/AGENTS.md#L152-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-19T10:14:50Z",
+    "updated_at": "2026-10-19T10:14:51Z",
+    "html_url": "https://github.com/txehq/txe/pull/4024#discussion_r4312627901",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4024",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4312627901"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4024#discussion_r4312627901"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4024"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312627901/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 167,
+    "original_line": 159,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 159,
+    "position": 167,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312627914",
+    "pull_request_review_id": 5570050558,
+    "id": 4312627914,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAQ16yg",
+    "diff_hunk": "@@ -0,0 +1,263 @@\n+import { randomUUID } from 'node:crypto';\n+import { existsSync, readFileSync, writeFileSync } from 'node:fs';\n+import { expect, test, type APIRequestContext } from '@playwright/test';\n+import { destinationPath, type OkrTarget } from '../../src/notifications/targets';\n+import { desktopTarget, type DesktopOptions } from './desktopTarget';\n+import { evidenceLine, runSource } from './evidence';\n+import { keyed } from './keyed';\n+import {\n+  ADA,\n+  BEN,\n+  DB,\n+  activateAllGroups,\n+  doc,\n+  match,\n+  mention,\n+  restoreGroups,\n+  sql,\n+  words,\n+} from './ncReal';\n+\n+/**\n+ * ONE real macOS notification of the Notification Center, shown by the OS and clicked by a person\n+ * (TXE-4673, NC-08h, for TXE-4500's installed-desktop observation). Run only by\n+ * okr/desktop/e2e/tab-readiness-native.sh `run <run-dir> nc os`, under a native UI lease, with a\n+ * person at the Mac: the run-owned test package (a bundle id of its own, so macOS asks once\n+ * whether it may notify) shows the alert on the person's screen with its generic text, and the\n+ * person clicks Allow when asked, then the banner. Nothing is recorded in place of the OS here:\n+ * OKR_DESKTOP_NOTIFY_LOG is unset.\n+ *\n+ * What it proves, from the shell's own events: the OS reported the notification presented\n+ * (alert-shown, after the packaged app's delivered-list check, TXE-4276), the OS delivered the\n+ * person's click (alert-clicked), and the app opened the entry route, revealing the exact\n+ * comment, and read the row. What it does not prove: that the person saw it; that is the person's\n+ * own observation, recorded beside the run.\n+ *\n+ * A warm-up mention comes first: the permission question appears with the first notification,\n+ * which macOS may drop while it waits. Whatever happens to it is recorded; the app is then\n+ * started again (the permission stays with the bundle id) and the mention that counts is made.\n+ */\n+test.describe.configure({ mode: 'serial' });\n+\n+// The groups this spec turned on, turned off again when it ends (a kept database stays as found).\n+let turnedOn: string[] = [];\n+test.afterAll(() => restoreGroups(turnedOn));\n+\n+const GROUPS = { 'X-OKR-Notification-Groups': 'okr,flow,replies' };\n+type Json = Record<string, unknown>;\n+type Event = { t: string; type: string; id?: string; hash?: string; ok?: boolean };\n+\n+const options = (): DesktopOptions => ({\n+  app: process.env.OKR_TAB_APP ?? '',\n+  tokenFile: process.env.OKR_TAB_TOKEN_FILE ?? '',\n+  server: process.env.OKR_TAB_SERVER ?? '',\n+  user: process.env.OKR_TAB_USER ?? '',\n+  passwordFile: process.env.OKR_TAB_USER_PW_FILE ?? '',\n+  runDir: process.env.OKR_TAB_RUN_DIR ?? '',\n+});\n+\n+async function dev(\n+  request: APIRequestContext,\n+  who: string,\n+  method: string,\n+  url: string,\n+  data?: unknown,\n+  headers: Record<string, string> = {},\n+): Promise<Json> {\n+  const answer = await request.fetch(`${process.env.OKR_NC_DEV_API}/api/v1${url}`, {\n+    method,\n+    data,\n+    headers: {\n+      'X-OKR-Dev-Principal': who,\n+      'Idempotency-Key': randomUUID(),\n+      ...keyed(method, url),\n+      ...headers,\n+    },\n+  });\n+  expect(answer.status(), `${method} ${url}: ${await answer.text()}`).toBeLessThan(300);\n+  return answer.status() === 204 ? {} : ((await answer.json()) as Json);\n+}\n+\n+const record = (what: string, fields: Record<string, string>) =>\n+  console.log(\n+    evidenceLine({\n+      record: what,\n+      database: DB,\n+      source: runSource(),\n+      at: new Date().toISOString(),\n+      fields,\n+    }),\n+  );\n+\n+/** What the person at the Mac is asked to do, in the run's log, as it is asked. */\n+const ask = (what: string) => console.log(`PERSON (${new Date().toISOString()}): ${what}`);\n+\n+const events = (file: string): Event[] =>\n+  existsSync(file)\n+    ? readFileSync(file, 'utf8')\n+        .split('\\n')\n+        .filter(Boolean)\n+        .map((l) => JSON.parse(l) as Event)\n+    : [];\n+\n+/** The first of `types` the shell logged for alert `id`, waited for up to `ms`. */\n+async function outcome(file: string, id: string, types: string[], ms: number) {\n+  let found: Event | undefined;\n+  await expect\n+    .poll(\n+      () => {\n+        found = events(file).find((e) => e.id === id && types.includes(e.type));\n+        return found !== undefined;\n+      },\n+      { timeout: ms, intervals: [1000] },\n+    )\n+    .toBe(true)\n+    .catch(() => undefined);\n+  return found;\n+}\n+\n+const ENDS = ['alert-shown', 'alert-not-presented', 'alert-not-shown', 'alert-failed'];\n+\n+/** A Flow mention of Ben by Ada, and the alert candidate it was recorded with. */\n+async function mentionBen(request: APIRequestContext, task: string, said: string) {\n+  const thread = await dev(request, ADA, 'POST', `/flow/tasks/${task}/threads`, {\n+    body: doc(words(`${said} `), mention(BEN)),\n+  });\n+  const comment = (thread.comments as { id: string }[])[0]!.id;\n+  const row = sql(\n+    `SELECT id FROM ok_notifications WHERE subject_id = '${comment}' AND recipient_principal_id = '${BEN}' AND kind = 'flow_mention' AND withdrawn_at IS NULL`,\n+  );\n+  expect(row).toMatch(/^[0-9a-f-]{36}$/);\n+  const candidate = sql(\n+    `SELECT coalesce(candidate_id::text, '') FROM ok_notifications WHERE id = '${row}'`,\n+  );\n+  expect(candidate).toMatch(/^[0-9a-f-]{36}$/);\n+  return { row, candidate };\n+}\n+\n+test('one real macOS notification: shown by the OS, clicked by the person, opens the exact comment and reads it', async ({\n+  request,\n+}) => {\n+  test.skip(\n+    process.env.OKR_NC_DESKTOP_OS !== '1',\n+    'a native run with a person present, by name, under a lease',\n+  );\n+  test.setTimeout(20 * 60_000);\n+  expect(\n+    process.env.OKR_DESKTOP_NOTIFY_LOG ?? '',\n+    'the OS shows this alert: nothing may record it instead',\n+  ).toBe('');\n+\n+  turnedOn = activateAllGroups();\n+  const prefs = await dev(request, BEN, 'GET', '/me/alert-preferences');\n+  const quiet = prefs.quiet_hours as { start: string; end: string };\n+  await dev(\n+    request,\n+    BEN,\n+    'PUT',\n+    '/me/alert-preferences',\n+    {\n+      categories: prefs.categories,\n+      quiet_hours: { enabled: false, start: quiet.start, end: quiet.end },\n+      time_zone: prefs.time_zone,\n+    },\n+    prefs.saved === true ? match(Number(prefs.row_version)) : { 'If-None-Match': '*' },\n+  );\n+  const focus = await dev(request, ADA, 'POST', '/flow/focuses', {\n+    title: `OS check ${randomUUID().slice(0, 6)}`,\n+  });\n+  const task = String(\n+    (\n+      await dev(request, ADA, 'POST', `/flow/focuses/${String(focus.id)}/tasks`, {\n+        title: 'Seen by the OS',\n+      })\n+    ).id,\n+  );\n+\n+  const target = desktopTarget(options());\n+  // Warm-up: macOS asks whether this test package may notify with its first notification.\n+  let s = await target.open(null);",
+    "path": "okr/web/apps/web/e2e/real/notifications-os.desktop.real.spec.ts",
+    "commit_id": "3d9840757246a2459c526c4a93735649c08bc2dc",
+    "original_commit_id": "90a7cf6f35042dd845b6d8381ecbbceac9915330",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Retire stale alerts before opening the OS notifier**\n\nOn a retry or second run against a kept database, an earlier attempt can have failed after creating a candidate but before the desktop fetched it. This initial `open()` immediately fetches such pending alerts before the new warm-up candidate is created, so macOS can show multiple indistinguishable Flow banners and the person may click an old one, invalidating the advertised single-notification journey. Settle existing pending candidates or otherwise isolate the queue before launching the real notifier.\n\nAGENTS.md reference: [AGENTS.md:L152-L156](https://github.com/txehq/txe/blob/90a7cf6f35042dd845b6d8381ecbbceac9915330/AGENTS.md#L152-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-19T10:14:51Z",
+    "updated_at": "2026-10-19T10:14:51Z",
+    "html_url": "https://github.com/txehq/txe/pull/4024#discussion_r4312627914",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4024",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4312627914"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4024#discussion_r4312627914"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4024"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312627914/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": 233,
+    "original_line": 179,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 179,
+    "position": 233,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312691615",
+    "pull_request_review_id": 5570127891,
+    "id": 4312691615,
+    "node_id": "PRRC_kwDOSZZIh88AAAABAQ5znw",
+    "diff_hunk": "@@ -0,0 +1,296 @@\n+import { randomUUID } from 'node:crypto';\n+import { existsSync, readFileSync, writeFileSync } from 'node:fs';\n+import { expect, test, type APIRequestContext } from '@playwright/test';\n+import { destinationPath, type OkrTarget } from '../../src/notifications/targets';\n+import { desktopTarget, type DesktopOptions } from './desktopTarget';\n+import { evidenceLine, runSource } from './evidence';\n+import { keyed } from './keyed';\n+import {\n+  ADA,\n+  BEN,\n+  DB,\n+  activateAllGroups,\n+  doc,\n+  match,\n+  mention,\n+  restoreAlertPreferences,\n+  restoreGroups,\n+  snapshotAlertPreferences,\n+  sql,\n+  words,\n+} from './ncReal';\n+\n+/**\n+ * ONE real macOS notification of the Notification Center, shown by the OS and clicked by a person\n+ * (TXE-4673, NC-08h, for TXE-4500's installed-desktop observation). Run only by\n+ * okr/desktop/e2e/tab-readiness-native.sh `run <run-dir> nc os`, under a native UI lease, with a\n+ * person at the Mac: the run-owned test package (a bundle id of its own, so macOS asks once\n+ * whether it may notify) shows the alert on the person's screen with its generic text, and the\n+ * person clicks Allow when asked, then the banner. Nothing is recorded in place of the OS here:\n+ * OKR_DESKTOP_NOTIFY_LOG is unset.\n+ *\n+ * What it proves, from the shell's own events: the OS reported the notification presented\n+ * (alert-shown, after the packaged app's delivered-list check, TXE-4276), the OS delivered the\n+ * person's click (alert-clicked), and the app opened the entry route, revealing the exact\n+ * comment, and read the row. What it does not prove: that the person saw it; that is the person's\n+ * own observation, recorded beside the run.\n+ *\n+ * A warm-up mention comes first: the permission question appears with the first notification,\n+ * which macOS may drop while it waits. Whatever happens to it is recorded; the app is then\n+ * started again (the permission stays with the bundle id) and the mention that counts is made.\n+ */\n+test.describe.configure({ mode: 'serial' });\n+\n+// The groups this spec turned on, turned off again when it ends (a kept database stays as found).\n+let turnedOn: string[] = [];\n+// Ben's alert preferences as found (quiet hours are turned off for the run), put back the same way.\n+let prefsBefore: string | null = null;\n+test.afterAll(() => {\n+  restoreGroups(turnedOn);\n+  if (prefsBefore !== null) restoreAlertPreferences(BEN, prefsBefore);\n+});\n+\n+const GROUPS = { 'X-OKR-Notification-Groups': 'okr,flow,replies' };\n+type Json = Record<string, unknown>;\n+type Event = { t: string; type: string; id?: string; hash?: string; ok?: boolean };\n+\n+const options = (): DesktopOptions => ({\n+  app: process.env.OKR_TAB_APP ?? '',\n+  tokenFile: process.env.OKR_TAB_TOKEN_FILE ?? '',\n+  server: process.env.OKR_TAB_SERVER ?? '',\n+  user: process.env.OKR_TAB_USER ?? '',\n+  passwordFile: process.env.OKR_TAB_USER_PW_FILE ?? '',\n+  runDir: process.env.OKR_TAB_RUN_DIR ?? '',\n+});\n+\n+async function dev(\n+  request: APIRequestContext,\n+  who: string,\n+  method: string,\n+  url: string,\n+  data?: unknown,\n+  headers: Record<string, string> = {},\n+): Promise<Json> {\n+  const answer = await request.fetch(`${process.env.OKR_NC_DEV_API}/api/v1${url}`, {\n+    method,\n+    data,\n+    headers: {\n+      'X-OKR-Dev-Principal': who,\n+      'Idempotency-Key': randomUUID(),\n+      ...keyed(method, url),\n+      ...headers,\n+    },\n+  });\n+  expect(answer.status(), `${method} ${url}: ${await answer.text()}`).toBeLessThan(300);\n+  return answer.status() === 204 ? {} : ((await answer.json()) as Json);\n+}\n+\n+const record = (what: string, fields: Record<string, string>) =>\n+  console.log(\n+    evidenceLine({\n+      record: what,\n+      database: DB,\n+      source: runSource(),\n+      at: new Date().toISOString(),\n+      fields,\n+    }),\n+  );\n+\n+/** What the person at the Mac is asked to do, in the run's log, as it is asked. */\n+const ask = (what: string) => console.log(`PERSON (${new Date().toISOString()}): ${what}`);\n+\n+const events = (file: string): Event[] =>\n+  existsSync(file)\n+    ? readFileSync(file, 'utf8')\n+        .split('\\n')\n+        .filter(Boolean)\n+        .map((l) => JSON.parse(l) as Event)\n+    : [];\n+\n+/** The first of `types` the shell logged for alert `id`, waited for up to `ms`. */\n+async function outcome(file: string, id: string, types: string[], ms: number) {\n+  let found: Event | undefined;\n+  await expect\n+    .poll(\n+      () => {\n+        found = events(file).find((e) => e.id === id && types.includes(e.type));\n+        return found !== undefined;\n+      },\n+      { timeout: ms, intervals: [1000] },\n+    )\n+    .toBe(true)\n+    .catch(() => undefined);\n+  return found;\n+}\n+\n+const ENDS = ['alert-shown', 'alert-not-presented', 'alert-not-shown', 'alert-failed'];\n+\n+/** A Flow mention of Ben by Ada, and the alert candidate it was recorded with. */\n+async function mentionBen(request: APIRequestContext, task: string, said: string) {\n+  const thread = await dev(request, ADA, 'POST', `/flow/tasks/${task}/threads`, {\n+    body: doc(words(`${said} `), mention(BEN)),\n+  });\n+  const comment = (thread.comments as { id: string }[])[0]!.id;\n+  const row = sql(\n+    `SELECT id FROM ok_notifications WHERE subject_id = '${comment}' AND recipient_principal_id = '${BEN}' AND kind = 'flow_mention' AND withdrawn_at IS NULL`,\n+  );\n+  expect(row).toMatch(/^[0-9a-f-]{36}$/);\n+  const candidate = sql(\n+    `SELECT coalesce(candidate_id::text, '') FROM ok_notifications WHERE id = '${row}'`,\n+  );\n+  expect(candidate).toMatch(/^[0-9a-f-]{36}$/);\n+  return { row, candidate };\n+}\n+\n+test('one real macOS notification: shown by the OS, clicked by the person, opens the exact comment and reads it', async ({\n+  request,\n+}) => {\n+  test.skip(\n+    process.env.OKR_NC_DESKTOP_OS !== '1',\n+    'a native run with a person present, by name, under a lease',\n+  );\n+  test.setTimeout(20 * 60_000);\n+  expect(\n+    process.env.OKR_DESKTOP_NOTIFY_LOG ?? '',\n+    'the OS shows this alert: nothing may record it instead',\n+  ).toBe('');\n+\n+  turnedOn = activateAllGroups();\n+  prefsBefore = snapshotAlertPreferences(BEN);\n+  const prefs = await dev(request, BEN, 'GET', '/me/alert-preferences');\n+  const quiet = prefs.quiet_hours as { start: string; end: string };\n+  await dev(\n+    request,\n+    BEN,\n+    'PUT',\n+    '/me/alert-preferences',\n+    {\n+      categories: prefs.categories,\n+      quiet_hours: { enabled: false, start: quiet.start, end: quiet.end },\n+      time_zone: prefs.time_zone,\n+    },\n+    prefs.saved === true ? match(Number(prefs.row_version)) : { 'If-None-Match': '*' },\n+  );\n+  const focus = await dev(request, ADA, 'POST', '/flow/focuses', {\n+    title: `OS check ${randomUUID().slice(0, 6)}`,\n+  });\n+  const task = String(\n+    (\n+      await dev(request, ADA, 'POST', `/flow/focuses/${String(focus.id)}/tasks`, {\n+        title: 'Seen by the OS',\n+      })\n+    ).id,\n+  );\n+\n+  // Nothing older may reach the screen: an earlier attempt can leave Ben alerts pending, and the\n+  // OS would show them as banners the person cannot tell apart. Read first, each is cancelled\n+  // when it is next due (read before dispatch).\n+  const summary = (await dev(\n+    request,\n+    BEN,\n+    'GET',\n+    '/me/notifications/summary',\n+    undefined,\n+    GROUPS,\n+  )) as {\n+    unread_count: number;\n+    read_scope: string;\n+  };\n+  if (summary.unread_count > 0)\n+    await dev(\n+      request,\n+      BEN,\n+      'POST',\n+      '/me/notifications/read-all',",
+    "path": "okr/web/apps/web/e2e/real/notifications-os.desktop.real.spec.ts",
+    "commit_id": "02672fd2668754dfa45420ca7b3c6385fd16b3cc",
+    "original_commit_id": "359a8ef454e81111253346fb442054eb6afdfa92",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Restore rows changed by stale-alert cleanup**\n\nWhen this runs on a kept database after a partial or failed NC attempt, `/read-all` marks every visible unread notification belonging to Ben as read and increments its version, including rows this spec did not create. The `afterAll` teardown restores only source groups and preferences, so a later retry or NC spec observes the earlier attempt's inbox permanently altered. Snapshot and restore those rows, or isolate stale alert candidates without changing unrelated inbox state.\n\nAGENTS.md reference: [AGENTS.md:L152-L156](https://github.com/txehq/txe/blob/359a8ef454e81111253346fb442054eb6afdfa92/AGENTS.md#L152-L156)\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-19T10:22:06Z",
+    "updated_at": "2026-10-19T10:22:06Z",
+    "html_url": "https://github.com/txehq/txe/pull/4024#discussion_r4312691615",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4024",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/comments/4312691615"
+      },
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4024#discussion_r4312691615"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4024"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/txe/pulls/comments/4312691615/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": null,
+    "start_side": null,
+    "line": null,
+    "original_line": 204,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 204,
+    "position": 1,
+    "subject_type": "line"
+  }
+]

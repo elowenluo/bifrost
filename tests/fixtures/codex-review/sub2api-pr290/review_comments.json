@@ -1,0 +1,278 @@
+[
+  {
+    "url": "https://api.github.com/repos/txehq/sub2api/pulls/comments/4296627722",
+    "pull_request_review_id": 5550338861,
+    "id": 4296627722,
+    "node_id": "PRRC_kwDOTuu6Sc8AAAABABlWCg",
+    "diff_hunk": "@@ -503,10 +508,21 @@ func (s *BillingService) calculateExactCatalogTokenCost(\n \ttemplate CatalogPricingTemplate,\n \tinput CostInput,\n ) (*CostBreakdown, error) {\n-\tif input.Tokens.AudioInputTokens > 0 || input.Tokens.ImageInputTokens > 0 ||\n-\t\tinput.Tokens.AudioOutputTokens > 0 || input.Tokens.CacheReadAudioTokens > 0 ||\n-\t\tinput.Tokens.CacheReadImageTokens > 0 {\n-\t\treturn nil, fmt.Errorf(\"pricing unavailable for model %q: exact catalog template does not price normalized modalities\", input.Model)\n+\t// 目录模板不给音频、图片这些细分模态定价：这些 token 按 0 计费，其余计费项照常计费。\n+\tvar unpriced []string\n+\tfor _, modality := range []struct {\n+\t\ttokens    int\n+\t\tcomponent string\n+\t}{\n+\t\t{input.Tokens.AudioInputTokens, \"audio_input\"},\n+\t\t{input.Tokens.ImageInputTokens, \"image_input\"},\n+\t\t{input.Tokens.AudioOutputTokens, \"audio_output\"},",
+    "path": "services/api/internal/service/billing_service.go",
+    "commit_id": "c6f314a3806a7acbadf6b906b2b95c7afbcff82d",
+    "original_commit_id": "1757a33d727c07bbd12ab0eb1f22f4671a89f15b",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Normalize aggregate modality tokens before zero-pricing them**\n\nWhen first-call reconciliation processes OpenAI Realtime usage containing audio or image modalities, `firstCallUsageTokens` copies the aggregate `usage.InputTokens`/`usage.OutputTokens` and also populates the modality fields separately. Newly accepting those fields here therefore does not actually bill them at zero: `calculateExactCatalogTokenCost` later charges the aggregate input at the text input price and subtracts only image—not audio—from aggregate output. Such requests now produce inflated official-price snapshots instead of the previous unavailable result; use the normalized text quantities (and uncached modality quantities) before allowing this path to continue.\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-16T15:59:58Z",
+    "updated_at": "2026-10-16T15:59:59Z",
+    "html_url": "https://github.com/txehq/sub2api/pull/290#discussion_r4296627722",
+    "pull_request_url": "https://api.github.com/repos/txehq/sub2api/pulls/290",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/sub2api/pulls/comments/4296627722"
+      },
+      "html": {
+        "href": "https://github.com/txehq/sub2api/pull/290#discussion_r4296627722"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/sub2api/pulls/290"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/sub2api/pulls/comments/4296627722/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": 517,
+    "original_start_line": 517,
+    "start_side": "RIGHT",
+    "line": 519,
+    "original_line": 519,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 39,
+    "position": 39,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/sub2api/pulls/comments/4296859146",
+    "pull_request_review_id": 5550655422,
+    "id": 4296859146,
+    "node_id": "PRRC_kwDOTuu6Sc8AAAABABzeCg",
+    "diff_hunk": "@@ -227,6 +227,12 @@ func (r *FirstCallPricingReconciler) reconcileOne(ctx context.Context, firstCall\n \tif err != nil {\n \t\treturn r.completeUnavailable(ctx, firstCall, result, \"normalized_usage_unavailable\", now)\n \t}\n+\t// 目录模板不给音频、图片这些细分模态定价，而 usage_logs 的输入、输出总数里含有它们：\n+\t// 这样的用量算不出官方价，计费时这些 token 按 0 计，对照用的官方价不能这样算。\n+\tif tokens.AudioInputTokens > 0 || tokens.ImageInputTokens > 0 || tokens.AudioOutputTokens > 0 ||\n+\t\ttokens.CacheReadAudioTokens > 0 || tokens.CacheReadImageTokens > 0 {",
+    "path": "services/api/internal/service/first_call_pricing_reconciler.go",
+    "commit_id": "17299111c10bb4db65f42755d2dac242bc1c9850",
+    "original_commit_id": "17299111c10bb4db65f42755d2dac242bc1c9850",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Reject unpriced web-search usage during reconciliation**\n\nWhen a first-call usage log reports `NormalizedUsage.WebSearch`, `firstCallUsageTokens` sets `WebSearchCalls`, but this guard permits it to reach the exact-catalog calculator without a `WebSearchPricePerCall`. That calculator now treats the missing price as zero and returns success, so reconciliation records an available official-price snapshot that excludes the request's web-search charge; include web-search usage in this unavailable check (or otherwise detect the unpriced component) as is already done for unsupported modalities.\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-16T16:25:17Z",
+    "updated_at": "2026-10-16T16:25:17Z",
+    "html_url": "https://github.com/txehq/sub2api/pull/290#discussion_r4296859146",
+    "pull_request_url": "https://api.github.com/repos/txehq/sub2api/pulls/290",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/sub2api/pulls/comments/4296859146"
+      },
+      "html": {
+        "href": "https://github.com/txehq/sub2api/pull/290#discussion_r4296859146"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/sub2api/pulls/290"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/sub2api/pulls/comments/4296859146/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 232,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 233,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 7,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/sub2api/pulls/comments/4297056843",
+    "pull_request_review_id": 5550906105,
+    "id": 4297056843,
+    "node_id": "PRRC_kwDOTuu6Sc8AAAABAB_iSw",
+    "diff_hunk": "@@ -227,6 +227,12 @@ func (r *FirstCallPricingReconciler) reconcileOne(ctx context.Context, firstCall\n \tif err != nil {\n \t\treturn r.completeUnavailable(ctx, firstCall, result, \"normalized_usage_unavailable\", now)\n \t}\n+\t// 目录模板不给音频、图片这些细分模态定价，而 usage_logs 的输入、输出总数里含有它们；对照时也没有按次的\n+\t// web search 价格。这样的用量算不出官方价：计费时这些计费项按 0 计，对照用的官方价不能这样算。\n+\tif tokens.AudioInputTokens > 0 || tokens.ImageInputTokens > 0 || tokens.AudioOutputTokens > 0 ||\n+\t\ttokens.CacheReadAudioTokens > 0 || tokens.CacheReadImageTokens > 0 || tokens.WebSearchCalls > 0 {",
+    "path": "services/api/internal/service/first_call_pricing_reconciler.go",
+    "commit_id": "2bf1311d2bb87741c536af0694229f85e885be44",
+    "original_commit_id": "2bf1311d2bb87741c536af0694229f85e885be44",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Limit modality rejection to token-priced first calls**\n\nWhen the matched catalog variant uses `BillingModeImage` or `BillingModePerRequest`, normalized image input is not an unpriced component—the official cost is determined by the per-request price and request count. Image edit flows populate `NormalizedUsage.ImageInput`, so this unconditional guard marks those otherwise priceable first calls unavailable before `calculatePerRequestCost` can run. Apply this rejection only to token-billed variants.\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-16T16:47:47Z",
+    "updated_at": "2026-10-16T16:47:47Z",
+    "html_url": "https://github.com/txehq/sub2api/pull/290#discussion_r4297056843",
+    "pull_request_url": "https://api.github.com/repos/txehq/sub2api/pulls/290",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/sub2api/pulls/comments/4297056843"
+      },
+      "html": {
+        "href": "https://github.com/txehq/sub2api/pull/290#discussion_r4297056843"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/sub2api/pulls/290"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/sub2api/pulls/comments/4297056843/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 232,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 233,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 7,
+    "position": 1,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/txehq/sub2api/pulls/comments/4297056859",
+    "pull_request_review_id": 5550906105,
+    "id": 4297056859,
+    "node_id": "PRRC_kwDOTuu6Sc8AAAABAB_iWw",
+    "diff_hunk": "@@ -731,55 +797,39 @@ func validateTokenPricing(model string, pricing *ModelPricing, tokens UsageToken\n \t\tcacheCreationPresent = cacheCreationPresent || pricing.CacheCreationPriorityPricePresent\n \t}\n \n-\tif tokens.InputTokens > 0 && !inputPresent {\n-\t\treturn fmt.Errorf(\"pricing unavailable for model %q: missing input price\", model)\n-\t}\n-\tif tokens.AudioInputTokens > 0 && !pricing.InputAudioPricePresent {\n-\t\treturn fmt.Errorf(\"pricing unavailable for model %q: missing audio input price\", model)\n-\t}\n-\tif tokens.ImageInputTokens > 0 && !pricing.InputImagePricePresent {\n-\t\treturn fmt.Errorf(\"pricing unavailable for model %q: missing image input token price\", model)\n-\t}\n-\tif tokens.AudioOutputTokens > 0 && !pricing.OutputAudioPricePresent {\n-\t\treturn fmt.Errorf(\"pricing unavailable for model %q: missing audio output price\", model)\n-\t}\n-\ttextOutputTokens := tokens.OutputTokens - tokens.ImageOutputTokens\n-\tif textOutputTokens > 0 && !outputPresent {\n-\t\treturn fmt.Errorf(\"pricing unavailable for model %q: missing output price\", model)\n-\t}\n-\tif tokens.ImageOutputTokens > 0 && !pricing.ImageOutputPricePresent && !outputPresent {\n-\t\treturn fmt.Errorf(\"pricing unavailable for model %q: missing image output price\", model)\n-\t}\n \tcacheReadTextTokens := tokens.CacheReadTokens - tokens.CacheReadAudioTokens - tokens.CacheReadImageTokens\n \tif cacheReadTextTokens < 0 {\n-\t\treturn fmt.Errorf(\"pricing unavailable for model %q: cache modality details exceed aggregate cache tokens\", model)\n-\t}\n-\tif cacheReadTextTokens > 0 && !cacheReadPresent {\n-\t\treturn fmt.Errorf(\"pricing unavailable for model %q: missing cache read price\", model)\n+\t\treturn nil, fmt.Errorf(\"pricing unavailable for model %q: cache modality details exceed aggregate cache tokens\", model)\n \t}\n-\tif tokens.CacheReadAudioTokens > 0 && !pricing.CacheReadAudioPricePresent {\n-\t\treturn fmt.Errorf(\"pricing unavailable for model %q: missing audio cache read price\", model)\n-\t}\n-\tif tokens.CacheReadImageTokens > 0 && !pricing.CacheReadImagePricePresent {\n-\t\treturn fmt.Errorf(\"pricing unavailable for model %q: missing image cache read price\", model)\n-\t}\n-\tif tokens.WebSearchCalls > 0 && !pricing.WebSearchPricePresent {\n-\t\treturn fmt.Errorf(\"pricing unavailable for model %q: missing web search price\", model)\n+\n+\tvar unpriced []string\n+\tmissing := func(used bool, present bool, component string) {\n+\t\tif used && !present {\n+\t\t\tunpriced = append(unpriced, component)\n+\t\t}\n \t}\n+\ttextOutputTokens := tokens.OutputTokens - tokens.ImageOutputTokens\n+\tmissing(tokens.InputTokens > 0, inputPresent, \"input\")\n+\tmissing(tokens.AudioInputTokens > 0, pricing.InputAudioPricePresent, \"audio_input\")\n+\tmissing(tokens.ImageInputTokens > 0, pricing.InputImagePricePresent, \"image_input\")\n+\tmissing(tokens.AudioOutputTokens > 0, pricing.OutputAudioPricePresent, \"audio_output\")",
+    "path": "services/api/internal/service/billing_service.go",
+    "commit_id": "c6f314a3806a7acbadf6b906b2b95c7afbcff82d",
+    "original_commit_id": "2bf1311d2bb87741c536af0694229f85e885be44",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Normalize audio-only output before treating it as text**\n\nWhen a Realtime-compatible upstream reports aggregate `output_tokens` and an `audio_tokens` detail but omits the zero-valued `text_tokens` field, `validateOpenAIRealtimeUsage` accepts the payload, while `RecordUsage` leaves `UsageTokens.OutputTokens` equal to the aggregate and also sets `AudioOutputTokens`. This calculation consequently classifies the aggregate as priced text output; after this change no longer rejects the missing audio price, the request succeeds and bills every audio token at the text output rate instead of zero. Normalize the aggregate to zero/text-only before allowing the unpriced audio component to proceed.\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->",
+    "created_at": "2026-10-16T16:47:47Z",
+    "updated_at": "2026-10-16T16:47:47Z",
+    "html_url": "https://github.com/txehq/sub2api/pull/290#discussion_r4297056859",
+    "pull_request_url": "https://api.github.com/repos/txehq/sub2api/pulls/290",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/txehq/sub2api/pulls/comments/4297056859"
+      },
+      "html": {
+        "href": "https://github.com/txehq/sub2api/pull/290#discussion_r4297056859"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/sub2api/pulls/290"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/txehq/sub2api/pulls/comments/4297056859/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": 811,
+    "original_start_line": 811,
+    "start_side": "RIGHT",
+    "line": 815,
+    "original_line": 815,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 195,
+    "position": 195,
+    "subject_type": "line"
+  }
+]

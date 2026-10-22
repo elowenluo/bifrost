@@ -1,0 +1,722 @@
+[
+  {
+    "id": 5585862239,
+    "node_id": "PRR_kwDOSZZIh88AAAABTPF-Xw",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "<!-- codex-review-receipt:v1 -->\n\n\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `7ecb6260c0`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5585862239",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "NONE",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5585862239"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T13:41:28Z",
+    "commit_id": "7ecb6260c0fb932ef28fd0e65dc1e84b47c96b2c"
+  },
+  {
+    "id": 5586142920,
+    "node_id": "PRR_kwDOSZZIh88AAAABTPXGyA",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?u=82c2736db0096b72270bae15ec07056f2388860b&v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586142920",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "MEMBER",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586142920"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T14:02:18Z",
+    "commit_id": "0a4ce01fe5c22a92c0a9ddaa69c0cca7c1d5a87a"
+  },
+  {
+    "id": 5586266343,
+    "node_id": "PRR_kwDOSZZIh88AAAABTPeo5w",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "<!-- codex-review-receipt:v1 -->\n\n\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `ba907a0ee7`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586266343",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "NONE",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586266343"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T14:11:27Z",
+    "commit_id": "ba907a0ee723624e044a2b3607e6b3bd0ceb234f"
+  },
+  {
+    "id": 5586336433,
+    "node_id": "PRR_kwDOSZZIh88AAAABTPi6sQ",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?u=82c2736db0096b72270bae15ec07056f2388860b&v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586336433",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "MEMBER",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586336433"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T14:16:27Z",
+    "commit_id": "1088447bbeaac88259788da46db7d635fe54662a"
+  },
+  {
+    "id": 5586386284,
+    "node_id": "PRR_kwDOSZZIh88AAAABTPl9bA",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "<!-- codex-review-receipt:v1 -->\n\n\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `1088447bbe`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586386284",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "NONE",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586386284"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T14:20:08Z",
+    "commit_id": "1088447bbeaac88259788da46db7d635fe54662a"
+  },
+  {
+    "id": 5586424631,
+    "node_id": "PRR_kwDOSZZIh88AAAABTPoTNw",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?u=82c2736db0096b72270bae15ec07056f2388860b&v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586424631",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "MEMBER",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586424631"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T14:22:52Z",
+    "commit_id": "10226f7d43300e3888705ea1cf405232b3277d26"
+  },
+  {
+    "id": 5586425241,
+    "node_id": "PRR_kwDOSZZIh88AAAABTPoVmQ",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?u=82c2736db0096b72270bae15ec07056f2388860b&v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586425241",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "MEMBER",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586425241"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T14:22:55Z",
+    "commit_id": "10226f7d43300e3888705ea1cf405232b3277d26"
+  },
+  {
+    "id": 5586519401,
+    "node_id": "PRR_kwDOSZZIh88AAAABTPuFaQ",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "<!-- codex-review-receipt:v1 -->\n\n\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `077016f771`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586519401",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "NONE",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586519401"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T14:29:40Z",
+    "commit_id": "077016f771a09a164aeccacc3a3990fe08e4cc1a"
+  },
+  {
+    "id": 5586546339,
+    "node_id": "PRR_kwDOSZZIh88AAAABTPvuow",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?u=82c2736db0096b72270bae15ec07056f2388860b&v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586546339",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "MEMBER",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586546339"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T14:31:34Z",
+    "commit_id": "f4bb42900bead44ff7365e4c3a9f249a5df80012"
+  },
+  {
+    "id": 5586955746,
+    "node_id": "PRR_kwDOSZZIh88AAAABTQIt4g",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "<!-- codex-review-receipt:v1 -->\n\n\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `f4bb42900b`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586955746",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "NONE",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586955746"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T15:00:13Z",
+    "commit_id": "f4bb42900bead44ff7365e4c3a9f249a5df80012"
+  },
+  {
+    "id": 5586991116,
+    "node_id": "PRR_kwDOSZZIh88AAAABTQK4DA",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?u=82c2736db0096b72270bae15ec07056f2388860b&v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586991116",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "MEMBER",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5586991116"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T15:02:45Z",
+    "commit_id": "5069a9758ded8748020f0d82e1ab844cab3dcede"
+  },
+  {
+    "id": 5587047599,
+    "node_id": "PRR_kwDOSZZIh88AAAABTQOUrw",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "<!-- codex-review-receipt:v1 -->\n\n\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `5069a9758d`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587047599",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "NONE",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587047599"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T15:06:38Z",
+    "commit_id": "5069a9758ded8748020f0d82e1ab844cab3dcede"
+  },
+  {
+    "id": 5587174029,
+    "node_id": "PRR_kwDOSZZIh88AAAABTQWCjQ",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?u=82c2736db0096b72270bae15ec07056f2388860b&v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587174029",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "MEMBER",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587174029"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T15:14:35Z",
+    "commit_id": "946a0ff29897ba52663cf0eec7e26f8c38cb0e77"
+  },
+  {
+    "id": 5587225364,
+    "node_id": "PRR_kwDOSZZIh88AAAABTQZLFA",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "<!-- codex-review-receipt:v1 -->\n\n\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `946a0ff298`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587225364",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "NONE",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587225364"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T15:17:51Z",
+    "commit_id": "946a0ff29897ba52663cf0eec7e26f8c38cb0e77"
+  },
+  {
+    "id": 5587331950,
+    "node_id": "PRR_kwDOSZZIh88AAAABTQfrbg",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?u=82c2736db0096b72270bae15ec07056f2388860b&v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587331950",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "MEMBER",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587331950"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T15:24:36Z",
+    "commit_id": "65cb56b94b34c7e3dd77e34c087d2af14e794d14"
+  },
+  {
+    "id": 5587404398,
+    "node_id": "PRR_kwDOSZZIh88AAAABTQkGbg",
+    "user": {
+      "login": "chatgpt-codex-connector[bot]",
+      "id": 199175422,
+      "node_id": "BOT_kgDOC98s_g",
+      "avatar_url": "https://avatars.githubusercontent.com/in/1144995?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D",
+      "html_url": "https://github.com/apps/chatgpt-codex-connector",
+      "followers_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/chatgpt-codex-connector%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "<!-- codex-review-receipt:v1 -->\n\n\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `65cb56b94b`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587404398",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "NONE",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587404398"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T15:29:08Z",
+    "commit_id": "65cb56b94b34c7e3dd77e34c087d2af14e794d14"
+  },
+  {
+    "id": 5587518096,
+    "node_id": "PRR_kwDOSZZIh88AAAABTQrCkA",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?u=82c2736db0096b72270bae15ec07056f2388860b&v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587518096",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "MEMBER",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587518096"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T15:36:04Z",
+    "commit_id": "d3025fd29d8a34d0a65f39fda2850bc94c760f5d"
+  },
+  {
+    "id": 5587518740,
+    "node_id": "PRR_kwDOSZZIh88AAAABTQrFFA",
+    "user": {
+      "login": "connorwang",
+      "id": 7822862,
+      "node_id": "MDQ6VXNlcjc4MjI4NjI=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7822862?u=82c2736db0096b72270bae15ec07056f2388860b&v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/connorwang",
+      "html_url": "https://github.com/connorwang",
+      "followers_url": "https://api.github.com/users/connorwang/followers",
+      "following_url": "https://api.github.com/users/connorwang/following{/other_user}",
+      "gists_url": "https://api.github.com/users/connorwang/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/connorwang/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/connorwang/subscriptions",
+      "organizations_url": "https://api.github.com/users/connorwang/orgs",
+      "repos_url": "https://api.github.com/users/connorwang/repos",
+      "events_url": "https://api.github.com/users/connorwang/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/connorwang/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587518740",
+    "pull_request_url": "https://api.github.com/repos/txehq/txe/pulls/4030",
+    "author_association": "MEMBER",
+    "_links": {
+      "html": {
+        "href": "https://github.com/txehq/txe/pull/4030#pullrequestreview-5587518740"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/txehq/txe/pulls/4030"
+      }
+    },
+    "submitted_at": "2026-10-20T15:36:07Z",
+    "commit_id": "d3025fd29d8a34d0a65f39fda2850bc94c760f5d"
+  }
+]
