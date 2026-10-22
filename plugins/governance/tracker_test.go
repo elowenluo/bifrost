@@ -626,3 +626,22 @@ func TestUsageTracker_CleanupWaitsForPeriodicDumpBeforeFinalFlush(t *testing.T) 
 	assert.NotContains(t, logger.errors, "failed to dump rate limits to database: %v",
 		"shutdown cancellation must not be logged as a database failure")
 }
+
+// TestGovernanceInitStartsWorkersUnlessDeferred pins that a plugin built with Init
+// runs its reset, persistence and cleanup workers without another call, as a Go
+// SDK caller expects, while a caller that defers the start (the HTTP transport)
+// gets them only from StartResetWorkers.
+func TestGovernanceInitStartsWorkersUnlessDeferred(t *testing.T) {
+	logger := NewMockLogger()
+	plugin, err := Init(context.Background(), nil, logger, nil, &configstore.GovernanceConfig{}, nil, nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, plugin.Cleanup()) })
+	require.NotNil(t, plugin.tracker.resetTicker, "Init must start the workers")
+
+	deferred, err := Init(context.Background(), &Config{DeferWorkerStart: true}, logger, nil, &configstore.GovernanceConfig{}, nil, nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, deferred.Cleanup()) })
+	require.Nil(t, deferred.tracker.resetTicker, "a deferred start waits for StartResetWorkers")
+	deferred.StartResetWorkers(context.Background())
+	require.NotNil(t, deferred.tracker.resetTicker)
+}
