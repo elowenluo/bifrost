@@ -42,6 +42,13 @@ describe("validateModelRegex", () => {
 		expect(validateModelRegex(String.raw`^foo\\\k<bar>$`)).not.toBeNull();
 		expect(validateModelRegex("(x)\\1")).not.toBeNull();
 	});
+	it("accepts Go inline flags the backend accepts", () => {
+		expect(validateModelRegex("(?i)^gpt-4.*")).toBeNull();
+		expect(validateModelRegex("^(?i:gpt)-4.*")).toBeNull();
+		expect(validateModelRegex("(?is-m)^claude")).toBeNull();
+		expect(validateModelRegex("(?)gpt")).not.toBeNull();
+		expect(validateModelRegex("(?i)(")).not.toBeNull();
+	});
 });
 
 describe("resolveWildcardSelection", () => {
