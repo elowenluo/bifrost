@@ -1293,6 +1293,10 @@
                             "code_interpreter_call",
                             "local_shell_call",
                             "local_shell_call_output",
+                            "shell_call",
+                            "shell_call_output",
+                            "apply_patch_call",
+                            "apply_patch_call_output",
                             "mcp_call",
                             "custom_tool_call",
                             "custom_tool_call_output",
@@ -1500,7 +1504,7 @@
                           "type": "string"
                         },
                         "output": {
-                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                           "oneOf": [
                             {
                               "type": "string"
@@ -1665,6 +1669,47 @@
                               }
                             },
                             {
+                              "type": "array",
+                              "description": "Shell command results (shell_call_output), one per command.",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "stdout",
+                                  "stderr",
+                                  "outcome"
+                                ],
+                                "properties": {
+                                  "stdout": {
+                                    "type": "string"
+                                  },
+                                  "stderr": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "object",
+                                    "required": [
+                                      "type"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "exit",
+                                          "timeout"
+                                        ]
+                                      },
+                                      "exit_code": {
+                                        "type": "integer"
+                                      }
+                                    }
+                                  },
+                                  "created_by": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            },
+                            {
                               "type": "object",
                               "description": "Computer tool call output (computer_screenshot).",
                               "properties": {
@@ -1735,6 +1780,15 @@
                         },
                         "encrypted_content": {
                           "type": "string"
+                        },
+                        "environment": {
+                          "type": "object",
+                          "description": "Where a shell_call runs.",
+                          "additionalProperties": true
+                        },
+                        "max_output_length": {
+                          "type": "integer",
+                          "description": "Output length cap a shell_call_output was produced under."
                         }
                       }
                     },
@@ -5659,6 +5713,10 @@
                                 "code_interpreter_call",
                                 "local_shell_call",
                                 "local_shell_call_output",
+                                "shell_call",
+                                "shell_call_output",
+                                "apply_patch_call",
+                                "apply_patch_call_output",
                                 "mcp_call",
                                 "custom_tool_call",
                                 "custom_tool_call_output",
@@ -5866,7 +5924,7 @@
                               "type": "string"
                             },
                             "output": {
-                              "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                              "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                               "oneOf": [
                                 {
                                   "type": "string"
@@ -6031,6 +6089,47 @@
                                   }
                                 },
                                 {
+                                  "type": "array",
+                                  "description": "Shell command results (shell_call_output), one per command.",
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "stdout",
+                                      "stderr",
+                                      "outcome"
+                                    ],
+                                    "properties": {
+                                      "stdout": {
+                                        "type": "string"
+                                      },
+                                      "stderr": {
+                                        "type": "string"
+                                      },
+                                      "outcome": {
+                                        "type": "object",
+                                        "required": [
+                                          "type"
+                                        ],
+                                        "properties": {
+                                          "type": {
+                                            "type": "string",
+                                            "enum": [
+                                              "exit",
+                                              "timeout"
+                                            ]
+                                          },
+                                          "exit_code": {
+                                            "type": "integer"
+                                          }
+                                        }
+                                      },
+                                      "created_by": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  }
+                                },
+                                {
                                   "type": "object",
                                   "description": "Computer tool call output (computer_screenshot).",
                                   "properties": {
@@ -6101,6 +6200,15 @@
                             },
                             "encrypted_content": {
                               "type": "string"
+                            },
+                            "environment": {
+                              "type": "object",
+                              "description": "Where a shell_call runs.",
+                              "additionalProperties": true
+                            },
+                            "max_output_length": {
+                              "type": "integer",
+                              "description": "Output length cap a shell_call_output was produced under."
                             }
                           }
                         }
@@ -6181,6 +6289,10 @@
                               "code_interpreter_call",
                               "local_shell_call",
                               "local_shell_call_output",
+                              "shell_call",
+                              "shell_call_output",
+                              "apply_patch_call",
+                              "apply_patch_call_output",
                               "mcp_call",
                               "custom_tool_call",
                               "custom_tool_call_output",
@@ -6388,7 +6500,7 @@
                             "type": "string"
                           },
                           "output": {
-                            "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                            "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                             "oneOf": [
                               {
                                 "type": "string"
@@ -6553,6 +6665,47 @@
                                 }
                               },
                               {
+                                "type": "array",
+                                "description": "Shell command results (shell_call_output), one per command.",
+                                "items": {
+                                  "type": "object",
+                                  "required": [
+                                    "stdout",
+                                    "stderr",
+                                    "outcome"
+                                  ],
+                                  "properties": {
+                                    "stdout": {
+                                      "type": "string"
+                                    },
+                                    "stderr": {
+                                      "type": "string"
+                                    },
+                                    "outcome": {
+                                      "type": "object",
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "enum": [
+                                            "exit",
+                                            "timeout"
+                                          ]
+                                        },
+                                        "exit_code": {
+                                          "type": "integer"
+                                        }
+                                      }
+                                    },
+                                    "created_by": {
+                                      "type": "string"
+                                    }
+                                  }
+                                }
+                              },
+                              {
                                 "type": "object",
                                 "description": "Computer tool call output (computer_screenshot).",
                                 "properties": {
@@ -6623,6 +6776,15 @@
                           },
                           "encrypted_content": {
                             "type": "string"
+                          },
+                          "environment": {
+                            "type": "object",
+                            "description": "Where a shell_call runs.",
+                            "additionalProperties": true
+                          },
+                          "max_output_length": {
+                            "type": "integer",
+                            "description": "Output length cap a shell_call_output was produced under."
                           }
                         }
                       },
@@ -6902,6 +7064,10 @@
                             "code_interpreter_call",
                             "local_shell_call",
                             "local_shell_call_output",
+                            "shell_call",
+                            "shell_call_output",
+                            "apply_patch_call",
+                            "apply_patch_call_output",
                             "mcp_call",
                             "custom_tool_call",
                             "custom_tool_call_output",
@@ -7109,7 +7275,7 @@
                           "type": "string"
                         },
                         "output": {
-                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                           "oneOf": [
                             {
                               "type": "string"
@@ -7274,6 +7440,47 @@
                               }
                             },
                             {
+                              "type": "array",
+                              "description": "Shell command results (shell_call_output), one per command.",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "stdout",
+                                  "stderr",
+                                  "outcome"
+                                ],
+                                "properties": {
+                                  "stdout": {
+                                    "type": "string"
+                                  },
+                                  "stderr": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "object",
+                                    "required": [
+                                      "type"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "exit",
+                                          "timeout"
+                                        ]
+                                      },
+                                      "exit_code": {
+                                        "type": "integer"
+                                      }
+                                    }
+                                  },
+                                  "created_by": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            },
+                            {
                               "type": "object",
                               "description": "Computer tool call output (computer_screenshot).",
                               "properties": {
@@ -7344,6 +7551,15 @@
                         },
                         "encrypted_content": {
                           "type": "string"
+                        },
+                        "environment": {
+                          "type": "object",
+                          "description": "Where a shell_call runs.",
+                          "additionalProperties": true
+                        },
+                        "max_output_length": {
+                          "type": "integer",
+                          "description": "Output length cap a shell_call_output was produced under."
                         }
                       }
                     },
@@ -13805,6 +14021,10 @@
                             "code_interpreter_call",
                             "local_shell_call",
                             "local_shell_call_output",
+                            "shell_call",
+                            "shell_call_output",
+                            "apply_patch_call",
+                            "apply_patch_call_output",
                             "mcp_call",
                             "custom_tool_call",
                             "custom_tool_call_output",
@@ -14012,7 +14232,7 @@
                           "type": "string"
                         },
                         "output": {
-                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                           "oneOf": [
                             {
                               "type": "string"
@@ -14177,6 +14397,47 @@
                               }
                             },
                             {
+                              "type": "array",
+                              "description": "Shell command results (shell_call_output), one per command.",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "stdout",
+                                  "stderr",
+                                  "outcome"
+                                ],
+                                "properties": {
+                                  "stdout": {
+                                    "type": "string"
+                                  },
+                                  "stderr": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "object",
+                                    "required": [
+                                      "type"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "exit",
+                                          "timeout"
+                                        ]
+                                      },
+                                      "exit_code": {
+                                        "type": "integer"
+                                      }
+                                    }
+                                  },
+                                  "created_by": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            },
+                            {
                               "type": "object",
                               "description": "Computer tool call output (computer_screenshot).",
                               "properties": {
@@ -14247,6 +14508,15 @@
                         },
                         "encrypted_content": {
                           "type": "string"
+                        },
+                        "environment": {
+                          "type": "object",
+                          "description": "Where a shell_call runs.",
+                          "additionalProperties": true
+                        },
+                        "max_output_length": {
+                          "type": "integer",
+                          "description": "Output length cap a shell_call_output was produced under."
                         }
                       }
                     },
@@ -14759,6 +15029,10 @@
                             "code_interpreter_call",
                             "local_shell_call",
                             "local_shell_call_output",
+                            "shell_call",
+                            "shell_call_output",
+                            "apply_patch_call",
+                            "apply_patch_call_output",
                             "mcp_call",
                             "custom_tool_call",
                             "custom_tool_call_output",
@@ -14966,7 +15240,7 @@
                           "type": "string"
                         },
                         "output": {
-                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                           "oneOf": [
                             {
                               "type": "string"
@@ -15131,6 +15405,47 @@
                               }
                             },
                             {
+                              "type": "array",
+                              "description": "Shell command results (shell_call_output), one per command.",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "stdout",
+                                  "stderr",
+                                  "outcome"
+                                ],
+                                "properties": {
+                                  "stdout": {
+                                    "type": "string"
+                                  },
+                                  "stderr": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "object",
+                                    "required": [
+                                      "type"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "exit",
+                                          "timeout"
+                                        ]
+                                      },
+                                      "exit_code": {
+                                        "type": "integer"
+                                      }
+                                    }
+                                  },
+                                  "created_by": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            },
+                            {
                               "type": "object",
                               "description": "Computer tool call output (computer_screenshot).",
                               "properties": {
@@ -15201,6 +15516,15 @@
                         },
                         "encrypted_content": {
                           "type": "string"
+                        },
+                        "environment": {
+                          "type": "object",
+                          "description": "Where a shell_call runs.",
+                          "additionalProperties": true
+                        },
+                        "max_output_length": {
+                          "type": "integer",
+                          "description": "Output length cap a shell_call_output was produced under."
                         }
                       }
                     },
@@ -15750,6 +16074,10 @@
                             "code_interpreter_call",
                             "local_shell_call",
                             "local_shell_call_output",
+                            "shell_call",
+                            "shell_call_output",
+                            "apply_patch_call",
+                            "apply_patch_call_output",
                             "mcp_call",
                             "custom_tool_call",
                             "custom_tool_call_output",
@@ -15957,7 +16285,7 @@
                           "type": "string"
                         },
                         "output": {
-                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                           "oneOf": [
                             {
                               "type": "string"
@@ -16122,6 +16450,47 @@
                               }
                             },
                             {
+                              "type": "array",
+                              "description": "Shell command results (shell_call_output), one per command.",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "stdout",
+                                  "stderr",
+                                  "outcome"
+                                ],
+                                "properties": {
+                                  "stdout": {
+                                    "type": "string"
+                                  },
+                                  "stderr": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "object",
+                                    "required": [
+                                      "type"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "exit",
+                                          "timeout"
+                                        ]
+                                      },
+                                      "exit_code": {
+                                        "type": "integer"
+                                      }
+                                    }
+                                  },
+                                  "created_by": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            },
+                            {
                               "type": "object",
                               "description": "Computer tool call output (computer_screenshot).",
                               "properties": {
@@ -16192,6 +16561,15 @@
                         },
                         "encrypted_content": {
                           "type": "string"
+                        },
+                        "environment": {
+                          "type": "object",
+                          "description": "Where a shell_call runs.",
+                          "additionalProperties": true
+                        },
+                        "max_output_length": {
+                          "type": "integer",
+                          "description": "Output length cap a shell_call_output was produced under."
                         }
                       }
                     },
@@ -16856,6 +17234,10 @@
                                 "code_interpreter_call",
                                 "local_shell_call",
                                 "local_shell_call_output",
+                                "shell_call",
+                                "shell_call_output",
+                                "apply_patch_call",
+                                "apply_patch_call_output",
                                 "mcp_call",
                                 "custom_tool_call",
                                 "custom_tool_call_output",
@@ -17063,7 +17445,7 @@
                               "type": "string"
                             },
                             "output": {
-                              "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                              "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                               "oneOf": [
                                 {
                                   "type": "string"
@@ -17228,6 +17610,47 @@
                                   }
                                 },
                                 {
+                                  "type": "array",
+                                  "description": "Shell command results (shell_call_output), one per command.",
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "stdout",
+                                      "stderr",
+                                      "outcome"
+                                    ],
+                                    "properties": {
+                                      "stdout": {
+                                        "type": "string"
+                                      },
+                                      "stderr": {
+                                        "type": "string"
+                                      },
+                                      "outcome": {
+                                        "type": "object",
+                                        "required": [
+                                          "type"
+                                        ],
+                                        "properties": {
+                                          "type": {
+                                            "type": "string",
+                                            "enum": [
+                                              "exit",
+                                              "timeout"
+                                            ]
+                                          },
+                                          "exit_code": {
+                                            "type": "integer"
+                                          }
+                                        }
+                                      },
+                                      "created_by": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  }
+                                },
+                                {
                                   "type": "object",
                                   "description": "Computer tool call output (computer_screenshot).",
                                   "properties": {
@@ -17298,6 +17721,15 @@
                             },
                             "encrypted_content": {
                               "type": "string"
+                            },
+                            "environment": {
+                              "type": "object",
+                              "description": "Where a shell_call runs.",
+                              "additionalProperties": true
+                            },
+                            "max_output_length": {
+                              "type": "integer",
+                              "description": "Output length cap a shell_call_output was produced under."
                             }
                           }
                         }
@@ -17378,6 +17810,10 @@
                               "code_interpreter_call",
                               "local_shell_call",
                               "local_shell_call_output",
+                              "shell_call",
+                              "shell_call_output",
+                              "apply_patch_call",
+                              "apply_patch_call_output",
                               "mcp_call",
                               "custom_tool_call",
                               "custom_tool_call_output",
@@ -17585,7 +18021,7 @@
                             "type": "string"
                           },
                           "output": {
-                            "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                            "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                             "oneOf": [
                               {
                                 "type": "string"
@@ -17750,6 +18186,47 @@
                                 }
                               },
                               {
+                                "type": "array",
+                                "description": "Shell command results (shell_call_output), one per command.",
+                                "items": {
+                                  "type": "object",
+                                  "required": [
+                                    "stdout",
+                                    "stderr",
+                                    "outcome"
+                                  ],
+                                  "properties": {
+                                    "stdout": {
+                                      "type": "string"
+                                    },
+                                    "stderr": {
+                                      "type": "string"
+                                    },
+                                    "outcome": {
+                                      "type": "object",
+                                      "required": [
+                                        "type"
+                                      ],
+                                      "properties": {
+                                        "type": {
+                                          "type": "string",
+                                          "enum": [
+                                            "exit",
+                                            "timeout"
+                                          ]
+                                        },
+                                        "exit_code": {
+                                          "type": "integer"
+                                        }
+                                      }
+                                    },
+                                    "created_by": {
+                                      "type": "string"
+                                    }
+                                  }
+                                }
+                              },
+                              {
                                 "type": "object",
                                 "description": "Computer tool call output (computer_screenshot).",
                                 "properties": {
@@ -17820,6 +18297,15 @@
                           },
                           "encrypted_content": {
                             "type": "string"
+                          },
+                          "environment": {
+                            "type": "object",
+                            "description": "Where a shell_call runs.",
+                            "additionalProperties": true
+                          },
+                          "max_output_length": {
+                            "type": "integer",
+                            "description": "Output length cap a shell_call_output was produced under."
                           }
                         }
                       },
@@ -28270,7 +28756,7 @@
                 ],
                 "properties": {
                   "state": {
-                    "description": "A plain string, or structured data (object or array) to evaluate.",
+                    "description": "A plain string, structured data (object or array), or null, to evaluate.",
                     "oneOf": [
                       {
                         "type": "string"
@@ -28282,6 +28768,9 @@
                       {
                         "type": "array",
                         "items": {}
+                      },
+                      {
+                        "type": "null"
                       }
                     ]
                   },
@@ -28328,8 +28817,7 @@
                     "additionalProperties": {
                       "type": "object",
                       "required": [
-                        "type",
-                        "instructions"
+                        "type"
                       ],
                       "properties": {
                         "type": {
@@ -28343,7 +28831,7 @@
                           "description": "Question type. `noul` returns a probability from 0 to 1, `choice` a selection with probabilities, `score` a probability-weighted rubric value, `box` the edges of a box around the instructions' subject in an image (Jev 1.14)."
                         },
                         "instructions": {
-                          "description": "Question instructions. A string, or structured data.",
+                          "description": "Question instructions. A string, or structured data. Optional.",
                           "oneOf": [
                             {
                               "type": "string"
@@ -28359,18 +28847,48 @@
                           ]
                         },
                         "criteria": {
-                          "description": "Optional `true`/`false` descriptions for `noul`; a map of option\nto description for `choice` (at most 255 options); an ordered\narray of 2-10 level descriptions for `score`.\n",
+                          "description": "Optional `true`/`false` descriptions for `noul`; a map of option\nto description for `choice` (at most 255 options); an ordered\narray of 2-10 level descriptions for `score`. Each description\nis a string, structured data (object or array), or null.\n",
                           "oneOf": [
                             {
                               "type": "object",
                               "additionalProperties": {
-                                "type": "string"
+                                "oneOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": true
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {}
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             {
                               "type": "array",
                               "items": {
-                                "type": "string"
+                                "oneOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "object",
+                                    "additionalProperties": true
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {}
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             }
                           ]
@@ -28480,9 +28998,8 @@
                           },
                           "legend": {
                             "type": "object",
-                            "additionalProperties": {
-                              "type": "string"
-                            }
+                            "description": "Each score level's description, echoed verbatim (string, object, or array), keyed by level number",
+                            "additionalProperties": {}
                           },
                           "confidence": {
                             "type": "number"
@@ -30993,6 +31510,10 @@
                             "code_interpreter_call",
                             "local_shell_call",
                             "local_shell_call_output",
+                            "shell_call",
+                            "shell_call_output",
+                            "apply_patch_call",
+                            "apply_patch_call_output",
                             "mcp_call",
                             "custom_tool_call",
                             "custom_tool_call_output",
@@ -31200,7 +31721,7 @@
                           "type": "string"
                         },
                         "output": {
-                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                           "oneOf": [
                             {
                               "type": "string"
@@ -31365,6 +31886,47 @@
                               }
                             },
                             {
+                              "type": "array",
+                              "description": "Shell command results (shell_call_output), one per command.",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "stdout",
+                                  "stderr",
+                                  "outcome"
+                                ],
+                                "properties": {
+                                  "stdout": {
+                                    "type": "string"
+                                  },
+                                  "stderr": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "object",
+                                    "required": [
+                                      "type"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "exit",
+                                          "timeout"
+                                        ]
+                                      },
+                                      "exit_code": {
+                                        "type": "integer"
+                                      }
+                                    }
+                                  },
+                                  "created_by": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            },
+                            {
                               "type": "object",
                               "description": "Computer tool call output (computer_screenshot).",
                               "properties": {
@@ -31435,6 +31997,15 @@
                         },
                         "encrypted_content": {
                           "type": "string"
+                        },
+                        "environment": {
+                          "type": "object",
+                          "description": "Where a shell_call runs.",
+                          "additionalProperties": true
+                        },
+                        "max_output_length": {
+                          "type": "integer",
+                          "description": "Output length cap a shell_call_output was produced under."
                         }
                       }
                     },
@@ -34091,6 +34662,10 @@
                             "code_interpreter_call",
                             "local_shell_call",
                             "local_shell_call_output",
+                            "shell_call",
+                            "shell_call_output",
+                            "apply_patch_call",
+                            "apply_patch_call_output",
                             "mcp_call",
                             "custom_tool_call",
                             "custom_tool_call_output",
@@ -34298,7 +34873,7 @@
                           "type": "string"
                         },
                         "output": {
-                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                           "oneOf": [
                             {
                               "type": "string"
@@ -34463,6 +35038,47 @@
                               }
                             },
                             {
+                              "type": "array",
+                              "description": "Shell command results (shell_call_output), one per command.",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "stdout",
+                                  "stderr",
+                                  "outcome"
+                                ],
+                                "properties": {
+                                  "stdout": {
+                                    "type": "string"
+                                  },
+                                  "stderr": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "object",
+                                    "required": [
+                                      "type"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "exit",
+                                          "timeout"
+                                        ]
+                                      },
+                                      "exit_code": {
+                                        "type": "integer"
+                                      }
+                                    }
+                                  },
+                                  "created_by": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            },
+                            {
                               "type": "object",
                               "description": "Computer tool call output (computer_screenshot).",
                               "properties": {
@@ -34533,6 +35149,15 @@
                         },
                         "encrypted_content": {
                           "type": "string"
+                        },
+                        "environment": {
+                          "type": "object",
+                          "description": "Where a shell_call runs.",
+                          "additionalProperties": true
+                        },
+                        "max_output_length": {
+                          "type": "integer",
+                          "description": "Output length cap a shell_call_output was produced under."
                         }
                       }
                     },
@@ -37300,6 +37925,10 @@
                             "code_interpreter_call",
                             "local_shell_call",
                             "local_shell_call_output",
+                            "shell_call",
+                            "shell_call_output",
+                            "apply_patch_call",
+                            "apply_patch_call_output",
                             "mcp_call",
                             "custom_tool_call",
                             "custom_tool_call_output",
@@ -37507,7 +38136,7 @@
                           "type": "string"
                         },
                         "output": {
-                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                           "oneOf": [
                             {
                               "type": "string"
@@ -37672,6 +38301,47 @@
                               }
                             },
                             {
+                              "type": "array",
+                              "description": "Shell command results (shell_call_output), one per command.",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "stdout",
+                                  "stderr",
+                                  "outcome"
+                                ],
+                                "properties": {
+                                  "stdout": {
+                                    "type": "string"
+                                  },
+                                  "stderr": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "object",
+                                    "required": [
+                                      "type"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "exit",
+                                          "timeout"
+                                        ]
+                                      },
+                                      "exit_code": {
+                                        "type": "integer"
+                                      }
+                                    }
+                                  },
+                                  "created_by": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            },
+                            {
                               "type": "object",
                               "description": "Computer tool call output (computer_screenshot).",
                               "properties": {
@@ -37742,6 +38412,15 @@
                         },
                         "encrypted_content": {
                           "type": "string"
+                        },
+                        "environment": {
+                          "type": "object",
+                          "description": "Where a shell_call runs.",
+                          "additionalProperties": true
+                        },
+                        "max_output_length": {
+                          "type": "integer",
+                          "description": "Output length cap a shell_call_output was produced under."
                         }
                       }
                     },
@@ -44715,6 +45394,10 @@
                             "code_interpreter_call",
                             "local_shell_call",
                             "local_shell_call_output",
+                            "shell_call",
+                            "shell_call_output",
+                            "apply_patch_call",
+                            "apply_patch_call_output",
                             "mcp_call",
                             "custom_tool_call",
                             "custom_tool_call_output",
@@ -44922,7 +45605,7 @@
                           "type": "string"
                         },
                         "output": {
-                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                          "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                           "oneOf": [
                             {
                               "type": "string"
@@ -45087,6 +45770,47 @@
                               }
                             },
                             {
+                              "type": "array",
+                              "description": "Shell command results (shell_call_output), one per command.",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "stdout",
+                                  "stderr",
+                                  "outcome"
+                                ],
+                                "properties": {
+                                  "stdout": {
+                                    "type": "string"
+                                  },
+                                  "stderr": {
+                                    "type": "string"
+                                  },
+                                  "outcome": {
+                                    "type": "object",
+                                    "required": [
+                                      "type"
+                                    ],
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "exit",
+                                          "timeout"
+                                        ]
+                                      },
+                                      "exit_code": {
+                                        "type": "integer"
+                                      }
+                                    }
+                                  },
+                                  "created_by": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            },
+                            {
                               "type": "object",
                               "description": "Computer tool call output (computer_screenshot).",
                               "properties": {
@@ -45157,6 +45881,15 @@
                         },
                         "encrypted_content": {
                           "type": "string"
+                        },
+                        "environment": {
+                          "type": "object",
+                          "description": "Where a shell_call runs.",
+                          "additionalProperties": true
+                        },
+                        "max_output_length": {
+                          "type": "integer",
+                          "description": "Output length cap a shell_call_output was produced under."
                         }
                       },
                       "title": "Responses",
@@ -78724,10 +79457,9 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "description": "`name` and `tools` are required. `enabled` defaults to `true`.\n",
+                "description": "`name` is required. `enabled` defaults to `true`. `tools` may be omitted or\nempty to create a Virtual MCP that exposes no tools yet.\n",
                 "required": [
-                  "name",
-                  "tools"
+                  "name"
                 ],
                 "properties": {
                   "name": {
@@ -78738,14 +79470,17 @@
                     "description": "Honored on create only."
                   },
                   "description": {
-                    "type": "string",
-                    "nullable": true
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "enabled": {
                     "type": "boolean"
                   },
                   "tools": {
                     "type": "array",
+                    "description": "Tools to expose. Omitted or empty selects none.",
                     "items": {
                       "type": "object",
                       "required": [
@@ -113162,6 +113897,10 @@
                         "code_interpreter_call",
                         "local_shell_call",
                         "local_shell_call_output",
+                        "shell_call",
+                        "shell_call_output",
+                        "apply_patch_call",
+                        "apply_patch_call_output",
                         "mcp_call",
                         "custom_tool_call",
                         "custom_tool_call_output",
@@ -113369,7 +114108,7 @@
                       "type": "string"
                     },
                     "output": {
-                      "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                      "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                       "oneOf": [
                         {
                           "type": "string"
@@ -113534,6 +114273,47 @@
                           }
                         },
                         {
+                          "type": "array",
+                          "description": "Shell command results (shell_call_output), one per command.",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "stdout",
+                              "stderr",
+                              "outcome"
+                            ],
+                            "properties": {
+                              "stdout": {
+                                "type": "string"
+                              },
+                              "stderr": {
+                                "type": "string"
+                              },
+                              "outcome": {
+                                "type": "object",
+                                "required": [
+                                  "type"
+                                ],
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "enum": [
+                                      "exit",
+                                      "timeout"
+                                    ]
+                                  },
+                                  "exit_code": {
+                                    "type": "integer"
+                                  }
+                                }
+                              },
+                              "created_by": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        },
+                        {
                           "type": "object",
                           "description": "Computer tool call output (computer_screenshot).",
                           "properties": {
@@ -113604,6 +114384,15 @@
                     },
                     "encrypted_content": {
                       "type": "string"
+                    },
+                    "environment": {
+                      "type": "object",
+                      "description": "Where a shell_call runs.",
+                      "additionalProperties": true
+                    },
+                    "max_output_length": {
+                      "type": "integer",
+                      "description": "Output length cap a shell_call_output was produced under."
                     }
                   }
                 }
@@ -114415,6 +115204,10 @@
                     "code_interpreter_call",
                     "local_shell_call",
                     "local_shell_call_output",
+                    "shell_call",
+                    "shell_call_output",
+                    "apply_patch_call",
+                    "apply_patch_call_output",
                     "mcp_call",
                     "custom_tool_call",
                     "custom_tool_call_output",
@@ -114622,7 +115415,7 @@
                   "type": "string"
                 },
                 "output": {
-                  "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                  "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                   "oneOf": [
                     {
                       "type": "string"
@@ -114787,6 +115580,47 @@
                       }
                     },
                     {
+                      "type": "array",
+                      "description": "Shell command results (shell_call_output), one per command.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "stdout",
+                          "stderr",
+                          "outcome"
+                        ],
+                        "properties": {
+                          "stdout": {
+                            "type": "string"
+                          },
+                          "stderr": {
+                            "type": "string"
+                          },
+                          "outcome": {
+                            "type": "object",
+                            "required": [
+                              "type"
+                            ],
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "exit",
+                                  "timeout"
+                                ]
+                              },
+                              "exit_code": {
+                                "type": "integer"
+                              }
+                            }
+                          },
+                          "created_by": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    {
                       "type": "object",
                       "description": "Computer tool call output (computer_screenshot).",
                       "properties": {
@@ -114857,6 +115691,15 @@
                 },
                 "encrypted_content": {
                   "type": "string"
+                },
+                "environment": {
+                  "type": "object",
+                  "description": "Where a shell_call runs.",
+                  "additionalProperties": true
+                },
+                "max_output_length": {
+                  "type": "integer",
+                  "description": "Output length cap a shell_call_output was produced under."
                 }
               }
             }
@@ -115691,6 +116534,10 @@
                     "code_interpreter_call",
                     "local_shell_call",
                     "local_shell_call_output",
+                    "shell_call",
+                    "shell_call_output",
+                    "apply_patch_call",
+                    "apply_patch_call_output",
                     "mcp_call",
                     "custom_tool_call",
                     "custom_tool_call_output",
@@ -115898,7 +116745,7 @@
                   "type": "string"
                 },
                 "output": {
-                  "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                  "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                   "oneOf": [
                     {
                       "type": "string"
@@ -116063,6 +116910,47 @@
                       }
                     },
                     {
+                      "type": "array",
+                      "description": "Shell command results (shell_call_output), one per command.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "stdout",
+                          "stderr",
+                          "outcome"
+                        ],
+                        "properties": {
+                          "stdout": {
+                            "type": "string"
+                          },
+                          "stderr": {
+                            "type": "string"
+                          },
+                          "outcome": {
+                            "type": "object",
+                            "required": [
+                              "type"
+                            ],
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "exit",
+                                  "timeout"
+                                ]
+                              },
+                              "exit_code": {
+                                "type": "integer"
+                              }
+                            }
+                          },
+                          "created_by": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    {
                       "type": "object",
                       "description": "Computer tool call output (computer_screenshot).",
                       "properties": {
@@ -116133,6 +117021,15 @@
                 },
                 "encrypted_content": {
                   "type": "string"
+                },
+                "environment": {
+                  "type": "object",
+                  "description": "Where a shell_call runs.",
+                  "additionalProperties": true
+                },
+                "max_output_length": {
+                  "type": "integer",
+                  "description": "Output length cap a shell_call_output was produced under."
                 }
               }
             }
@@ -118309,6 +119206,10 @@
                     "code_interpreter_call",
                     "local_shell_call",
                     "local_shell_call_output",
+                    "shell_call",
+                    "shell_call_output",
+                    "apply_patch_call",
+                    "apply_patch_call_output",
                     "mcp_call",
                     "custom_tool_call",
                     "custom_tool_call_output",
@@ -118516,7 +119417,7 @@
                   "type": "string"
                 },
                 "output": {
-                  "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                  "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                   "oneOf": [
                     {
                       "type": "string"
@@ -118681,6 +119582,47 @@
                       }
                     },
                     {
+                      "type": "array",
+                      "description": "Shell command results (shell_call_output), one per command.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "stdout",
+                          "stderr",
+                          "outcome"
+                        ],
+                        "properties": {
+                          "stdout": {
+                            "type": "string"
+                          },
+                          "stderr": {
+                            "type": "string"
+                          },
+                          "outcome": {
+                            "type": "object",
+                            "required": [
+                              "type"
+                            ],
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "exit",
+                                  "timeout"
+                                ]
+                              },
+                              "exit_code": {
+                                "type": "integer"
+                              }
+                            }
+                          },
+                          "created_by": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    {
                       "type": "object",
                       "description": "Computer tool call output (computer_screenshot).",
                       "properties": {
@@ -118751,6 +119693,15 @@
                 },
                 "encrypted_content": {
                   "type": "string"
+                },
+                "environment": {
+                  "type": "object",
+                  "description": "Where a shell_call runs.",
+                  "additionalProperties": true
+                },
+                "max_output_length": {
+                  "type": "integer",
+                  "description": "Output length cap a shell_call_output was produced under."
                 }
               }
             }
@@ -120869,6 +121820,10 @@
                         "code_interpreter_call",
                         "local_shell_call",
                         "local_shell_call_output",
+                        "shell_call",
+                        "shell_call_output",
+                        "apply_patch_call",
+                        "apply_patch_call_output",
                         "mcp_call",
                         "custom_tool_call",
                         "custom_tool_call_output",
@@ -121076,7 +122031,7 @@
                       "type": "string"
                     },
                     "output": {
-                      "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                      "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                       "oneOf": [
                         {
                           "type": "string"
@@ -121241,6 +122196,47 @@
                           }
                         },
                         {
+                          "type": "array",
+                          "description": "Shell command results (shell_call_output), one per command.",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "stdout",
+                              "stderr",
+                              "outcome"
+                            ],
+                            "properties": {
+                              "stdout": {
+                                "type": "string"
+                              },
+                              "stderr": {
+                                "type": "string"
+                              },
+                              "outcome": {
+                                "type": "object",
+                                "required": [
+                                  "type"
+                                ],
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "enum": [
+                                      "exit",
+                                      "timeout"
+                                    ]
+                                  },
+                                  "exit_code": {
+                                    "type": "integer"
+                                  }
+                                }
+                              },
+                              "created_by": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        },
+                        {
                           "type": "object",
                           "description": "Computer tool call output (computer_screenshot).",
                           "properties": {
@@ -121311,6 +122307,15 @@
                     },
                     "encrypted_content": {
                       "type": "string"
+                    },
+                    "environment": {
+                      "type": "object",
+                      "description": "Where a shell_call runs.",
+                      "additionalProperties": true
+                    },
+                    "max_output_length": {
+                      "type": "integer",
+                      "description": "Output length cap a shell_call_output was produced under."
                     }
                   }
                 }
@@ -136427,6 +137432,10 @@
                     "code_interpreter_call",
                     "local_shell_call",
                     "local_shell_call_output",
+                    "shell_call",
+                    "shell_call_output",
+                    "apply_patch_call",
+                    "apply_patch_call_output",
                     "mcp_call",
                     "custom_tool_call",
                     "custom_tool_call_output",
@@ -136634,7 +137643,7 @@
                   "type": "string"
                 },
                 "output": {
-                  "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                  "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                   "oneOf": [
                     {
                       "type": "string"
@@ -136799,6 +137808,47 @@
                       }
                     },
                     {
+                      "type": "array",
+                      "description": "Shell command results (shell_call_output), one per command.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "stdout",
+                          "stderr",
+                          "outcome"
+                        ],
+                        "properties": {
+                          "stdout": {
+                            "type": "string"
+                          },
+                          "stderr": {
+                            "type": "string"
+                          },
+                          "outcome": {
+                            "type": "object",
+                            "required": [
+                              "type"
+                            ],
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "exit",
+                                  "timeout"
+                                ]
+                              },
+                              "exit_code": {
+                                "type": "integer"
+                              }
+                            }
+                          },
+                          "created_by": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    {
                       "type": "object",
                       "description": "Computer tool call output (computer_screenshot).",
                       "properties": {
@@ -136869,6 +137919,15 @@
                 },
                 "encrypted_content": {
                   "type": "string"
+                },
+                "environment": {
+                  "type": "object",
+                  "description": "Where a shell_call runs.",
+                  "additionalProperties": true
+                },
+                "max_output_length": {
+                  "type": "integer",
+                  "description": "Output length cap a shell_call_output was produced under."
                 }
               }
             }
@@ -136898,6 +137957,10 @@
                     "code_interpreter_call",
                     "local_shell_call",
                     "local_shell_call_output",
+                    "shell_call",
+                    "shell_call_output",
+                    "apply_patch_call",
+                    "apply_patch_call_output",
                     "mcp_call",
                     "custom_tool_call",
                     "custom_tool_call_output",
@@ -137105,7 +138168,7 @@
                   "type": "string"
                 },
                 "output": {
-                  "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, or a computer-tool screenshot object for computer_call_output.\n",
+                  "description": "Tool call output. A plain string for function/custom/local-shell tool\noutputs, an array of content blocks for structured function tool\noutputs, an array of command results for shell_call_output, or a\ncomputer-tool screenshot object for computer_call_output.\n",
                   "oneOf": [
                     {
                       "type": "string"
@@ -137270,6 +138333,47 @@
                       }
                     },
                     {
+                      "type": "array",
+                      "description": "Shell command results (shell_call_output), one per command.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "stdout",
+                          "stderr",
+                          "outcome"
+                        ],
+                        "properties": {
+                          "stdout": {
+                            "type": "string"
+                          },
+                          "stderr": {
+                            "type": "string"
+                          },
+                          "outcome": {
+                            "type": "object",
+                            "required": [
+                              "type"
+                            ],
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "exit",
+                                  "timeout"
+                                ]
+                              },
+                              "exit_code": {
+                                "type": "integer"
+                              }
+                            }
+                          },
+                          "created_by": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    {
                       "type": "object",
                       "description": "Computer tool call output (computer_screenshot).",
                       "properties": {
@@ -137340,6 +138444,15 @@
                 },
                 "encrypted_content": {
                   "type": "string"
+                },
+                "environment": {
+                  "type": "object",
+                  "description": "Where a shell_call runs.",
+                  "additionalProperties": true
+                },
+                "max_output_length": {
+                  "type": "integer",
+                  "description": "Output length cap a shell_call_output was produced under."
                 }
               }
             }
@@ -138363,8 +139476,10 @@
             "example": "bfst-A1b2C3d4..."
           },
           "description": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Optional free-text note about what the key is for."
           },
           "scopes": {
@@ -138376,20 +139491,26 @@
             "description": "Permission ids granted to this key. Each id is an RBAC (resource, operation)\npair from `GET /api/governance/rbac/permissions`.\n"
           },
           "created_by_user_id": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "User who created the key. Null when the deployment has no user identity on\nthe request (no-auth, password-only, or local-admin modes).\n"
           },
           "expires_at": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time",
-            "nullable": true,
             "description": "Expiry timestamp, or null if the key never expires."
           },
           "last_used_at": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time",
-            "nullable": true,
             "description": "Last time the key authenticated a request, or null if never used."
           },
           "created_at": {
@@ -138422,17 +139543,21 @@
             "description": "Unique name for the key."
           },
           "description": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Optional note about what the key is for."
           },
           "scopes": {
             "$ref": "#/components/schemas/APIKeyScopes"
           },
           "expires_at": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time",
-            "nullable": true,
             "description": "Expiry timestamp in RFC3339 format. Omit or send null for a key that never\nexpires.\n"
           }
         }
@@ -138446,8 +139571,10 @@
             "description": "New name for the key. Omit it, or send an empty string, to keep the\ncurrent name.\n"
           },
           "description": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Note about what the key is for. This field is always applied, so omitting\nit clears any existing description — send the current value to preserve it.\n"
           },
           "scopes": {
@@ -138459,7 +139586,6 @@
             "description": "Replaces the key's scopes in full. Omit to leave the current scopes\nunchanged. Permission ids come from\n`GET /api/governance/rbac/permissions`, and you can only grant permissions\nyou hold yourself.\n"
           },
           "expires_at": {
-            "nullable": true,
             "description": "New expiry. Send an RFC3339 timestamp to set one, an empty string to\nremove an existing expiry, or omit the field to leave it unchanged.\n",
             "oneOf": [
               {
@@ -138472,6 +139598,9 @@
                   ""
                 ],
                 "description": "Clears the existing expiry."
+              },
+              {
+                "type": "null"
               }
             ]
           }
