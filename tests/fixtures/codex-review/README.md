@@ -1,7 +1,8 @@
 # Recorded payloads for `scripts/codex-review-check.sh`
 
 Copied byte for byte from txehq/action-runner-ops `tests/fixtures/codex-review/` at 6d06919
-(TXE-4892); "here" below is that repository.
+(TXE-4892); "here" below is that repository. They were recorded before `THREADS_QUERY` read
+`resolvedBy.__typename`; the test cases that resolve a P0/P1 thread set it.
 
 `tests/codex_review_check_test.sh` runs the check over these, one directory per PR. Each
 directory holds the files `CODEX_REVIEW_FIXTURE_DIR` reads: `pull.json`, `reviews.json`,

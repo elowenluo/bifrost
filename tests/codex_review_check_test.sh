@@ -240,13 +240,29 @@ expect recorded-4024 fail "not resolved by a person: $P1_4024 (unresolved). Fix 
 
 # The same thread resolved by a person: passes, naming the resolver.
 new_case p1-resolved-by-user "$TXE_4024"
-edit p1-resolved-by-user review_threads.json "$(on_p1 '.isResolved = true | .resolvedBy = {login: "a-maintainer"}')"
+edit p1-resolved-by-user review_threads.json "$(on_p1 '.isResolved = true | .resolvedBy = {__typename: "User", login: "a-maintainer"}')"
 expect p1-resolved-by-user pass "resolved by a person: $P1_4024 resolved by a-maintainer"
 
 # Resolved by a [bot] login: not a person's decision.
 new_case p1-resolved-by-bot "$TXE_4024"
 edit p1-resolved-by-bot review_threads.json "$(on_p1 '.isResolved = true | .resolvedBy = {login: "github-actions[bot]"}')"
 expect p1-resolved-by-bot fail "$P1_4024 (resolved by a bot, github-actions[bot])"
+
+# Resolved by an App: resolvedBy is typed User, so GitHub returns it as null.
+new_case p1-resolved-by-app "$TXE_4024"
+edit p1-resolved-by-app review_threads.json "$(on_p1 '.isResolved = true | .resolvedBy = null')"
+expect p1-resolved-by-app fail "$P1_4024 (resolved by no named user)"
+
+# Were resolvedBy to widen to Actor, a Bot would come back without the [bot] suffix
+# (TXE-4892, the connector's P1 on txehq/bifrost PR 10): its type says it is not a person.
+new_case p1-resolved-by-graphql-bot "$TXE_4024"
+edit p1-resolved-by-graphql-bot review_threads.json "$(on_p1 '.isResolved = true | .resolvedBy = {__typename: "Bot", login: "github-actions"}')"
+expect p1-resolved-by-graphql-bot fail "$P1_4024 (resolved by a bot, github-actions)"
+
+# A resolver with no actor type is not shown to be a person either.
+new_case p1-resolved-no-type "$TXE_4024"
+edit p1-resolved-no-type review_threads.json "$(on_p1 '.isResolved = true | .resolvedBy = {login: "a-maintainer"}')"
+expect p1-resolved-no-type fail "$P1_4024 (resolved by a-maintainer, not a User: no actor type)"
 
 # Outdated by a later push: not a finding on the head, so not counted.
 new_case p1-outdated "$TXE_4024"

@@ -47,9 +47,13 @@
 #    connector's live findings decide. A live P0/P1 is a review
 #    thread whose first comment is the bot's, carries "P0 Badge" or "P1 Badge" and is not
 #    outdated: GitHub keeps every thread no push has outdated on the head, so the commit it
-#    names is not read. None live: pass. Each live one resolved by a login that does not end
-#    in [bot]: pass, printing thread, path and resolver. Otherwise fail. The threads come
-#    from one paginated GraphQL read; a failed read fails.
+#    names is not read. None live: pass. Each live one resolved by an actor whose GraphQL
+#    type is User and whose login does not end in [bot]: pass, printing thread, path and
+#    resolver. resolvedBy is typed User in GitHub's schema, so a thread an App resolves comes
+#    back with resolvedBy null and blocks; the type is read as well as the [bot] suffix in
+#    case the field ever widens to Actor, where a Bot's login has no suffix (TXE-4892, the
+#    connector's P1 on txehq/bifrost PR 10). Otherwise fail. The threads come from one
+#    paginated GraphQL read; a failed read fails.
 # security_review is printed, not gated on.
 #
 # Everything is read from the API at run time, never from the triggering event's text.
@@ -90,7 +94,7 @@ THREADS_QUERY='query($owner: String!, $name: String!, $pr: Int!, $endCursor: Str
         pageInfo { hasNextPage endCursor }
         nodes {
           isResolved isOutdated line originalLine
-          resolvedBy { login }
+          resolvedBy { __typename login }
           comments(first: 1) { nodes { databaseId author { __typename login } path body } }
         }
       }
@@ -149,11 +153,14 @@ live_threads() {
           | select($c.author.login == $bot and $c.author.__typename == "Bot"
                    and .isOutdated == false and ($c.body // "" | test("P[01] Badge")))
           | (.resolvedBy.login // "") as $who
-          | [(if .isResolved and $who != "" and ($who | endswith("[bot]") | not) then "ok" else "block" end),
+          | (.resolvedBy.__typename // "") as $kind
+          | [(if .isResolved and $who != "" and $kind == "User" and ($who | endswith("[bot]") | not)
+              then "ok" else "block" end),
              "thread \($c.databaseId) \($c.path):\(.line // .originalLine // "?")",
              (if .isResolved | not then "unresolved"
               elif $who == "" then "resolved by no named user"
-              elif ($who | endswith("[bot]")) then "resolved by a bot, \($who)"
+              elif $kind == "Bot" or ($who | endswith("[bot]")) then "resolved by a bot, \($who)"
+              elif $kind != "User" then "resolved by \($who), not a User: \(if $kind == "" then "no actor type" else $kind end)"
               else "resolved by \($who)" end),
              ($c.body | headline)] | @tsv)
     | join("\n")' <<<"$pages" 2>&1) || {
