@@ -2867,6 +2867,8 @@ jobs:
             ghcr.io:443
             pkg-containers.githubusercontent.com:443
             pypi.org:443
+            release-assets.githubusercontent.com:443
+            storage.googleapis.com:443
 
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -2878,6 +2880,15 @@ jobs:
       # Build exactly the commit the tests ran on; nothing newer is fetched in.
       - name: Assert the checkout is the tested commit
         run: '[ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::checkout $(git rev-parse HEAD) is not the tested commit $GITHUB_SHA"; exit 1; }'
+
+      # The finalize script reads core/go.mod with `go mod edit`, and the go directive
+      # needs Go 1.27.0. Without it the runner's older Go fetches a toolchain, and egress
+      # blocks that, so the release dies before it tags (TXE-4977).
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version: "1.27.0"
+          cache: false
 
       - name: Configure R2
         env:

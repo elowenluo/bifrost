@@ -9,7 +9,8 @@ detect-changes outputs they read, against scripted job results; no runner is inv
 
 It also pins the protected-main contract: release jobs build and tag the tested commit,
 never write main, and an image is published only after the bifrost-http release it
-ships has verified and completed.
+ships has verified and completed. And every job that runs a script calling go sets up
+the Go the workspace requires before it does.
 
 Usage: python3 test-release-gates.py
 """
@@ -51,6 +52,20 @@ PATCH_JOBS = {
     ("release-cli.yml", "push-mintlify-changelog"): "cli-docs-changelog",
 }
 UPLOAD_ARTIFACT = "actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f"
+# go.work's go directive. An older go on PATH fetches this toolchain from proxy.golang.org,
+# which most release jobs' egress allowlists block.
+WORKSPACE_GO = re.search(r"^go (\S+)$", (WORKFLOWS.parent.parent / "go.work").read_text(), re.M).group(1)
+GO_COMMAND = re.compile(r"(?:^|[\s;&|(`])go (?:build|env|generate|get|install|list|mod|run|test|vet|work)\b")
+
+
+def scripts_calling_go():
+    """Workflow scripts whose non-comment lines run a go command."""
+    found = set()
+    for script in (WORKFLOWS / "scripts").glob("*.sh"):
+        code = "\n".join(line for line in script.read_text().splitlines() if not line.lstrip().startswith("#"))
+        if GO_COMMAND.search(code):
+            found.add(script.name)
+    return found
 
 
 def evaluate(expression, context):
@@ -264,6 +279,31 @@ class ReleaseJobsLeaveMainToReviewedPRs(unittest.TestCase):
             runs = " ".join(step.get("run", "") for step in job["steps"])
             self.assertIn("is stale", runs)
             self.assertNotIn("git push", runs)
+
+
+class GoStepsHaveTheWorkspaceGo(unittest.TestCase):
+    """A release job that reaches go without setup-go gets the runner image's older Go,
+    which tries to fetch WORKSPACE_GO and is blocked: bifrost-http-release died that
+    way before tagging v2.1.3 (TXE-4977)."""
+
+    def test_the_finalize_script_is_detected_as_calling_go(self):
+        self.assertIn("release-bifrost-http-finalize.sh", scripts_calling_go())
+
+    def test_every_go_step_follows_setup_go_for_the_workspace_version(self):
+        go_scripts = scripts_calling_go()
+        checked = 0
+        for job_name, job in JOBS.items():
+            steps = job.get("steps") or []
+            for i, step in enumerate(steps):
+                run = step.get("run", "")
+                if not (GO_COMMAND.search(run) or any(script in run for script in go_scripts)):
+                    continue
+                checked += 1
+                setups = [s for s in steps[:i] if s.get("uses", "").startswith("actions/setup-go@")]
+                with self.subTest(job=job_name, step=step.get("name")):
+                    self.assertTrue(setups, "runs go with no actions/setup-go step before it")
+                    self.assertEqual(str(setups[-1].get("with", {}).get("go-version")), WORKSPACE_GO)
+        self.assertGreater(checked, 0)
 
 
 if __name__ == "__main__":
