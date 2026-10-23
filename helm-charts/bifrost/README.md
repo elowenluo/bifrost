@@ -4,13 +4,25 @@
 
 Official Helm charts for deploying [Bifrost](https://github.com/capsohq/bifrost) - a high-performance AI gateway with unified interface for multiple providers.
 
-**Latest Version:** 2.1.40
+**Latest Version:** 2.1.42
 
 ## Changelog
 
+
+### 2.1.41
+
+- Added `bifrost.governance.roles[].access_profiles` for granting multiple access profiles to a role. The plural list takes precedence over the deprecated singular `access_profile`; an explicit empty list removes all profile grants.
+- Added `bifrost.scim.trustedNetworks` — the private IP/CIDR allowlist the SSRF guard consults before the generic provider's outbound OIDC discovery calls (**Discover endpoints** / **Discover claims**), so a self-hosted IdP on `10.x`, `172.16-31.x`, or `192.168.x` is reachable from a declarative install instead of only from the dashboard. Each entry is `{ cidr, description }`: a bare IP is treated as a single host (`/32`, or `/128` for IPv6) and hostnames are rejected. Declaring the key makes Helm own the whole list - it replaces whatever is stored, and an explicit `trustedNetworks: []` clears dashboard-added ranges - while omitting it leaves them untouched. 
+- Added `mcp.clientConfigs[].perUserHeaderKeys` — the header names each caller must individually supply under `authType: per_user_headers` (e.g. `["Authorization"]`).
+- Added `bifrost.plugins.otel.config.overhead_breakdown_enabled` (default `false`) and `bifrost.plugins.telemetry.config.overhead_breakdown_enabled` - exports the per-component overhead histogram `bifrost_overhead_component_microseconds`, overhead latency split by the `overhead_component` label. 
+- Fixed `bifrost.plugins.otel.config.export_overhead_spans` not rendering into `config.json`.
+- Added `bifrost.accessProfiles[].virtual_mcps` and `bifrost.accessProfiles[].mcp_configs` (`{ mcp_client_id, tools_to_execute }`) — the current spelling of a profile's MCP grants. The values schema previously declared only the retired `mcp_tool_groups` / `mcp_servers` / `mcp_tool_overrides` keys under `additionalProperties: false`, so a chart using the keys Bifrost actually reads failed schema validation and MCP grants could not be managed declaratively at all. `tools_to_execute` is `["*"]` for every tool including future ones, `[]` for none, or a named list.
+- Virtual MCPs are now assigned **by name**: `bifrost.accessProfiles[].virtual_mcps[]` and `bifrost.governance.projects[].virtual_mcps[]` take `{ virtual_mcp_name }`, matching how `mcp_configs` names its MCP client. Resolved on startup; a name matching no Virtual MCP is refused. `virtual_mcp_id` is still accepted as an alternative and wins when both are set.
+- Deprecated `bifrost.accessProfiles[].mcp_tool_groups`, `.mcp_servers`, and `.mcp_tool_overrides`. They still render and Bifrost now folds them into `virtual_mcps` / `mcp_configs` at load time with a warning in the startup logs, instead of dropping them silently. `mcp_tool_groups` is ignored when `virtual_mcps` is present; `mcp_servers` becomes a `["*"]` allowlist except for clients `mcp_configs` already names.
+
 ### 2.1.40
 
-- Added `bifrost.governance.roles[].entity_dac` — per-entity Data Access Control overrides keyed by resource name, each set to `own-data`, `team-data`, or `all-data`. Resources accepting an override today: `Logs`, `MCPLogs`, `AuditLogs`, `VirtualKeys`, `Users`, `Teams`, `Customers`, `BusinessUnits`, `RBAC`, `APIKeys`, `AccessProfiles`, `PromptRepository`, `RoutingRules`, `GuardrailsConfig`, `MCPGateway`, `VirtualMCPs`, `Projects`
+- Added `bifrost.governance.roles[].entity_dac` — per-entity Data Access Control overrides keyed by resource name, each set to `own-data`, `team-data`, or `all-data`. Resources accepting an override today: `Logs`, `MCPLogs`, `AuditLogs`, `VirtualKeys`, `Users`, `Teams`, `Customers`, `BusinessUnits`, `RBAC`, `APIKeys`, `AccessProfiles`, `PromptRepository`, `RoutingRules`, `GuardrailsConfig`, `MCPGateway`, `VirtualMCPs`, `Projects` 
 
 ### 2.1.39
 
@@ -28,9 +40,6 @@ Official Helm charts for deploying [Bifrost](https://github.com/capsohq/bifrost)
 - Added `bifrost.client.vkRotationCooldown` (default `0`) — grace period after a virtual key rotation during which the previous key value still authenticates. Go duration string (e.g. `"5m"`), max 30 days; `0` disables
 - Added `databricks_key_config` (`workspace_url`, `api_format`, `client_id`/`client_secret` for OAuth M2M, `forward_gateway_tags`) to provider keys, with `bifrost.providers.databricks` examples in `values.yaml`.
 - Added `allow_all_providers` to `bifrost.governance.projects[]` and `bifrost.accessProfiles[]` (default `false`) — grant access to every provider, including ones without a `provider_configs` entry and providers added later; listed providers keep their own model, key, budget, and rate-limit rules. Renders into each entry's `allow_all_providers`.
-**Latest Version:** 2.1.38
-
-## Changelog
 
 ### 2.1.38
 
@@ -63,7 +72,6 @@ Official Helm charts for deploying [Bifrost](https://github.com/capsohq/bifrost)
 - Documented `endpoints` on the `bedrock` and `bedrock_mantle` key examples (AWS PrivateLink interface VPC endpoint hosts: `runtime`, `control_plane`, `mantle`, `agent_runtime`, `s3`). Passes through into `bedrock_key_config.endpoints` / `bedrock_mantle_key_config.endpoints`.
 - Extended `bifrost.governance.budgets[]` with quarterly resets (`reset_duration: "1Q"`) and `reset_config.quarter_start_month` (1–12, sets the fiscal Q1 month). Passes through into `budgets[].reset_config`.
 - Added `target` (`llm` default, or `mcp`) to `bifrost.governance` guardrail rules to select the rule's execution target. Passes through into the rule's `target`.
-
 
 ### 2.1.34
 
@@ -184,7 +192,7 @@ Official Helm charts for deploying [Bifrost](https://github.com/capsohq/bifrost)
 - `bifrost.plugins.otel.config` now accepts either the existing single-profile shape or a new `profiles` wrapper (`otelProfilesConfig`) with an array of profiles. Each profile is independently enabled/disabled. A shared `plugin_span_filter` can be set at the top level in either shape.
 - Added `disable_content_logging` to OTEL config (both single-profile and per-profile). When `true`, message content (input/output messages, embeddings, tool definitions, tool call arguments/results) is dropped from exported spans — only metadata (model, tokens, latency) is sent to the collector.
 - Added `otelPluginSpanFilter` (`mode`: `include`/`exclude`, `plugins` array) to the OTEL config schema, available in both single-profile and multi-profile shapes.
-- Added `calendar_aligned` to `bifrost.governance.modelConfigs[]`.
+- Added `calendar_aligned` to `bifrost.governance.modelConfigs[]`. 
 - Added `model_config_id` and `customer_id` as budget owner fields in `governance.budgets[]`, alongside the existing `virtual_key_id`, `provider_config_id`, and `team_id`.
 - Extended `attributeTeamMappings` and `attributeBusinessUnitMappings` in SCIM auth config with optional `attributeType` (`user` | `group`) and `attributeValue` fields to enable SCIM-driven team/business-unit provisioning.
 - Added OAuth MCP client config example to `values.yaml` showing `authType: oauth` with `oauthConfigId`.
@@ -554,7 +562,7 @@ helm install bifrost bifrost/bifrost -f my-values.yaml
 
 ```bash
 # Clone the repository
-git clone https://github.com/capsohq/bifrost.git
+git clone https://github.com/maximhq/bifrost.git
 cd bifrost/helm-charts
 
 # Install from local chart
@@ -642,7 +650,7 @@ needed.
 | `image.tag`        | Container image tag (required) | `""`                        |
 | `image.pullPolicy` | Image pull policy              | `IfNotPresent`              |
 
-> **Important:** You must specify the `image.tag`. See available tags at [Docker Hub](https://hub.docker.com/r/capsohq/bifrost/tags).
+> **Important:** You must specify the `image.tag`. See available tags at [Docker Hub](https://hub.docker.com/r/maximhq/bifrost/tags).
 
 ### Enterprise Private Registry
 
@@ -1244,8 +1252,8 @@ kubectl get secret bifrost -o yaml
 ## Resources
 
 - [Bifrost Documentation](https://docs.getbifrost.ai)
-- [GitHub Repository](https://github.com/capsohq/bifrost)
-- [Docker Hub](https://hub.docker.com/r/capsohq/bifrost)
+- [GitHub Repository](https://github.com/maximhq/bifrost)
+- [Docker Hub](https://hub.docker.com/r/maximhq/bifrost)
 - [Discord Community](https://discord.gg/exN5KAydbU)
 
 ## License
