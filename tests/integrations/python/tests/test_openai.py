@@ -4857,26 +4857,14 @@ class TestOpenAIIntegration:
             (
                 f"{base_url}/v1/realtime/client_secrets",
                 {"session": {"model": format_provider_model(provider, realtime_model)}},
-                "client_secrets",
-            ),
-            (
-                f"{base_url}/v1/realtime/sessions",
-                {"model": format_provider_model(provider, realtime_model)},
-                "sessions",
             ),
             (
                 f"{base_url}/openai/v1/realtime/client_secrets",
                 {"session": {"model": realtime_model}},
-                "client_secrets",
-            ),
-            (
-                f"{base_url}/openai/v1/realtime/sessions",
-                {"model": realtime_model},
-                "sessions",
             ),
         ]
 
-        for url, payload, response_shape in test_cases:
+        for url, payload in test_cases:
             result = run_realtime_client_secret_request(
                 url=url,
                 api_key=api_key,
@@ -4889,13 +4877,8 @@ class TestOpenAIIntegration:
                 f"Expected 200 from {url}, got {result['status_code']}: {result['body']}"
             )
             assert "session" in result["body"], f"Missing session object in response from {url}"
-            if response_shape == "sessions":
-                assert "client_secret" in result["body"], f"Missing client_secret in response from {url}"
-                assert result["body"]["client_secret"].get("value"), f"Missing client_secret.value from {url}"
-                assert result["body"]["client_secret"].get("expires_at"), f"Missing client_secret.expires_at from {url}"
-            else:
-                assert result["body"].get("value"), f"Missing top-level value from {url}"
-                assert result["body"].get("expires_at"), f"Missing top-level expires_at from {url}"
+            assert result["body"].get("value"), f"Missing top-level value from {url}"
+            assert result["body"].get("expires_at"), f"Missing top-level expires_at from {url}"
 
     @pytest.mark.parametrize(
         "provider,_model,vk_enabled",

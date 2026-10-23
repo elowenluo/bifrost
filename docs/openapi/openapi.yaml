@@ -281,8 +281,6 @@ paths:
     $ref: "./paths/inference/realtime.yaml#/realtime-calls"
   /v1/realtime/client_secrets:
     $ref: "./paths/inference/realtime.yaml#/realtime-client-secrets"
-  /v1/realtime/sessions:
-    $ref: "./paths/inference/realtime.yaml#/realtime-sessions"
 
   # ==================== OpenAI Integration ====================
   # Chat Completions
@@ -388,8 +386,6 @@ paths:
     $ref: "./paths/integrations/openai/realtime.yaml#/realtime-calls"
   /openai/v1/realtime/client_secrets:
     $ref: "./paths/integrations/openai/realtime.yaml#/realtime-client-secrets"
-  /openai/v1/realtime/sessions:
-    $ref: "./paths/integrations/openai/realtime.yaml#/realtime-sessions"
 
   # ==================== Anthropic Integration ====================
   # Messages API
