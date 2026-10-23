@@ -158,9 +158,10 @@ jq --arg host "$POSTGRES_HOST" --arg port "$POSTGRES_PORT" --arg user "$POSTGRES
 # Providers whose API key secret is unset get a local list-models stub instead of
 # their real endpoint (TXE-4950). The VK List Models Restriction folder needs one
 # VK-allowed provider (openai) that can list models and some disallowed ones
-# (mistral, groq) that can too, so its exclusion checks are not vacuous. A run
-# with the real secret set keeps the real provider; nothing else in the
-# collection calls these providers' inference endpoints.
+# (mistral, groq) that can too, so its exclusion checks are not vacuous. The
+# governance suites send chat completions through openai, which the stub answers
+# with fixed token counts (TXE-5026). A run with the real secret set keeps the
+# real provider.
 STUB_PORT="${LIST_MODELS_STUB_PORT:-18090}"
 STUBBED_PROVIDERS=""
 for provider in openai mistral groq; do
