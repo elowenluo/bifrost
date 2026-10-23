@@ -102,6 +102,13 @@ func (r *BifrostResponsesRequest) WithAnthropicBillingHeader() *BifrostResponses
 	return &copy
 }
 
+// IsStandaloneAnthropicBillingHeader reports whether text is exactly the billing
+// metadata line ExtractAnthropicBillingHeader removes, for byte-level callers that
+// never build a BifrostResponsesRequest.
+func IsStandaloneAnthropicBillingHeader(text string) bool {
+	return isStandaloneBillingHeader(text)
+}
+
 // Match an entire metadata line so mixed instruction blocks are left intact.
 func isStandaloneBillingHeader(text string) bool {
 	metadata, ok := strings.CutPrefix(strings.TrimSpace(text), "x-anthropic-billing-header:")

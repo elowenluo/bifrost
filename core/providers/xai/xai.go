@@ -521,6 +521,7 @@ func (provider *XAIProvider) Passthrough(ctx *schemas.BifrostContext, key schema
 	return anthropicmsg.Passthrough(ctx, provider.client, key, req, anthropicmsg.Config{
 		Provider: provider.GetProviderKey(), Endpoint: endpoint,
 		NetworkConfig: provider.networkConfig, CustomProviderConfig: provider.customProviderConfig, Logger: provider.logger,
+		StripAnthropicOnlyFields: true,
 	})
 }
 
@@ -532,5 +533,6 @@ func (provider *XAIProvider) PassthroughStream(ctx *schemas.BifrostContext, post
 	return anthropicmsg.PassthroughStream(ctx, postHookRunner, postHookSpanFinalizer, provider.streamingClient, key, req, anthropicmsg.Config{
 		Provider: provider.GetProviderKey(), Endpoint: endpoint,
 		NetworkConfig: provider.networkConfig, CustomProviderConfig: provider.customProviderConfig, Logger: provider.logger,
+		StripAnthropicOnlyFields: true,
 	})
 }
