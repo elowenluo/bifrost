@@ -160,11 +160,12 @@ jq --arg host "$POSTGRES_HOST" --arg port "$POSTGRES_PORT" --arg user "$POSTGRES
 # VK-allowed provider (openai) that can list models and some disallowed ones
 # (mistral, groq) that can too, so its exclusion checks are not vacuous. The
 # governance suites send chat completions through openai, which the stub answers
-# with fixed token counts (TXE-5026). A run with the real secret set keeps the
-# real provider.
+# with fixed token counts (TXE-5026). The VK Allow All Providers folder needs
+# anthropic, which the VK grants without a config of its own, to list models too
+# (upstream #7375). A run with the real secret set keeps the real provider.
 STUB_PORT="${LIST_MODELS_STUB_PORT:-18090}"
 STUBBED_PROVIDERS=""
-for provider in openai mistral groq; do
+for provider in openai mistral groq anthropic; do
   key_var="$(printf '%s' "$provider" | tr '[:lower:]' '[:upper:]')_API_KEY"
   if [ -z "${!key_var:-}" ]; then
     STUBBED_PROVIDERS="$STUBBED_PROVIDERS $provider"

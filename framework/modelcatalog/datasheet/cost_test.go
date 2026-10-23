@@ -260,6 +260,19 @@ func makeRerankResponse(provider schemas.ModelProvider, model string, usage *sch
 	}
 }
 
+// makeDecisionResponse builds a minimal BifrostResponse for a decision request.
+func makeDecisionResponse(provider schemas.ModelProvider, model string, usage *schemas.BifrostLLMUsage) *schemas.BifrostResponse {
+	return &schemas.BifrostResponse{
+		DecisionResponse: &schemas.BifrostDecisionResponse{
+			Usage: usage,
+			ExtraFields: schemas.BifrostResponseExtraFields{
+				RequestType: schemas.DecisionRequest,
+				RoutingInfo: routingInfoFor(provider, model),
+			},
+		},
+	}
+}
+
 // makeImageResponse builds a minimal BifrostResponse for an image generation request.
 func makeImageResponse(provider schemas.ModelProvider, model string, usage *schemas.ImageUsage) *schemas.BifrostResponse {
 	return &schemas.BifrostResponse{
@@ -301,6 +314,10 @@ func computeEmbeddingCostTotal(pricing *configstoreTables.TableModelPricing, usa
 
 func computeRerankCostTotal(pricing *configstoreTables.TableModelPricing, usage *schemas.BifrostLLMUsage, tier serviceTier) float64 {
 	return bcTotal(computeRerankCost(pricing, usage, tier))
+}
+
+func computeDecisionCostTotal(pricing *configstoreTables.TableModelPricing, usage *schemas.BifrostLLMUsage, tier serviceTier) float64 {
+	return bcTotal(computeDecisionCost(pricing, usage, tier))
 }
 
 func computeSpeechCostTotal(pricing *configstoreTables.TableModelPricing, usage *schemas.BifrostLLMUsage, audioSeconds *float64, audioTextInputChars int, tier serviceTier) float64 {
@@ -5371,6 +5388,154 @@ func TestCalculateCost_RerankPerQuery(t *testing.T) {
 		resp := makeRerankResponse(schemas.Cohere, "rerank-v3.5", nil)
 		assert.InDelta(t, 0.002, s.CalculateCost(resp, nil), 1e-12)
 	})
+}
+
+// =========================================================================
+// computeDecisionCost — unit tests
+// =========================================================================
+
+func TestComputeDecisionCost_InputOnlyBilling(t *testing.T) {
+	// Typesafe's jev pricing shape: input tokens billed, output tokens free.
+	p := configstoreTables.TableModelPricing{
+		InputCostPerToken:  bifrost.Ptr(0.000000042),
+		OutputCostPerToken: bifrost.Ptr(0.0),
+	}
+	usage := &schemas.BifrostLLMUsage{
+		PromptTokens:     50000,
+		CompletionTokens: 40,
+		TotalTokens:      50040,
+	}
+	cost := computeDecisionCostTotal(&p, usage, serviceTier{})
+	assert.InDelta(t, 50000*0.000000042, cost, 1e-12)
+}
+
+func TestComputeDecisionCost_OutputRateHonored(t *testing.T) {
+	p := configstoreTables.TableModelPricing{
+		InputCostPerToken:  bifrost.Ptr(0.000001),
+		OutputCostPerToken: bifrost.Ptr(0.000002),
+	}
+	usage := &schemas.BifrostLLMUsage{
+		PromptTokens:     1000,
+		CompletionTokens: 500,
+		TotalTokens:      1500,
+	}
+	cost := computeDecisionCostTotal(&p, usage, serviceTier{})
+	assert.InDelta(t, 1000*0.000001+500*0.000002, cost, 1e-12)
+}
+
+func TestComputeDecisionCost_NilUsage(t *testing.T) {
+	p := configstoreTables.TableModelPricing{InputCostPerToken: new(0.000000042)}
+	assert.Equal(t, 0.0, computeDecisionCostTotal(&p, nil, serviceTier{}))
+}
+
+func TestCalculateCost_DecisionTokenBilling(t *testing.T) {
+	// Pins the dispatch arm: an unhandled request type silently falls into
+	// CalculateCost's default nil branch and every decision would cost zero.
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey("jev-1.13.0", "typesafe", "decisions"): {
+			Model: "jev-1.13.0", Provider: "typesafe", Mode: "decisions",
+			InputCostPerToken:  bifrost.Ptr(0.000000042),
+			OutputCostPerToken: bifrost.Ptr(0.0),
+		},
+	})
+
+	resp := makeDecisionResponse(schemas.Typesafe, "jev-1.13.0", &schemas.BifrostLLMUsage{
+		PromptTokens: 50000,
+		TotalTokens:  50000,
+	})
+
+	assert.InDelta(t, 50000*0.000000042, s.CalculateCost(resp, nil), 1e-12)
+}
+
+// A model with no decisions row answers a decision by emulation: one Responses call
+// to the provider, which must be billed as that text call, cache reads and writes
+// included, from its chat row or, failing that, its responses row. Without the
+// fallback the decision found no row and cost nothing, so every emulated decision
+// was a free paid call outside every budget.
+func TestCalculateCost_EmulatedDecisionBilledAsTextCall(t *testing.T) {
+	usage := &schemas.BifrostLLMUsage{
+		PromptTokens:     1000,
+		CompletionTokens: 100,
+		TotalTokens:      1100,
+		PromptTokensDetails: &schemas.ChatPromptTokensDetails{
+			CachedReadTokens:  800,
+			CachedWriteTokens: 100,
+		},
+	}
+	row := configstoreTables.TableModelPricing{
+		Model: "gpt-5.5", Provider: "openai",
+		InputCostPerToken:           bifrost.Ptr(0.000003),
+		OutputCostPerToken:          bifrost.Ptr(0.00001),
+		CacheReadInputTokenCost:     bifrost.Ptr(0.0000003),
+		CacheCreationInputTokenCost: bifrost.Ptr(0.00000375),
+	}
+	want := computeTextCostTotal(&row, usage, serviceTier{})
+	if want <= 0 {
+		t.Fatalf("text cost of the emulated call = %v, want > 0", want)
+	}
+
+	for _, mode := range []string{"chat", "responses"} {
+		t.Run(mode, func(t *testing.T) {
+			r := row
+			r.Mode = mode
+			s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+				makeKey("gpt-5.5", "openai", mode): r,
+			})
+			got := s.CalculateCost(makeDecisionResponse(schemas.OpenAI, "gpt-5.5", usage), nil)
+			assert.InDelta(t, want, got, 1e-12)
+		})
+	}
+}
+
+// An emulated decision served at priority is billed at the priority rate, as its text
+// call would be.
+func TestCalculateCost_EmulatedDecisionUsesServedTier(t *testing.T) {
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey("gpt-5.5", "openai", "chat"): {
+			Model: "gpt-5.5", Provider: "openai", Mode: "chat",
+			InputCostPerToken: bifrost.Ptr(0.000001), OutputCostPerToken: bifrost.Ptr(0.000002),
+			InputCostPerTokenPriority: bifrost.Ptr(0.000005),
+		},
+	})
+	resp := makeDecisionResponse(schemas.OpenAI, "gpt-5.5", &schemas.BifrostLLMUsage{PromptTokens: 1000, TotalTokens: 1000})
+	priority := schemas.BifrostServiceTierPriority
+	resp.DecisionResponse.ServiceTier = &priority
+	assert.InDelta(t, 1000*0.000005, s.CalculateCost(resp, nil), 1e-12)
+}
+
+// A failed request billed from its bare usage keeps the served processing tier.
+func TestCalculateCostForUsage_UsesServedServiceTier(t *testing.T) {
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey("gpt-5.5", "openai", "responses"): {
+			Model: "gpt-5.5", Provider: "openai", Mode: "responses",
+			InputCostPerToken: bifrost.Ptr(0.000001), OutputCostPerToken: bifrost.Ptr(0.000002),
+			InputCostPerTokenPriority: bifrost.Ptr(0.000005),
+		},
+	})
+	priority := schemas.BifrostServiceTierPriority
+	usage := &schemas.BifrostLLMUsage{PromptTokens: 1000, TotalTokens: 1000, ServiceTier: &priority}
+	assert.InDelta(t, 1000*0.000005, s.CalculateCostForUsage(usage, schemas.OpenAI, "gpt-5.5", schemas.ResponsesRequest, nil), 1e-12)
+}
+
+// A native decisions row keeps the token-only decision pricing even when the model
+// also has a chat row.
+func TestCalculateCost_NativeDecisionRowWinsOverChatRow(t *testing.T) {
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey("jev-1.13.0", "typesafe", "decisions"): {
+			Model: "jev-1.13.0", Provider: "typesafe", Mode: "decisions",
+			InputCostPerToken:  bifrost.Ptr(0.000000042),
+			OutputCostPerToken: bifrost.Ptr(0.0),
+		},
+		makeKey("jev-1.13.0", "typesafe", "chat"): {
+			Model: "jev-1.13.0", Provider: "typesafe", Mode: "chat",
+			InputCostPerToken:  bifrost.Ptr(0.001),
+			OutputCostPerToken: bifrost.Ptr(0.001),
+		},
+	})
+	resp := makeDecisionResponse(schemas.Typesafe, "jev-1.13.0", &schemas.BifrostLLMUsage{
+		PromptTokens: 50000, CompletionTokens: 40, TotalTokens: 50040,
+	})
+	assert.InDelta(t, 50000*0.000000042, s.CalculateCost(resp, nil), 1e-12)
 }
 
 func TestCalculateCost_RerankPerTokenStillWorks(t *testing.T) {

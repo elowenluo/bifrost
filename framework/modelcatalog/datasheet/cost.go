@@ -210,7 +210,7 @@ func (s *Store) CalculateCostBreakdownForUsage(usage *schemas.BifrostLLMUsage, p
 	// Apply the served tier (fast mode / data residency) carried on the usage so
 	// cancelled/failed fast or US-residency streams keep their multiplier.
 	input := costInput{usage: usage}
-	input.tier = tierFromResponse(nil, usage.Speed, usage.InferenceGeo)
+	input.tier = tierFromResponse(usage.ServiceTier, usage.Speed, usage.InferenceGeo)
 
 	return s.computeCostFromInput(
 		input,
@@ -654,6 +654,8 @@ func (s *Store) computeCostFromInput(input costInput, routingInfo schemas.Routin
 		cost = computeEmbeddingCost(pricing, input.usage, input.tier)
 	case schemas.RerankRequest:
 		cost = computeRerankCost(pricing, input.usage, input.tier)
+	case schemas.DecisionRequest:
+		cost = computeDecisionCost(pricing, input.usage, input.tier)
 	case schemas.SpeechRequest:
 		cost = computeSpeechCost(pricing, input.usage, input.audioSeconds, input.audioTextInputChars, input.tier)
 	case schemas.TranscriptionRequest:
@@ -758,6 +760,10 @@ func extractCostInput(result *schemas.BifrostResponse) costInput {
 	// carries no usage at all (Vertex reports none) still owes one query's cost.
 	case result.RerankResponse != nil:
 		input.usage = result.RerankResponse.Usage
+
+	case result.DecisionResponse != nil && result.DecisionResponse.Usage != nil:
+		input.usage = result.DecisionResponse.Usage
+		input.tier = tierFromResponse(result.DecisionResponse.ServiceTier, result.DecisionResponse.Speed, result.DecisionResponse.InferenceGeo)
 
 	case result.SpeechResponse != nil && result.SpeechResponse.Usage != nil:
 		input.usage = speechUsageToBifrostUsage(result.SpeechResponse.Usage)
@@ -1254,6 +1260,26 @@ func computeRerankCost(pricing *configstoreTables.TableModelPricing, usage *sche
 		outputDetails = &schemas.OutputCostDetails{TextCost: outputCost, SearchQueriesCost: searchCost}
 	}
 	return newInputOutputCostWithDetails(inputTokensCost, outputTokensCost, inputDetails, outputDetails)
+}
+
+// computeDecisionCost prices a decision request on token usage. Typesafe bills
+// input tokens only, so the output rate is normally zero, but both sides are
+// honored from the datasheet so a provider that later charges output stays
+// correct without a code change.
+//
+// A decision priced from a chat or responses row was answered by emulation, the
+// text call it made, so it is priced as one, with its cache read and write rates.
+func computeDecisionCost(pricing *configstoreTables.TableModelPricing, usage *schemas.BifrostLLMUsage, tier serviceTier) *schemas.BifrostCost {
+	if usage == nil {
+		return nil
+	}
+	if pricing.Mode != "" && pricing.Mode != normalizeRequestType(schemas.DecisionRequest) {
+		return computeTextCost(pricing, usage, tier)
+	}
+	tierTokens := usage.PromptTokens
+	inputCost := float64(usage.PromptTokens) * tieredInputRate(pricing, tierTokens, tier)
+	outputCost := float64(usage.CompletionTokens) * tieredOutputRate(pricing, tierTokens, tier)
+	return newInputOutputCost(inputCost, outputCost)
 }
 
 // newInputOutputCost builds a BifrostCost from separate input and output costs,
@@ -2169,7 +2195,13 @@ func (s *Store) resolvePricing(routingInfo schemas.RoutingInfo, requestType sche
 		}
 		base, exists := s.getBasePricing(candidate, catalogProvider, requestType)
 		if exists && base != nil {
-			result, _ := s.applyPricingOverrides(overrideKey, requestType, *base, scopes)
+			result, matched := s.applyPricingOverrides(overrideKey, requestType, *base, scopes)
+			// A decision priced from a text row was answered by emulation, one Responses
+			// call, so an override written for that call applies when no decision-specific
+			// one does.
+			if !matched && requestType == schemas.DecisionRequest && base.Mode != normalizeRequestType(schemas.DecisionRequest) {
+				result, _ = s.applyPricingOverrides(overrideKey, schemas.ResponsesRequest, *base, scopes)
+			}
 			return &result
 		}
 		s.logger.Debug("pricing not found for %s, trying next candidate", candidate)
@@ -2210,6 +2242,22 @@ func (s *Store) getBasePricing(model, provider string, requestType schemas.Reque
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	pricing, ok := s.getBasePricingLocked(model, provider, requestType)
+	// A model with no decisions row answers a decision by emulation, which is a
+	// Responses call: price it from the model's chat row, or its responses row,
+	// rather than at zero (see computeDecisionCost).
+	if !ok && requestType == schemas.DecisionRequest {
+		pricing, ok = s.getBasePricingLocked(model, provider, schemas.ChatCompletionRequest)
+		if !ok {
+			pricing, ok = s.getBasePricingLocked(model, provider, schemas.ResponsesRequest)
+		}
+	}
+	return pricing, ok
+}
+
+// getBasePricingLocked is getBasePricing's lookup for one request type; the caller
+// holds s.mu for reading.
+func (s *Store) getBasePricingLocked(model, provider string, requestType schemas.RequestType) (*configstoreTables.TableModelPricing, bool) {
 	mode := normalizeRequestType(requestType)
 	fallbackMode, hasFallbackMode := chatResponsesFallbackMode(requestType)
 

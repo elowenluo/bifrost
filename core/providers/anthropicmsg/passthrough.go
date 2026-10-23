@@ -10,6 +10,7 @@ import (
 
 	providerUtils "github.com/capsohq/bifrost/core/providers/utils"
 	"github.com/capsohq/bifrost/core/schemas"
+	"github.com/tidwall/gjson"
 	"github.com/valyala/fasthttp"
 )
 
@@ -33,6 +34,10 @@ type Config struct {
 	NetworkConfig        schemas.NetworkConfig
 	CustomProviderConfig *schemas.CustomProviderConfig
 	Logger               schemas.Logger
+	// StripAnthropicOnlyFields is set by providers that are not Anthropic but serve
+	// its Messages API (xAI): the body loses the Claude Code fields only Anthropic
+	// accepts, as upstream strips them on every converted non-Anthropic request.
+	StripAnthropicOnlyFields bool
 }
 
 func (c Config) requestURL(req *schemas.BifrostPassthroughRequest) string {
@@ -41,6 +46,67 @@ func (c Config) requestURL(req *schemas.BifrostPassthroughRequest) string {
 		url += "?" + req.RawQuery
 	}
 	return url
+}
+
+func (c Config) requestBody(req *schemas.BifrostPassthroughRequest) ([]byte, *schemas.BifrostError) {
+	if !c.StripAnthropicOnlyFields || !IsMessagesPath(req.Path) {
+		return req.Body, nil
+	}
+	body, err := StripAnthropicOnlyFields(req.Body)
+	if err != nil {
+		return nil, providerUtils.NewBifrostOperationError("failed to prepare native Messages request body", err)
+	}
+	return body, nil
+}
+
+// StripAnthropicOnlyFields removes from a native Messages body what only Anthropic
+// should receive: Claude Code's undocumented `safeguards` and `diagnostics` fields,
+// and its per-request billing metadata line in `system`. The billing line changes on
+// every request, so left in place it would defeat the provider's prompt cache
+// (upstream #7393, #7243, #7431). A body without them is returned unchanged.
+func StripAnthropicOnlyFields(body []byte) ([]byte, error) {
+	var err error
+	if providerUtils.JSONFieldExists(body, "safeguards") {
+		if body, err = providerUtils.DeleteJSONField(body, "safeguards"); err != nil {
+			return nil, fmt.Errorf("strip safeguards: %w", err)
+		}
+	}
+	if providerUtils.JSONFieldExists(body, "diagnostics") {
+		if body, err = providerUtils.DeleteJSONField(body, "diagnostics"); err != nil {
+			return nil, fmt.Errorf("strip diagnostics: %w", err)
+		}
+	}
+	system := providerUtils.GetJSONField(body, "system")
+	switch {
+	case system.Type == gjson.String:
+		if schemas.IsStandaloneAnthropicBillingHeader(system.Str) {
+			if body, err = providerUtils.DeleteJSONField(body, "system"); err != nil {
+				return nil, fmt.Errorf("strip billing header: %w", err)
+			}
+		}
+	case system.IsArray():
+		blocks := system.Array()
+		kept := make([]string, 0, len(blocks))
+		for _, block := range blocks {
+			text := block.Get("text")
+			if block.Get("type").Str == "text" && text.Type == gjson.String && schemas.IsStandaloneAnthropicBillingHeader(text.Str) {
+				continue
+			}
+			kept = append(kept, block.Raw)
+		}
+		if len(kept) == len(blocks) {
+			return body, nil
+		}
+		if len(kept) == 0 {
+			body, err = providerUtils.DeleteJSONField(body, "system")
+		} else {
+			body, err = providerUtils.SetRawJSONField(body, "system", []byte("["+strings.Join(kept, ",")+"]"))
+		}
+		if err != nil {
+			return nil, fmt.Errorf("strip billing header: %w", err)
+		}
+	}
+	return body, nil
 }
 
 func (c Config) setHeaders(ctx *schemas.BifrostContext, req *fasthttp.Request, key schemas.Key, safeHeaders map[string]string) {
@@ -84,7 +150,11 @@ func Passthrough(ctx *schemas.BifrostContext, client *fasthttp.Client, key schem
 	providerUtils.StripCallerAuthForInsecureURL(requestURL, req.SafeHeaders)
 	cfg.setHeaders(ctx, upstreamReq, key, req.SafeHeaders)
 	if !providerUtils.ApplyLargePayloadRequestBodyWithModelNormalization(ctx, upstreamReq, cfg.Provider) {
-		upstreamReq.SetBody(req.Body)
+		body, bifrostErr := cfg.requestBody(req)
+		if bifrostErr != nil {
+			return nil, bifrostErr
+		}
+		upstreamReq.SetBody(body)
 	}
 
 	latency, bifrostErr, wait := providerUtils.MakeRequestWithContext(ctx, client, upstreamReq, resp)
@@ -132,7 +202,12 @@ func PassthroughStream(ctx *schemas.BifrostContext, postHookRunner schemas.PostH
 	cfg.setHeaders(ctx, upstreamReq, key, req.SafeHeaders)
 	upstreamReq.Header.Set("Connection", "close")
 	if !providerUtils.ApplyLargePayloadRequestBodyWithModelNormalization(ctx, upstreamReq, cfg.Provider) {
-		upstreamReq.SetBody(req.Body)
+		body, bifrostErr := cfg.requestBody(req)
+		if bifrostErr != nil {
+			fasthttp.ReleaseResponse(resp)
+			return nil, bifrostErr
+		}
+		upstreamReq.SetBody(body)
 	}
 
 	activeClient := providerUtils.PrepareResponseStreaming(ctx, streamingClient, resp)

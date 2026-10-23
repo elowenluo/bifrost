@@ -291,6 +291,11 @@ func (provider *XAIProvider) Rerank(ctx *schemas.BifrostContext, key schemas.Key
 	return nil, providerUtils.NewUnsupportedOperationError(schemas.RerankRequest, provider.GetProviderKey())
 }
 
+// Decision is not supported by the XAI provider.
+func (provider *XAIProvider) Decision(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostDecisionRequest) (*schemas.BifrostDecisionResponse, *schemas.BifrostError) {
+	return nil, providerUtils.NewUnsupportedOperationError(schemas.DecisionRequest, provider.GetProviderKey())
+}
+
 // OCR is not supported by the Xai provider.
 func (provider *XAIProvider) OCR(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostOCRRequest) (*schemas.BifrostOCRResponse, *schemas.BifrostError) {
 	return nil, providerUtils.NewUnsupportedOperationError(schemas.OCRRequest, provider.GetProviderKey())
@@ -516,6 +521,7 @@ func (provider *XAIProvider) Passthrough(ctx *schemas.BifrostContext, key schema
 	return anthropicmsg.Passthrough(ctx, provider.client, key, req, anthropicmsg.Config{
 		Provider: provider.GetProviderKey(), Endpoint: endpoint,
 		NetworkConfig: provider.networkConfig, CustomProviderConfig: provider.customProviderConfig, Logger: provider.logger,
+		StripAnthropicOnlyFields: true,
 	})
 }
 
@@ -527,5 +533,6 @@ func (provider *XAIProvider) PassthroughStream(ctx *schemas.BifrostContext, post
 	return anthropicmsg.PassthroughStream(ctx, postHookRunner, postHookSpanFinalizer, provider.streamingClient, key, req, anthropicmsg.Config{
 		Provider: provider.GetProviderKey(), Endpoint: endpoint,
 		NetworkConfig: provider.networkConfig, CustomProviderConfig: provider.customProviderConfig, Logger: provider.logger,
+		StripAnthropicOnlyFields: true,
 	})
 }

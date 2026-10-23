@@ -35,6 +35,15 @@ const MODELS = {
   ],
 };
 
+// Anthropic's list-models shape, which its provider client parses instead of
+// OpenAI's. The api-management "VK Allow All Providers" folder (upstream #7375)
+// needs a provider the VK grants by allow_all_providers alone, with no config of
+// its own, to show up in the /v1/models fan-out; anthropic is that provider.
+// Anthropic is stubbed for list-models only: it has no chat route here.
+const ANTHROPIC_MODELS = [
+  { id: "claude-haiku-4-5", type: "model", display_name: "Claude Haiku 4.5", created_at: "2025-10-01T00:00:00Z" },
+];
+
 const port = Number(process.argv[2]);
 if (!Number.isInteger(port) || port <= 0) {
   console.error("usage: node list-models-stub.js <port>");
@@ -90,6 +99,11 @@ const server = http.createServer((req, res) => {
     return;
   }
   const match = /^\/([a-z0-9-]+)\/v1\/models\/?$/.exec(path);
+  if (match && req.method === "GET" && match[1] === "anthropic") {
+    const ids = ANTHROPIC_MODELS.map((m) => m.id);
+    res.end(JSON.stringify({ data: ANTHROPIC_MODELS, has_more: false, first_id: ids[0], last_id: ids[ids.length - 1] }));
+    return;
+  }
   const models = match && req.method === "GET" ? MODELS[match[1]] : undefined;
   if (!models) {
     notFound(res, req, path);
@@ -99,5 +113,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`list-models stub listening on 127.0.0.1:${port} (${Object.keys(MODELS).join(", ")})`);
+  console.log(`list-models stub listening on 127.0.0.1:${port} (${Object.keys(MODELS).concat("anthropic").join(", ")})`);
 });
