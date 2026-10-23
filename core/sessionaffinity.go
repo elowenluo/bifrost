@@ -277,6 +277,22 @@ func RouteStateValue(route schemas.Route) string {
 	return string(route.Provider) + "/" + route.Model
 }
 
+// callerKeySelection describes the key the caller chose for this request's provider, or
+// returns "" when the caller chose none: a direct key, a key name, or a key id other than
+// the routing-rule pin core committed into the same context value.
+func callerKeySelection(ctx *schemas.BifrostContext) string {
+	if _, ok := ctx.Value(schemas.BifrostContextKeyDirectKey).(schemas.Key); ok {
+		return "a direct key"
+	}
+	if name, _ := ctx.Value(schemas.BifrostContextKeyAPIKeyName).(string); strings.TrimSpace(name) != "" {
+		return "an explicit key name"
+	}
+	if id, _ := ctx.Value(schemas.BifrostContextKeyAPIKeyID).(string); strings.TrimSpace(id) != "" && strings.TrimSpace(id) != routingKeyPinFromContext(ctx) {
+		return "an explicit key id"
+	}
+	return ""
+}
+
 // ParseRouteState reads a route back from what RouteStateValue wrote. ok is false when the
 // value names no provider.
 func ParseRouteState(value string) (schemas.Route, bool) {
@@ -304,12 +320,14 @@ func (bifrost *Bifrost) resolveSessionRoute(ctx *schemas.BifrostContext, request
 	if provider == "" {
 		return
 	}
-	// A direct key is the caller's credential for this provider, and it stays on the
-	// context for the primary attempt (only fallbacks clear it). Moving the primary to
-	// another provider would send that credential to the wrong upstream, so the route
-	// the caller's key was given for stands.
-	if _, ok := ctx.Value(schemas.BifrostContextKeyDirectKey).(schemas.Key); ok {
-		ctx.AppendRoutingEngineLog(schemas.RoutingEngineSessionAffinity, schemas.LogLevelInfo, fmt.Sprintf("Request carries a direct key for %s, so the session does not move it", provider))
+	// A direct key, or an explicit key selector (x-bf-api-key / x-bf-api-key-id), names
+	// the caller's credential for this provider and stays on the context for the primary
+	// attempt (only fallbacks clear it). Moving the primary to another provider would send
+	// that credential, or a same-named key of another account, to the wrong upstream, so
+	// the route the caller chose the key for stands. A routing-rule pin is not the
+	// caller's: it moves with its route below.
+	if reason := callerKeySelection(ctx); reason != "" {
+		ctx.AppendRoutingEngineLog(schemas.RoutingEngineSessionAffinity, schemas.LogLevelInfo, fmt.Sprintf("Request carries %s for %s, so the session does not move it", reason, provider))
 		return
 	}
 	// Every route carries the key pinned for it: the primary's is the routing pin

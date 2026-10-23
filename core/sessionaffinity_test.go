@@ -862,6 +862,35 @@ func TestResolveSessionRouteAppliesTheAnswer(t *testing.T) {
 		}
 	})
 
+	// An explicit key selector names a key of the request's own provider, so it holds the
+	// route too; a routing-rule pin does not, since it moves with its route.
+	t.Run("a request with an explicit key selector is not moved", func(t *testing.T) {
+		for name, set := range map[string]func(*schemas.BifrostContext){
+			"key name": func(ctx *schemas.BifrostContext) { ctx.SetValue(schemas.BifrostContextKeyAPIKeyName, "prod") },
+			"key id":   func(ctx *schemas.BifrostContext) { ctx.SetValue(schemas.BifrostContextKeyAPIKeyID, "k-caller") },
+		} {
+			client, fake := setup(t, reverse)
+			ctx := sessionCtx("s")
+			set(ctx)
+			req := newRequest(schemas.OpenAI)
+			client.resolveSessionRoute(ctx, routeOf("", "gpt-4o"), req)
+			if provider, _, _ := req.GetRequestFields(); provider != schemas.OpenAI {
+				t.Fatalf("%s: request moved to %s", name, provider)
+			}
+			if fake.routeCalls != 0 {
+				t.Fatalf("%s: ResolveRoute was asked", name)
+			}
+		}
+		client, fake := setup(t, reverse)
+		ctx := sessionCtx("s")
+		ctx.SetValue(schemas.BifrostContextKeyRoutingPinnedAPIKeyID, "k-rule")
+		ctx.SetValue(schemas.BifrostContextKeyAPIKeyID, "k-rule")
+		client.resolveSessionRoute(ctx, routeOf("", "gpt-4o"), newRequest(schemas.OpenAI))
+		if fake.routeCalls != 1 {
+			t.Fatal("a routing-rule pin must not hold the route")
+		}
+	})
+
 	t.Run("a request no hook could route is not offered", func(t *testing.T) {
 		client, fake := setup(t, reverse)
 		client.resolveSessionRoute(sessionCtx("s"), routeOf("", "gpt-4o"), newRequest(""))
