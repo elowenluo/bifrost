@@ -80,6 +80,8 @@ NC='\033[0m' # No Color
 TEMP_DIR=""
 # Holds the binaries resolve_fork_baselines extracts; removed on exit.
 FORK_BASELINE_DIR=""
+# The extraction container resolve_fork_baselines has created and not yet removed.
+FORK_BASELINE_CID=""
 BIFROST_PID=""
 # Set once this run starts a bifrost server; cleanup only sweeps the port after that.
 BIFROST_STARTED=false
@@ -152,6 +154,9 @@ cleanup() {
   if [ -n "${TEMP_DIR:-}" ] && [ -d "$TEMP_DIR" ]; then
     log_info "Removing temp directory: $TEMP_DIR"
     rm -rf "$TEMP_DIR"
+  fi
+  if [ -n "${FORK_BASELINE_CID:-}" ]; then
+    docker rm -v "$FORK_BASELINE_CID" >/dev/null 2>&1 || true
   fi
   if [ -n "${FORK_BASELINE_DIR:-}" ] && [ -d "$FORK_BASELINE_DIR" ]; then
     rm -rf "$FORK_BASELINE_DIR"
@@ -259,16 +264,20 @@ resolve_fork_baselines() {
       return 1
     fi
     binary="$dir/bifrost-http-${version}"
-    if ! cid=$(DOCKER_CONFIG="$dir/docker" docker create "ghcr.io/${repository}:${version}"); then
+    # --pull=always: the probe vouched for the registry's tag, not for a local image
+    # that happens to carry the same name. -v on removal: the image declares a VOLUME,
+    # so even a container that never starts allocates an anonymous one.
+    if ! cid=$(DOCKER_CONFIG="$dir/docker" docker create --pull=always "ghcr.io/${repository}:${version}"); then
       log_error "Could not pull ghcr.io/${repository}:${version}"
       return 1
     fi
+    FORK_BASELINE_CID="$cid"
     if ! docker cp "${cid}:/app/main" "$binary" >/dev/null; then
-      docker rm "$cid" >/dev/null 2>&1 || true
       log_error "ghcr.io/${repository}:${version} has no /app/main"
       return 1
     fi
-    docker rm "$cid" >/dev/null 2>&1 || true
+    docker rm -v "$cid" >/dev/null 2>&1 || true
+    FORK_BASELINE_CID=""
     chmod +x "$binary"
     log_info "  ${version}: fork image ghcr.io/${repository}:${version}"
     MIGRATION_LOCAL_BINARIES="${MIGRATION_LOCAL_BINARIES:+$MIGRATION_LOCAL_BINARIES }${version}=${binary}"
