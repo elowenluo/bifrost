@@ -175,3 +175,21 @@ func TestModelSupportsPromptCacheBreakpointCoversGPT6(t *testing.T) {
 	assert.True(t, ModelSupportsPromptCaching(BedrockMantle, "openai.gpt-6-astra"))
 	assert.False(t, ModelSupportsPromptCaching(OpenAI, "gpt-5.5"))
 }
+
+// DeepCopyResponsesMessage keeps a computer-toolset member call's toolset name.
+func TestDeepCopyResponsesMessageCopiesToolsetName(t *testing.T) {
+	original := ResponsesMessage{
+		Type: Ptr(ResponsesMessageTypeFunctionCall),
+		ResponsesToolMessage: &ResponsesToolMessage{
+			CallID:      Ptr("call_1"),
+			ToolsetName: Ptr("computer"),
+		},
+	}
+	copied := DeepCopyResponsesMessage(original)
+	if copied.ResponsesToolMessage == nil || copied.ResponsesToolMessage.ToolsetName == nil || *copied.ResponsesToolMessage.ToolsetName != "computer" {
+		t.Fatalf("toolset name not copied: %#v", copied.ResponsesToolMessage)
+	}
+	if copied.ResponsesToolMessage.ToolsetName == original.ResponsesToolMessage.ToolsetName {
+		t.Fatal("toolset name pointer was aliased")
+	}
+}

@@ -282,6 +282,11 @@ func deepCopyResponsesMessage(original schemas.ResponsesMessage) schemas.Respons
 			copy.ResponsesToolMessage.Arguments = &copyArguments
 		}
 
+		if original.ResponsesToolMessage.ToolsetName != nil {
+			copyToolsetName := *original.ResponsesToolMessage.ToolsetName
+			copy.ResponsesToolMessage.ToolsetName = &copyToolsetName
+		}
+
 		if original.ResponsesToolMessage.Namespace != nil {
 			copyNamespace := *original.ResponsesToolMessage.Namespace
 			copy.ResponsesToolMessage.Namespace = &copyNamespace

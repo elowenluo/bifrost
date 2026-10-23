@@ -628,3 +628,23 @@ func TestProcessStreamingResponseKeepsImageGenerationCall(t *testing.T) {
 	require.Equal(t, "generate", *out.Action.ResponsesToolCallActionStr)
 	require.Equal(t, "1024x1024", *out.ResponsesImageGenerationCall.Size)
 }
+
+// A computer-toolset member call carries its toolset name on output_item.added; the
+// accumulator's copies must keep it, or a replayed snapshot loses the toolset identity.
+func TestDeepCopyResponsesMessageCopiesToolsetName(t *testing.T) {
+	original := schemas.ResponsesMessage{
+		Type: schemas.Ptr(schemas.ResponsesMessageTypeFunctionCall),
+		ResponsesToolMessage: &schemas.ResponsesToolMessage{
+			CallID:      schemas.Ptr("call_1"),
+			Name:        schemas.Ptr("screenshot"),
+			ToolsetName: schemas.Ptr("computer"),
+		},
+	}
+	copied := deepCopyResponsesMessage(original)
+	if copied.ResponsesToolMessage == nil || copied.ResponsesToolMessage.ToolsetName == nil || *copied.ResponsesToolMessage.ToolsetName != "computer" {
+		t.Fatalf("toolset name not copied: %#v", copied.ResponsesToolMessage)
+	}
+	if copied.ResponsesToolMessage.ToolsetName == original.ResponsesToolMessage.ToolsetName {
+		t.Fatal("toolset name pointer was aliased")
+	}
+}
