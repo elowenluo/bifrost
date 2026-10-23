@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import http from "node:http";
+import { decodeOtlpSpans } from "./lib/otlp-traces.mjs";
 
 const baseURL = (process.env.BIFROST_E2E_BASE_URL || process.env.BIFROST_BASE_URL || "http://localhost:8080").replace(/\/+$/, "");
 const adminAuthHeader = process.env.BIFROST_E2E_AUTH_HEADER || "";
@@ -430,16 +431,35 @@ async function assertOtelErrorTrace(id, label) {
 // finish reason. The chat path already emits gen_ai.response.finish_reasons;
 // the Responses path reads the top-level stop_reason instead of per-choice
 // finish reasons and used to drop it, leaving refusals invisible in OTEL.
+//
+// The export is decoded rather than searched as bytes: "refusal" already occurs in
+// the request id, and the singular attribute name is a prefix of the plural one, so a
+// substring check passed with either attribute missing or carrying the wrong value.
 async function assertOtelResponsesFinishReason() {
 	const entry = await poll("OTEL responses trace receiver", 20000, () =>
 		state.otelTraceRequests.find((item) => item.body.includes(Buffer.from(responsesRefusalRequestID))),
 	);
-	assertBufferContainsAll("OTEL responses trace export", entry.body, [
-		responsesRefusalRequestID,
-		"gen_ai.response.finish_reason",
-		"gen_ai.response.finish_reasons",
-		RESPONSES_STOP_REASON,
-	]);
+	const spans = decodeOtlpSpans(entry.body);
+	const root = spans.find((span) => span.attributes["bifrost.request.id"] === responsesRefusalRequestID);
+	if (!root) {
+		throw new Error(`OTEL responses trace export has no span with bifrost.request.id=${responsesRefusalRequestID}`);
+	}
+	const finishSpans = spans.filter(
+		(span) => span.traceId === root.traceId && "gen_ai.response.finish_reason" in span.attributes,
+	);
+	if (finishSpans.length === 0) {
+		throw new Error(`OTEL responses trace ${root.traceId} has no span with gen_ai.response.finish_reason`);
+	}
+	for (const span of finishSpans) {
+		const singular = span.attributes["gen_ai.response.finish_reason"];
+		const plural = span.attributes["gen_ai.response.finish_reasons"];
+		if (singular !== RESPONSES_STOP_REASON) {
+			throw new Error(`span ${span.name}: gen_ai.response.finish_reason = ${JSON.stringify(singular)}, want ${RESPONSES_STOP_REASON}`);
+		}
+		if (!Array.isArray(plural) || plural.length !== 1 || plural[0] !== RESPONSES_STOP_REASON) {
+			throw new Error(`span ${span.name}: gen_ai.response.finish_reasons = ${JSON.stringify(plural)}, want ["${RESPONSES_STOP_REASON}"]`);
+		}
+	}
 	assertBufferContainsNone("OTEL responses trace export", entry.body, ["I can't help with that."]);
 }
 
