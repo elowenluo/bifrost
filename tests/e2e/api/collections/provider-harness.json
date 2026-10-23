@@ -150218,22 +150218,10 @@
                   "    pm.expect(ratio, 'expected a 3:2 image, got ' + dims.w + 'x' + dims.h).to.be.within(1.4, 1.6);",
                   "  });",
                   "}",
-                  "// Gemini image generation occasionally answers without an image. That is model behavior, so",
-                  "// the same request is sent again, at most twice, and the check fails if none brings one back.",
-                  "if (image) {",
-                  "  check(image, 1);",
-                  "} else {",
-                  "  var header = [];",
-                  "  pm.request.headers.each(function (h) { if (!h.disabled) { header.push({ key: h.key, value: pm.variables.replaceIn(h.value) }); } });",
-                  "  (function retry(n) {",
-                  "    pm.sendRequest({ url: pm.variables.replaceIn(pm.request.url.toString()), method: 'POST', header: header, body: { mode: 'raw', raw: pm.variables.replaceIn(pm.request.body.raw) } }, function (err, res) {",
-                  "      var img = null;",
-                  "      if (!err && res.code === 200) { try { img = imageOf(res.json()); } catch (e) { img = null; } }",
-                  "      if (img || n >= 2) { return check(img, n + 1); }",
-                  "      retry(n + 1);",
-                  "    });",
-                  "  })(1);",
-                  "}"
+                  "// Gemini image generation occasionally answers without an image. That fails the",
+                  "// check rather than being retried here: a pm.sendRequest retry is a paid request",
+                  "// the harness budget (HARNESS_MAX_REQUESTS) never reserved.",
+                  "check(image, 1);"
                 ]
               }
             }
@@ -150317,22 +150305,10 @@
                   "    pm.expect(ratio, 'expected a 3:2 image, got ' + dims.w + 'x' + dims.h).to.be.within(1.4, 1.6);",
                   "  });",
                   "}",
-                  "// Gemini image generation occasionally answers without an image. That is model behavior, so",
-                  "// the same request is sent again, at most twice, and the check fails if none brings one back.",
-                  "if (image) {",
-                  "  check(image, 1);",
-                  "} else {",
-                  "  var header = [];",
-                  "  pm.request.headers.each(function (h) { if (!h.disabled) { header.push({ key: h.key, value: pm.variables.replaceIn(h.value) }); } });",
-                  "  (function retry(n) {",
-                  "    pm.sendRequest({ url: pm.variables.replaceIn(pm.request.url.toString()), method: 'POST', header: header, body: { mode: 'raw', raw: pm.variables.replaceIn(pm.request.body.raw) } }, function (err, res) {",
-                  "      var img = null;",
-                  "      if (!err && res.code === 200) { try { img = imageOf(res.json()); } catch (e) { img = null; } }",
-                  "      if (img || n >= 2) { return check(img, n + 1); }",
-                  "      retry(n + 1);",
-                  "    });",
-                  "  })(1);",
-                  "}"
+                  "// Gemini image generation occasionally answers without an image. That fails the",
+                  "// check rather than being retried here: a pm.sendRequest retry is a paid request",
+                  "// the harness budget (HARNESS_MAX_REQUESTS) never reserved.",
+                  "check(image, 1);"
                 ]
               }
             }
