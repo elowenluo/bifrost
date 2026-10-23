@@ -63,6 +63,13 @@ case "$TEST_FILTER" in
     fi
     ;;
 esac
+# The filter narrows only the --parallel-files path, which drives the suites file by
+# file. Refuse it here, before anything starts, rather than run both full suites -
+# every paid provider request outside the scope the caller asked for.
+if [ -n "$TEST_FILTER" ] && [ "$PARALLEL_FILES" != true ]; then
+  echo "❌ INTEGRATION_TEST_FILTER='$TEST_FILTER' needs --parallel-files; without it both full suites would run" >&2
+  exit 2
+fi
 
 # wait_for_test_slot frees a slot with `wait -f -n -p`, and -p arrived in bash
 # 5.1. Checked explicitly so an older shell fails here with a readable message
@@ -851,14 +858,7 @@ if [ "$PARALLEL_FILES" = true ]; then
 else
   # Preserve the original sequential behavior for local and reusable-workflow
   # callers unless they explicitly opt into file-level parallelism.
-  #
-  # The filter only has a meaning in the parallel path, which drives the suites
-  # file by file; the sequential path hands each suite its own runner and lets
-  # that runner collect everything. Say so rather than silently running the full
-  # suite the caller thought they had narrowed.
-  if [ -n "$TEST_FILTER" ]; then
-    echo "⚠️  INTEGRATION_TEST_FILTER='$TEST_FILTER' is ignored without --parallel-files; running both full suites" >&2
-  fi
+  # (A filter without --parallel-files was refused at startup.)
   run_python_tests
   install_typescript_dependencies
   run_typescript_tests
