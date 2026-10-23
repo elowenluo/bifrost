@@ -1,9 +1,12 @@
 package integrations
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 
+	"github.com/bytedance/sonic"
 	bifrost "github.com/capsohq/bifrost/core"
 	"github.com/capsohq/bifrost/core/providers/typesafe"
 	"github.com/capsohq/bifrost/core/schemas"
@@ -52,10 +55,18 @@ func CreateTypesafeRouteConfigs(pathPrefix string) []RouteConfig {
 			return nil, errors.New("invalid request type")
 		},
 		DecisionResponseConverter: func(ctx *schemas.BifrostContext, resp *schemas.BifrostDecisionResponse) (interface{}, error) {
-			if resp.ExtraFields.Provider == schemas.Typesafe && resp.ExtraFields.RawResponse != nil {
+			native, err := typesafe.ToTypesafeNativeDecisionResponse(resp)
+			if err != nil {
+				return nil, err
+			}
+			// The raw provider body was kept before post-hooks ran; relay it only while it
+			// still carries the answers the processed response does, so a post-hook's change
+			// reaches the client.
+			if resp.ExtraFields.Provider == schemas.Typesafe && resp.ExtraFields.RawResponse != nil &&
+				typesafeRawAnswersMatch(resp.ExtraFields.RawResponse, native) {
 				return resp.ExtraFields.RawResponse, nil
 			}
-			return typesafe.ToTypesafeNativeDecisionResponse(resp)
+			return native, nil
 		},
 		ErrorConverter: func(ctx *schemas.BifrostContext, err *schemas.BifrostError) interface{} {
 			return typesafe.ToTypesafeNativeError(err)
@@ -94,4 +105,32 @@ func CreateTypesafeRouteConfigs(pathPrefix string) []RouteConfig {
 	})
 
 	return routes
+}
+
+// typesafeRawAnswersMatch reports whether a raw systemone body carries the same answers
+// as native, compared in their serialized form. A body that cannot be read as a systemone
+// response does not match.
+func typesafeRawAnswersMatch(raw interface{}, native *typesafe.TypesafeDecisionResponse) bool {
+	var body []byte
+	switch v := raw.(type) {
+	case json.RawMessage:
+		body = v
+	case []byte:
+		body = v
+	case string:
+		body = []byte(v)
+	default:
+		marshaled, err := sonic.Marshal(v)
+		if err != nil {
+			return false
+		}
+		body = marshaled
+	}
+	var parsed typesafe.TypesafeDecisionResponse
+	if err := sonic.Unmarshal(body, &parsed); err != nil {
+		return false
+	}
+	got, err1 := sonic.ConfigStd.Marshal(parsed.Answers)
+	want, err2 := sonic.ConfigStd.Marshal(native.Answers)
+	return err1 == nil && err2 == nil && bytes.Equal(got, want)
 }
