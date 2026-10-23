@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -247,8 +248,9 @@ func (t *contextTransport) RoundTrip(hc *fasthttp.HostClient, req *fasthttp.Requ
 	// does, since a consumer may mark the connection unusable mid-body.
 	closeConn := resetConnection || req.ConnectionClose() || resp.ConnectionClose()
 	body := &streamBody{
-		reader: newStreamBodyReader(resp, br),
-		conn:   conn,
+		reader:               newStreamBodyReader(resp, br),
+		truncationReadsAsEOF: isEventStream(resp),
+		conn:                 conn,
 		release: func(discard bool) {
 			hc.ReleaseReader(br)
 			if discard || closeConn || resp.ConnectionClose() {
@@ -331,11 +333,42 @@ func newStreamBodyReader(resp *fasthttp.Response, br *bufio.Reader) io.Reader {
 	case contentLength == -1:
 		return &chunkedBody{chunked: httputil.NewChunkedReader(br), br: br, resp: resp}
 	case contentLength >= 0:
-		return io.LimitReader(br, int64(contentLength))
+		return &contentLengthBody{r: br, remaining: int64(contentLength)}
 	default:
 		// Identity encoding without a length: the body ends when the peer closes.
 		return br
 	}
+}
+
+// contentLengthBody reads exactly the advertised Content-Length. Unlike
+// io.LimitReader it reports a peer that closes early as io.ErrUnexpectedEOF, so a
+// shortened body is never mistaken for a complete one.
+type contentLengthBody struct {
+	r         io.Reader
+	remaining int64
+}
+
+func (c *contentLengthBody) Read(p []byte) (int, error) {
+	if c.remaining <= 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > c.remaining {
+		p = p[:c.remaining]
+	}
+	n, err := c.r.Read(p)
+	c.remaining -= int64(n)
+	if errors.Is(err, io.EOF) && c.remaining > 0 {
+		err = io.ErrUnexpectedEOF
+	} else if err == nil && c.remaining == 0 {
+		err = io.EOF
+	}
+	return n, err
+}
+
+// isEventStream reports whether the response is server-sent events, the one body
+// whose consumers detect truncation themselves (see streamBody.Read).
+func isEventStream(resp *fasthttp.Response) bool {
+	return bytes.HasPrefix(bytes.ToLower(bytes.TrimSpace(resp.Header.ContentType())), []byte("text/event-stream"))
 }
 
 type eofReader struct{}
@@ -374,13 +407,17 @@ func (c *chunkedBody) Read(p []byte) (int, error) {
 // read is running. Only CloseWithError is implemented, never io.Closer, because
 // fasthttp's closeBodyStreamReader would call both.
 type streamBody struct {
-	reader    io.Reader
-	conn      net.Conn
-	release   func(discard bool)
-	closed    atomic.Bool
-	fullyRead bool
-	readLock  sync.Mutex
-	closeOnce sync.Once
+	reader io.Reader
+	// truncationReadsAsEOF keeps fasthttp's contract for event streams: a peer
+	// that closes early reads as io.EOF (see Read). Every other body reports it
+	// as io.ErrUnexpectedEOF.
+	truncationReadsAsEOF bool
+	conn                 net.Conn
+	release              func(discard bool)
+	closed               atomic.Bool
+	fullyRead            bool
+	readLock             sync.Mutex
+	closeOnce            sync.Once
 }
 
 func (s *streamBody) Read(p []byte) (int, error) {
@@ -395,15 +432,19 @@ func (s *streamBody) Read(p []byte) (int, error) {
 	n, err := s.reader.Read(p)
 	if errors.Is(err, io.EOF) {
 		s.fullyRead = true
-	} else if errors.Is(err, io.ErrUnexpectedEOF) {
+	} else if errors.Is(err, io.ErrUnexpectedEOF) && s.truncationReadsAsEOF {
 		// The peer closed before the terminating 0-length chunk. fasthttp's own
 		// streaming reader reports that as a plain io.EOF, and every provider read
 		// loop plus the semantic truncation check (#5546) is built on that contract:
 		// an EOF without a terminal marker becomes the retryable 502 truncation
 		// error, while any other read error is a generic stream failure. The
 		// standard-library chunked reader says io.ErrUnexpectedEOF for the same
-		// close, so restore the contract here. fullyRead stays false: the half-read
-		// connection is closed on release, never returned to the pool.
+		// close, so restore the contract here, for event streams only: an SSE read
+		// loop judges completeness by its terminal marker, but any other body (a
+		// large JSON response, say) has no such check and would pass a shortened
+		// body off as complete, so it keeps io.ErrUnexpectedEOF. fullyRead stays
+		// false either way: the half-read connection is closed on release, never
+		// returned to the pool.
 		err = io.EOF
 	}
 	return n, err

@@ -644,6 +644,49 @@ func TestContextTransport_TruncatedChunkedStreamReadsAsEOFAndDiscardsConn(t *tes
 	}
 }
 
+// TestContextTransport_TruncatedNonEventStreamBodiesReportUnexpectedEOF: a body
+// other than an event stream has no terminal marker for its consumer to check, so
+// an upstream that closes early must surface as io.ErrUnexpectedEOF rather than
+// a clean EOF. Otherwise a large JSON response advertised at 256 KiB that stops
+// after 96 KiB reaches the client as a shortened body with no error. Both framings
+// are covered, and the Content-Length framing keeps the EOF contract for SSE.
+func TestContextTransport_TruncatedNonEventStreamBodiesReportUnexpectedEOF(t *testing.T) {
+	cases := []struct {
+		name, head, body string
+		wantErr          error
+	}{
+		{"content-length json", "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n", `{"partial":`, io.ErrUnexpectedEOF},
+		{"chunked json", "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n", "b\r\n{\"partial\":\r\n", io.ErrUnexpectedEOF},
+		{"content-length event stream", "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 100\r\n\r\n", "data: a\n\n", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newScriptedServer(t, func(conn net.Conn, br *bufio.Reader) {
+				if !readRequest(br) {
+					return
+				}
+				writeAll(t, conn, tc.head+tc.body)
+				// Returning closes conn before the advertised end of the body.
+			})
+			client := BuildStreamingClient(srv.client(5 * time.Second))
+			req, resp := streamGet(t, client, "GET")
+			defer fasthttp.ReleaseRequest(req)
+			defer fasthttp.ReleaseResponse(resp)
+			body, err := io.ReadAll(resp.BodyStream())
+			_ = resp.CloseBodyStream()
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("truncated event stream read error = %v, want a plain io.EOF so the SSE truncation check decides", err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("truncated body read %q with error %v, want %v", body, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 // TestContextTransport_ContentLengthAndIdentityBodies covers the two
 // non-chunked framings of a streamed body.
 func TestContextTransport_ContentLengthAndIdentityBodies(t *testing.T) {
