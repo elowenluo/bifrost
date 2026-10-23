@@ -4592,19 +4592,33 @@ func (s *RDBLogStore) DeleteLogs(ctx context.Context, ids []string) error {
 // MCP Tool Log Methods
 // ============================================================================
 
+// whereMultiValueDimension filters a dimension that has both a scalar id column
+// and a JSON-array column: on Postgres a row matches through either, elsewhere
+// through the scalar column only, exactly as applyFilters does for logs.
+func (s *RDBLogStore) whereMultiValueDimension(q *gorm.DB, scalarCol, arrayCol string, ids []string) *gorm.DB {
+	if s.db.Dialector.Name() == "postgres" {
+		sql, args := multiValueDimensionFilterSQL(scalarCol, arrayCol, ids)
+		return q.Where(sql, args...)
+	}
+	return q.Where(scalarCol+" IN ?", ids)
+}
+
 // applyMCPFilters applies search filters to a GORM query for MCP tool logs
 func (s *RDBLogStore) applyMCPFilters(baseQuery *gorm.DB, filters MCPToolLogSearchFilters) *gorm.DB {
 	if len(filters.UserIDs) > 0 {
 		baseQuery = baseQuery.Where("user_id IN ?", filters.UserIDs)
 	}
+	// Team, customer and business unit match the scalar column or the JSON-array
+	// column, as in applyFilters: the enterprise user/access-profile path records
+	// every membership in the array and may leave the scalar NULL.
 	if len(filters.TeamIDs) > 0 {
-		baseQuery = baseQuery.Where("team_id IN ?", filters.TeamIDs)
+		baseQuery = s.whereMultiValueDimension(baseQuery, "team_id", "team_ids", filters.TeamIDs)
 	}
 	if len(filters.CustomerIDs) > 0 {
-		baseQuery = baseQuery.Where("customer_id IN ?", filters.CustomerIDs)
+		baseQuery = s.whereMultiValueDimension(baseQuery, "customer_id", "customer_ids", filters.CustomerIDs)
 	}
 	if len(filters.BusinessUnitIDs) > 0 {
-		baseQuery = baseQuery.Where("business_unit_id IN ?", filters.BusinessUnitIDs)
+		baseQuery = s.whereMultiValueDimension(baseQuery, "business_unit_id", "business_unit_ids", filters.BusinessUnitIDs)
 	}
 	if len(filters.ProjectIDs) > 0 {
 		baseQuery = baseQuery.Where("project_id IN ?", filters.ProjectIDs)
