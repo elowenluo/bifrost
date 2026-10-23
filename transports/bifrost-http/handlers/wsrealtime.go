@@ -325,8 +325,9 @@ func (h *WSRealtimeHandler) handleTranscriptionUpgrade(
 		}
 		h.client.RunPreRequestHooks(preReqCtx, preReq)
 		// The transcription model arrives in-band after the upgrade, so the resolution check
-		// necessarily runs post-upgrade here. It still runs before the session slot and the
-		// upstream connection, so an unresolved credential spends nothing beyond the socket.
+		// necessarily runs post-upgrade here. The session slot is already held (an idle
+		// bootstrap must count against MaxConnections), but the check still runs before
+		// the upstream connection, so an unresolved credential spends no provider session.
 		if authErr := refuseUnresolvedRealtimeCredential(
 			h.config.ClientConfig.EnforceAuthOnInference,
 			preReqCtx,

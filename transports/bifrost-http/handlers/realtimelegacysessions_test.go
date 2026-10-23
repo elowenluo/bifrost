@@ -14,6 +14,7 @@ import (
 	bifrost "github.com/capsohq/bifrost/core"
 	"github.com/capsohq/bifrost/core/schemas"
 	"github.com/capsohq/bifrost/framework/configstore"
+	"github.com/capsohq/bifrost/framework/kvstore"
 	"github.com/capsohq/bifrost/transports/bifrost-http/lib"
 	"github.com/fasthttp/router"
 	"github.com/stretchr/testify/require"
@@ -113,7 +114,8 @@ func (a legacySessionAccount) GetConfigForProvider(schemas.ModelProvider) (*sche
 // retired beta routes and the GA route, through the real handler and OpenAI
 // provider: a beta request reaches the upstream as a GA client-secret request and
 // the client receives the beta realtime.session object, while the GA route is
-// passed through unchanged.
+// passed through unchanged apart from the Bifrost-minted secret (upstream #7317),
+// which on every route maps back to the provider's token.
 func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 	SetLogger(&mockLogger{})
 	var mu sync.Mutex
@@ -137,7 +139,7 @@ func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"value":"ek_abc","expires_at":1760000000,"session":{"type":"realtime","object":"realtime.session","id":"sess_9","model":"gpt-realtime","output_modalities":["audio"],"audio":{"output":{"voice":"alloy"}}}}`))
+		_, _ = w.Write([]byte(`{"value":"ek_abc","expires_at":4102444800,"session":{"type":"realtime","object":"realtime.session","id":"sess_9","model":"gpt-realtime","output_modalities":["audio"],"audio":{"output":{"voice":"alloy"}}}}`))
 	}))
 	defer upstream.Close()
 
@@ -148,7 +150,21 @@ func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Shutdown()
 
-	h := NewRealtimeClientSecretsHandler(client, &lib.Config{ClientConfig: &configstore.ClientConfig{}})
+	kv, err := kvstore.New(kvstore.Config{})
+	require.NoError(t, err)
+	defer kv.Close()
+	h := NewRealtimeClientSecretsHandler(client, &lib.Config{ClientConfig: &configstore.ClientConfig{}, KVStore: kv})
+	requireMintedSecret := func(value any, label string) {
+		t.Helper()
+		token, _ := value.(string)
+		require.True(t, strings.HasPrefix(token, "ek_bf_"), "%s: client secret %q must be Bifrost-minted", label, token)
+		raw, err := kv.Get(buildRealtimeEphemeralKeyMappingKey(token))
+		require.NoError(t, err, label)
+		mapping, ok := raw.(realtimeEphemeralKeyMapping)
+		require.True(t, ok, "%s: mapping type %T", label, raw)
+		require.Equal(t, "ek_abc", mapping.ProviderToken, label)
+		require.Equal(t, "k1", mapping.KeyID, label)
+	}
 	r := router.New()
 	h.RegisterRoutes(r)
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -185,7 +201,11 @@ func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 		require.Equal(t, "sess_9", out["id"], path)
 		require.Equal(t, []any{"audio", "text"}, out["modalities"], path)
 		require.Equal(t, "alloy", out["voice"], path)
-		require.Equal(t, map[string]any{"value": "ek_abc", "expires_at": float64(1760000000)}, out["client_secret"], path)
+		secret, ok := out["client_secret"].(map[string]any)
+		require.True(t, ok, "%s: client_secret %v", path, out["client_secret"])
+		require.Len(t, secret, 2, path)
+		require.Equal(t, float64(4102444800), secret["expires_at"], path)
+		requireMintedSecret(secret["value"], path)
 	}
 
 	status, nested := post("/v1/realtime/sessions", `{"session":{"model":"openai/gpt-realtime","instructions":"Keep answers brief"}}`)
@@ -203,6 +223,7 @@ func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 
 	status, out := post("/v1/realtime/client_secrets", `{"session":{"type":"realtime","model":"openai/gpt-realtime"}}`)
 	require.Equal(t, 200, status, "%v", out)
-	require.Equal(t, "ek_abc", out["value"], "the GA route returns the GA shape unchanged")
+	requireMintedSecret(out["value"], "GA route")
+	require.Equal(t, float64(4102444800), out["expires_at"], "the GA route keeps the GA shape")
 	require.NotContains(t, out, "client_secret")
 }
