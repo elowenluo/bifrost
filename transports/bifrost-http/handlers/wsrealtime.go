@@ -136,7 +136,7 @@ func (h *WSRealtimeHandler) handleUpgrade(ctx *fasthttp.RequestCtx) {
 
 	if strings.EqualFold(strings.TrimSpace(string(ctx.QueryArgs().Peek("intent"))), "transcription") {
 		populateRealtimeRequestContext(ctx, preReqCtx)
-		h.handleTranscriptionUpgrade(ctx, preReqCtx, preReqCancel, auth, path)
+		h.handleTranscriptionUpgrade(ctx, preReqCtx, preReqCancel, auth, path, strings.TrimSpace(modelParam))
 		return
 	}
 
@@ -251,6 +251,7 @@ func (h *WSRealtimeHandler) handleTranscriptionUpgrade(
 	preReqCancel context.CancelFunc,
 	auth *authHeaders,
 	path string,
+	queryModel string,
 ) {
 	upgrader := h.websocketUpgrader("realtime")
 	err := upgrader.Upgrade(ctx, func(conn *ws.Conn) {
@@ -268,7 +269,16 @@ func (h *WSRealtimeHandler) handleTranscriptionUpgrade(
 		}
 		defer h.sessions.Remove(conn)
 
-		frames, rawModel, bootstrapErr := bufferRealtimeTranscriptionBootstrap(clientConn)
+		// An explicit ?model= selects the provider and key up front, so the upstream
+		// session opens at once and a client that waits for session.created before
+		// configuring itself is not stuck behind the bootstrap. Without one, the model
+		// can only come from the client's first session update.
+		var frames []realtimeWebSocketFrame
+		rawModel := queryModel
+		var bootstrapErr error
+		if rawModel == "" {
+			frames, rawModel, bootstrapErr = bufferRealtimeTranscriptionBootstrap(clientConn)
+		}
 		if bootstrapErr != nil {
 			clientConn.writeRealtimeError(newRealtimeWireBifrostError(400, "invalid_request_error", bootstrapErr.Error()))
 			preReqCancel()
@@ -317,7 +327,7 @@ func bufferRealtimeTranscriptionBootstrap(clientConn *realtimeClientConn) ([]rea
 	for len(frames) < realtimeTranscriptionBootstrapMaxFrames {
 		messageType, message, err := clientConn.conn.ReadMessage()
 		if err != nil {
-			return nil, "", fmt.Errorf("transcription session.update model was not received within bootstrap limits: %w", err)
+			return nil, "", fmt.Errorf("transcription session.update model was not received within bootstrap limits (pass ?model= to open the session without one): %w", err)
 		}
 		totalBytes += len(message)
 		if totalBytes > realtimeTranscriptionBootstrapMaxBytes {
