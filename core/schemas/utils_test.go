@@ -193,3 +193,11 @@ func TestDeepCopyResponsesMessageCopiesToolsetName(t *testing.T) {
 		t.Fatal("toolset name pointer was aliased")
 	}
 }
+
+// An emulated decision names the model its text call was served by.
+func TestServedModelIncludesDecisionResponses(t *testing.T) {
+	r := &BifrostResponse{DecisionResponse: &BifrostDecisionResponse{Model: "gpt-5.5-2026-09"}}
+	if got := r.ServedModel(); got != "gpt-5.5-2026-09" {
+		t.Fatalf("ServedModel() = %q", got)
+	}
+}

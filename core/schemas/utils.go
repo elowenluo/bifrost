@@ -2201,6 +2201,9 @@ func (r *BifrostResponse) ServedModel() string {
 		return r.ResponsesStreamResponse.Response.Model
 	case r.TextCompletionResponse != nil:
 		return r.TextCompletionResponse.Model
+	case r.DecisionResponse != nil:
+		// An emulated decision names the model its text call was served by.
+		return r.DecisionResponse.Model
 	}
 	return ""
 }

@@ -3671,3 +3671,19 @@ func TestStoreOrEnqueueBeforeInjectStillParks(t *testing.T) {
 		t.Fatalf("Inject must drain the parked entry, writeQueue has %d entries", got)
 	}
 }
+
+// A logged decision's served tier survives cost recalculation: the rebuilt response
+// carries it, as the Responses rebuild does.
+func TestBuildResponseForRequestTypeKeepsDecisionTier(t *testing.T) {
+	priority := schemas.BifrostServiceTierPriority
+	fast, us := "fast", "us"
+	resp := buildResponseForRequestType(schemas.DecisionRequest, &schemas.BifrostLLMUsage{PromptTokens: 10}, schemas.BifrostResponseExtraFields{},
+		servedTier{serviceTier: &priority, speed: &fast, inferenceGeo: &us})
+	if resp == nil || resp.DecisionResponse == nil {
+		t.Fatal("no decision response rebuilt")
+	}
+	d := resp.DecisionResponse
+	if d.ServiceTier == nil || *d.ServiceTier != priority || d.Speed == nil || *d.Speed != fast || d.InferenceGeo == nil || *d.InferenceGeo != us {
+		t.Fatalf("decision tier not restored: tier=%v speed=%v geo=%v", d.ServiceTier, d.Speed, d.InferenceGeo)
+	}
+}

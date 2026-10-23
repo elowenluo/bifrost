@@ -2188,8 +2188,11 @@ func buildResponseForRequestType(requestType schemas.RequestType, usage *schemas
 	case schemas.DecisionRequest:
 		return &schemas.BifrostResponse{
 			DecisionResponse: &schemas.BifrostDecisionResponse{
-				Usage:       usage,
-				ExtraFields: extra,
+				Usage:        usage,
+				ServiceTier:  tier.serviceTier,
+				Speed:        tier.speed,
+				InferenceGeo: tier.inferenceGeo,
+				ExtraFields:  extra,
 			},
 		}
 	case schemas.OCRRequest:
