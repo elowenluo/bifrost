@@ -3349,6 +3349,8 @@ func TestValidateRoutingFallbacks(t *testing.T) {
 		{name: "object with pinned key", fbsJSON: `[{"provider":"azure","model":"gpt-4o","key_id":"k1"}]`, wantErr: false},
 		{name: "object pinning a key for the incoming model", fbsJSON: `[{"provider":"azure","key_id":"k1"}]`, wantErr: false},
 		{name: "key_id without provider rejected", fbsJSON: `[{"key_id":"k1"}]`, wantErr: true},
+		{name: "object with unknown provider rejected", fbsJSON: `[{"provider":"opneai","model":"gpt-4o","key_id":"k1"}]`, wantErr: true},
+		{name: "object with fork provider accepted", fbsJSON: `[{"provider":"volcengine","model":"doubao-seed-1-6"}]`, wantErr: false},
 		{name: "provider_key_name rejected over the API", fbsJSON: `[{"provider":"azure","provider_key_name":"prod"}]`, wantErr: true},
 	}
 	for _, tt := range tests {

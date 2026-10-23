@@ -286,7 +286,9 @@ func validateRoutingTargets(targets []RoutingTarget) error {
 func validateRoutingFallbacks(fallbacks []configstoreTables.RoutingFallback) error {
 	for i, fb := range fallbacks {
 		provider := strings.TrimSpace(string(fb.Provider))
-		if provider == "" {
+		// The string form already collapses an unknown prefix to "" while decoding; the
+		// object form names its provider directly, so it is checked against the same set.
+		if provider == "" || !schemas.IsKnownProvider(provider) {
 			return fmt.Errorf("fallbacks[%d] %q is invalid: must use a known provider prefix (e.g. \"openai/gpt-4o\" or \"azure/\" for the incoming model)", i, fb.String())
 		}
 		if fb.ProviderKeyName != nil && strings.TrimSpace(*fb.ProviderKeyName) != "" {
