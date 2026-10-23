@@ -152,3 +152,21 @@ func TestExchangeRealtimeWebRTCSDPUsesIntentForTranscription(t *testing.T) {
 		})
 	}
 }
+
+// TestRealtimeRefusesKeyWithoutEndpoint pins that a value-only key, which is what an
+// ephemeral client secret Bifrost did not mint becomes on the realtime paths, is refused
+// with a 400 instead of dereferencing the missing Azure key config.
+func TestRealtimeRefusesKeyWithoutEndpoint(t *testing.T) {
+	t.Parallel()
+
+	provider := &AzureProvider{}
+	key := schemas.Key{Value: *schemas.NewSecretVar("ek_unmapped")}
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+
+	if _, bifrostErr := provider.ExchangeRealtimeWebRTCSDP(ctx, key, "gpt-realtime", "v=0", nil); bifrostErr == nil || bifrostErr.StatusCode == nil || *bifrostErr.StatusCode != 400 {
+		t.Fatalf("ExchangeRealtimeWebRTCSDP error = %+v, want a 400", bifrostErr)
+	}
+	if _, bifrostErr := provider.RealtimeWebSocketURL(key, "gpt-realtime", ""); bifrostErr == nil || bifrostErr.StatusCode == nil || *bifrostErr.StatusCode != 400 {
+		t.Fatalf("RealtimeWebSocketURL error = %+v, want a 400", bifrostErr)
+	}
+}

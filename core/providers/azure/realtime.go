@@ -30,7 +30,10 @@ func (provider *AzureProvider) SupportsRealtimeAPI() bool {
 }
 
 func (provider *AzureProvider) RealtimeWebSocketURL(key schemas.Key, model, intent string) (string, *schemas.BifrostError) {
-	endpoint := strings.TrimRight(key.AzureKeyConfig.Endpoint.GetValue(), "/")
+	endpoint, endpointErr := azureRealtimeEndpoint(key)
+	if endpointErr != nil {
+		return "", endpointErr
+	}
 	endpoint = strings.Replace(endpoint, "https://", "wss://", 1)
 	endpoint = strings.Replace(endpoint, "http://", "ws://", 1)
 
@@ -75,7 +78,10 @@ func (provider *AzureProvider) ExchangeRealtimeWebRTCSDP(
 	sdp string,
 	session json.RawMessage,
 ) (string, *schemas.BifrostError) {
-	endpoint := strings.TrimRight(key.AzureKeyConfig.Endpoint.GetValue(), "/")
+	endpoint, endpointErr := azureRealtimeEndpoint(key)
+	if endpointErr != nil {
+		return "", endpointErr
+	}
 
 	upstreamURL := fmt.Sprintf("%s/openai/v1/realtime?model=%s",
 		endpoint, url.QueryEscape(model))
@@ -206,7 +212,10 @@ func (provider *AzureProvider) CreateRealtimeClientSecret(
 		return nil, bifrostErr
 	}
 
-	endpoint := strings.TrimRight(key.AzureKeyConfig.Endpoint.GetValue(), "/")
+	endpoint, endpointErr := azureRealtimeEndpoint(key)
+	if endpointErr != nil {
+		return nil, endpointErr
+	}
 	upstreamURL := fmt.Sprintf("%s/openai/v1/realtime/client_secrets", endpoint)
 
 	req := fasthttp.AcquireRequest()
@@ -287,6 +296,16 @@ func isRealtimeTranscriptionSession(session json.RawMessage) bool {
 		Type string `json:"type"`
 	}
 	return json.Unmarshal(session, &payload) == nil && payload.Type == "transcription"
+}
+
+// azureRealtimeEndpoint returns the key's Azure resource endpoint. A key without one, such as
+// an ephemeral client secret Bifrost did not mint (sent upstream as a bare value), names no
+// Azure resource to open a realtime session against, so it is refused instead of dereferenced.
+func azureRealtimeEndpoint(key schemas.Key) (string, *schemas.BifrostError) {
+	if key.AzureKeyConfig == nil || strings.TrimSpace(key.AzureKeyConfig.Endpoint.GetValue()) == "" {
+		return "", newAzureRealtimeError(fasthttp.StatusBadRequest, "invalid_request_error", "azure realtime requires a key with an Azure endpoint; an ephemeral client secret Bifrost did not mint cannot be used with Azure", nil)
+	}
+	return strings.TrimRight(key.AzureKeyConfig.Endpoint.GetValue(), "/"), nil
 }
 
 func newAzureRealtimeError(status int, errorType, message string, err error) *schemas.BifrostError {
