@@ -2280,6 +2280,12 @@ run-provider-harness-test: $(if $(HELP),,install-newman) ## Run the Bifrost prov
 	: "tmp/harness-budget-used mirrors BUDGET_USED so a COMPAT=both parent can hand the"; \
 	: "remaining budget to its second sub-run instead of letting both spend the full cap."; \
 	mkdir -p tmp; printf '0' > tmp/harness-budget-used; \
+	: "A cap that is not a whole number would make every budget comparison fail, and a"; \
+	: "failed test reads as within budget, so the run would launch past the cap: refuse it."; \
+	if [ -n "$(HARNESS_MAX_REQUESTS)" ] && ! printf '%s' "$(HARNESS_MAX_REQUESTS)" | grep -Eq '^[0-9]{1,15}$$'; then \
+		echo "$(RED)HARNESS_MAX_REQUESTS=$(HARNESS_MAX_REQUESTS) is not a non-negative whole number$(NC)"; \
+		exit 1; \
+	fi; \
 	budget_ok() { \
 		if [ -z "$(HARNESS_MAX_REQUESTS)" ]; then return 0; fi; \
 		if [ "$$BUDGET_EXCEEDED" = "1" ] || [ $$((BUDGET_USED + $$1)) -gt "$(HARNESS_MAX_REQUESTS)" ]; then \
