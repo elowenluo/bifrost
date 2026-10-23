@@ -76,42 +76,7 @@ export function MCPUsageGuideSheet() {
 	const { data: bifrostConfig } = useGetCoreConfigQuery({ fromDB: true }, { skip: !open });
 	// The identity-provider path is enterprise-only and needs an enabled provider to
 	// authenticate against. The SCIM query is stubbed to [] in OSS builds.
-	const { data: scimProviders } = useGetSCIMProvidersQuery(undefined, { skip: !open || !IS_ENTERPRISE });
-	const { data: virtualKeysData, isFetching: isFetchingVirtualKeys } = useGetVirtualKeysQuery(
-		{ limit: 50, search: debouncedVirtualKeySearch || undefined },
-		{ skip: !open || urlState.auth !== "virtual_key" },
-	);
-	const { data: mcpClientsData, isFetching: isFetchingMCPClients } = useGetMCPClientsQuery(
-		{ limit: 50 },
-		{ skip: !open || urlState.auth !== "virtual_key" || !selectedVirtualKey, refetchOnMountOrArgChange: true },
-	);
-
-	// ── Derived data ─────────────────────────────────────────────────────
-	const activeVirtualKeys = useMemo(() => virtualKeysData?.virtual_keys?.filter((vk) => vk.is_active) ?? [], [virtualKeysData]);
-
-	const virtualKeyOptions = useMemo<VirtualKeyOption[]>(
-		() => activeVirtualKeys.map((vk) => ({ value: vk.id, label: vk.name, virtualKey: vk })),
-		[activeVirtualKeys],
-	);
-
-	const allowedMCPClients = useMemo(() => {
-		if (!selectedVirtualKey) return [];
-		return (mcpClientsData?.clients ?? []).filter((client) => isClientAllowedForVirtualKey(client, selectedVirtualKey));
-	}, [mcpClientsData, selectedVirtualKey]);
-
-	const serverOptions = useMemo<MultiSelectOption[]>(
-		() =>
-			allowedMCPClients.map((client) => ({
-				value: client.config.client_id,
-				label: client.config.name,
-			})),
-		[allowedMCPClients],
-	);
-
-	const selectedServers = useMemo(
-		() => allowedMCPClients.filter((client) => urlState.servers.includes(client.config.client_id)),
-		[allowedMCPClients, urlState.servers],
-	);
+	const { data: scimProviders, isLoading: isLoadingSCIMProviders } = useGetSCIMProvidersQuery(undefined, { skip: !open || !IS_ENTERPRISE });
 
 	// ── Authentication method ────────────────────────────────────────────
 	// Which credentials /mcp accepts is a server setting, so only the methods the
@@ -141,6 +106,45 @@ export function MCPUsageGuideSheet() {
 	const authMethod = availableAuthMethods.includes(urlState.auth) ? urlState.auth : (availableAuthMethods[0] ?? "virtual_key");
 	const usesVirtualKey = authMethod === "virtual_key";
 
+	// The credential queries follow the method actually shown, not the URL's value: a
+	// shared link can name a method this gateway does not accept, and the effective
+	// method then falls back to the virtual key, whose keys must be fetched.
+	const { data: virtualKeysData, isFetching: isFetchingVirtualKeys } = useGetVirtualKeysQuery(
+		{ limit: 50, search: debouncedVirtualKeySearch || undefined },
+		{ skip: !open || !usesVirtualKey },
+	);
+	const { data: mcpClientsData, isFetching: isFetchingMCPClients } = useGetMCPClientsQuery(
+		{ limit: 50 },
+		{ skip: !open || !usesVirtualKey || !selectedVirtualKey, refetchOnMountOrArgChange: true },
+	);
+
+	// ── Derived data ─────────────────────────────────────────────────────
+	const activeVirtualKeys = useMemo(() => virtualKeysData?.virtual_keys?.filter((vk) => vk.is_active) ?? [], [virtualKeysData]);
+
+	const virtualKeyOptions = useMemo<VirtualKeyOption[]>(
+		() => activeVirtualKeys.map((vk) => ({ value: vk.id, label: vk.name, virtualKey: vk })),
+		[activeVirtualKeys],
+	);
+
+	const allowedMCPClients = useMemo(() => {
+		if (!selectedVirtualKey) return [];
+		return (mcpClientsData?.clients ?? []).filter((client) => isClientAllowedForVirtualKey(client, selectedVirtualKey));
+	}, [mcpClientsData, selectedVirtualKey]);
+
+	const serverOptions = useMemo<MultiSelectOption[]>(
+		() =>
+			allowedMCPClients.map((client) => ({
+				value: client.config.client_id,
+				label: client.config.name,
+			})),
+		[allowedMCPClients],
+	);
+
+	const selectedServers = useMemo(
+		() => allowedMCPClients.filter((client) => urlState.servers.includes(client.config.client_id)),
+		[allowedMCPClients, urlState.servers],
+	);
+
 	const headers = useMemo(
 		() =>
 			buildMCPHeaders({
@@ -158,12 +162,13 @@ export function MCPUsageGuideSheet() {
 	// Keep the URL honest when the stored method is not one the gateway accepts
 	// (config changed, or a shared link from a differently configured instance).
 	// Waits for both sources availability is derived from, so a link carrying a
-	// still-valid method is not rewritten while the config is in flight.
+	// still-valid method is not rewritten while the config is in flight. A failed
+	// SCIM query counts as settled (no identity provider), or it would block this.
 	useEffect(() => {
-		if (!open || !bifrostConfig || (IS_ENTERPRISE && !scimProviders)) return;
+		if (!open || !bifrostConfig || (IS_ENTERPRISE && isLoadingSCIMProviders)) return;
 		if (availableAuthMethods.length === 0 || availableAuthMethods.includes(urlState.auth)) return;
 		setUrlState({ auth: availableAuthMethods[0] });
-	}, [availableAuthMethods, bifrostConfig, open, scimProviders, setUrlState, urlState.auth]);
+	}, [availableAuthMethods, bifrostConfig, isLoadingSCIMProviders, open, setUrlState, urlState.auth]);
 
 	// Resolve the persisted virtual-key id into its full object, otherwise
 	// fall back to auto-selecting the first active key. Auto-selection is kept
