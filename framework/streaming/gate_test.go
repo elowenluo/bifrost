@@ -1842,6 +1842,24 @@ func TestGate_EstimateChunkBytesCountsBulkCarriers(t *testing.T) {
 		t.Fatalf("responses estimate = %d, want >= %d (delta)", got, len(delta))
 	}
 
+	// Every variable-sized Responses carrier counts, not only the text deltas: a large
+	// event carried in any one of them must not be charged the 512-byte floor.
+	big := strings.Repeat("v", 64*1024)
+	for name, r := range map[string]*schemas.BifrostResponsesStreamResponse{
+		"safeguard_results": {SafeguardResults: json.RawMessage(`"` + big + `"`)},
+		"search_results":    {SearchResults: []schemas.SearchResult{{Title: "t", URL: "u", Snippet: &big}}},
+		"videos":            {Videos: []schemas.VideoResult{{URL: big}}},
+		"citations":         {Citations: []string{big}},
+		"annotation":        {Annotation: &schemas.ResponsesOutputMessageContentTextAnnotation{Text: &big}},
+		"error_message":     {Message: &big},
+		"error_code":        {Code: &big},
+	} {
+		chunk := &schemas.BifrostStreamChunk{BifrostResponsesStreamResponse: r}
+		if got := estimateChunkBytes(chunk); got < int64(len(big)) {
+			t.Errorf("responses %s estimate = %d, want >= %d", name, got, len(big))
+		}
+	}
+
 	audioData := strings.Repeat("A", 16*1024)
 	audio := &schemas.BifrostStreamChunk{
 		BifrostChatResponse: &schemas.BifrostChatResponse{

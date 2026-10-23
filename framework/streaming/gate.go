@@ -112,7 +112,24 @@ func estimateChunkBytes(chunk *schemas.BifrostStreamChunk) int64 {
 		r := chunk.BifrostResponsesStreamResponse
 		size += gateStrPtrBytes(r.Delta) + gateStrPtrBytes(r.Text) + gateStrPtrBytes(r.Arguments) +
 			gateStrPtrBytes(r.Input) + gateStrPtrBytes(r.Refusal) + gateStrPtrBytes(r.Obfuscation) +
-			gateStrPtrBytes(r.PartialImageB64) + gateStrPtrBytes(r.Signature)
+			gateStrPtrBytes(r.PartialImageB64) + gateStrPtrBytes(r.Signature) +
+			gateStrPtrBytes(r.Code) + gateStrPtrBytes(r.Message) + gateStrPtrBytes(r.Param) +
+			int64(len(r.SafeguardResults))
+		for _, citation := range r.Citations {
+			size += int64(len(citation))
+		}
+		if r.Annotation != nil {
+			size += gateCompositeBytes(r.Annotation)
+		}
+		if r.Error != nil {
+			size += gateCompositeBytes(r.Error)
+		}
+		if len(r.SearchResults) > 0 {
+			size += gateCompositeBytes(r.SearchResults)
+		}
+		if len(r.Videos) > 0 {
+			size += gateCompositeBytes(r.Videos)
+		}
 		if r.Item != nil {
 			size += gateCompositeBytes(r.Item)
 		}
