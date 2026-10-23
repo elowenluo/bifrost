@@ -724,6 +724,45 @@ func TestFinalizeResponseWithLargeDetection_StallAfterPrefetchUnblocksReader(t *
 	}
 }
 
+// TestLargeResponseReaderCloseBeforeEOFDoesNotDrainAStalledUpstream: a consumer
+// that stops early (a failed downstream write, say) closes the large-response
+// reader while its context is live and the upstream still holds the socket open.
+// Close must not try to drain the rest of the body after its idle and
+// cancellation guards are gone: that read would block for as long as the upstream
+// stays silent.
+func TestLargeResponseReaderCloseBeforeEOFDoesNotDrainAStalledUpstream(t *testing.T) {
+	srv := stallingLargeServer(t, 256*1024, 96*1024) // past the 64KB prefetch, then silence
+	ctx, resp, release := largeResponseRequest(t, srv, 30*time.Second)
+	defer release()
+
+	_, isLarge, bifrostErr := FinalizeResponseWithLargeDetection(ctx, resp, nil)
+	if bifrostErr != nil {
+		t.Fatalf("FinalizeResponseWithLargeDetection: %s", bifrostErr.Error.Message)
+	}
+	if !isLarge {
+		t.Fatal("expected large-response mode")
+	}
+	reader, ok := ctx.Value(schemas.BifrostContextKeyLargeResponseReader).(io.ReadCloser)
+	if !ok || reader == nil {
+		t.Fatal("large response reader missing from context")
+	}
+	buf := make([]byte, 1024)
+	if _, err := reader.Read(buf); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		reader.Close() //nolint:errcheck
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("LargeResponseReader.Close blocked draining a stalled upstream after its guards were stopped")
+	}
+}
+
 // TestFinalizeResponseWithLargeDetection_GzipClassifiedByDecompressedSize guards
 // the size bound against compressed bodies: Content-Length describes the
 // compressed bytes, so a gzip response that is small on the wire but large once

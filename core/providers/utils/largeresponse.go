@@ -42,6 +42,10 @@ func (r *LargeResponseReader) Read(p []byte) (int, error) {
 // the drain is skipped. For identity-encoded responses (no Content-Length), the body
 // stream is a fasthttp closeReader that blocks until the TCP connection closes — which
 // can take minutes if the upstream server keeps the connection alive.
+// errLargeResponseAbandoned closes a large response body its consumer stopped
+// reading before EOF.
+var errLargeResponseAbandoned = errors.New("large response closed before it was fully read")
+
 func (r *LargeResponseReader) Close() error {
 	if r == nil || r.Resp == nil {
 		return nil
@@ -61,9 +65,15 @@ func (r *LargeResponseReader) Close() error {
 		}
 	}
 	if !r.consumed {
+		// Close the unread remainder instead of draining it: cleanup above has
+		// stopped the idle timeout and the cancellation hook, so a drain would block
+		// for as long as a stalled upstream keeps the socket open, and reading a
+		// large body only to reuse the connection is not worth it. Closing with an
+		// error discards the connection rather than pooling it half-read.
 		if bodyStream := r.Resp.BodyStream(); bodyStream != nil {
-			_, _ = io.Copy(io.Discard, bodyStream)
-			if closer, ok := bodyStream.(io.Closer); ok {
+			if closer, ok := bodyStream.(fasthttp.ReadCloserWithError); ok {
+				_ = closer.CloseWithError(errLargeResponseAbandoned)
+			} else if closer, ok := bodyStream.(io.Closer); ok {
 				_ = closer.Close()
 			}
 		}
