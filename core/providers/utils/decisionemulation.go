@@ -210,6 +210,13 @@ func choiceOptions(criteria interface{}) ([]string, map[string]string, error) {
 	return opts, descs, nil
 }
 
+// DecisionScoreLevelCount returns how many levels a score question's criteria define,
+// or an error when they are not a 2-10 level rubric.
+func DecisionScoreLevelCount(criteria interface{}) (int, error) {
+	levels, err := scoreCriteriaLevels(criteria)
+	return len(levels), err
+}
+
 // DecisionChoiceOptions returns a choice question's allowed options, sorted, or an error
 // when its criteria name none.
 func DecisionChoiceOptions(criteria interface{}) ([]string, error) {

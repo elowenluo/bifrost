@@ -735,6 +735,30 @@ func TestToBifrostDecisionResponseFailures(t *testing.T) {
 		}
 	})
 
+	t.Run("score outside the rubric's levels", func(t *testing.T) {
+		scoreReq := decisionRequest("state", map[string]schemas.DecisionQuestion{
+			"urgency": {Kind: schemas.DecisionKindScore, Instructions: "d", Criteria: []any{"low", "mid", "high"}},
+		})
+		for _, bad := range []float64{-0.5, 2.5} {
+			value := bad
+			native := &TypesafeDecisionResponse{
+				Model:   "jev-1.13.0",
+				Answers: map[string]TypesafeAnswer{"urgency": {Type: TypesafeQuestionTypeScore, Score: &value}},
+			}
+			if _, err := ToBifrostDecisionResponse(native, scoreReq); err == nil {
+				t.Fatalf("expected error for score %v outside 0..2", bad)
+			}
+		}
+		edge := 2.0
+		native := &TypesafeDecisionResponse{
+			Model:   "jev-1.13.0",
+			Answers: map[string]TypesafeAnswer{"urgency": {Type: TypesafeQuestionTypeScore, Score: &edge}},
+		}
+		if _, err := ToBifrostDecisionResponse(native, scoreReq); err != nil {
+			t.Fatalf("the top level must be accepted: %v", err)
+		}
+	})
+
 	t.Run("noul value outside range", func(t *testing.T) {
 		// The provider response is untrusted; a noul outside [0,1] violates the
 		// documented contract and must not surface as a successful answer.

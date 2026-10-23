@@ -307,6 +307,10 @@ func toBifrostDecisionResponse(resp *TypesafeDecisionResponse, request *schemas.
 			if native.Score == nil {
 				return nil, providerUtils.NewBifrostOperationError(fmt.Sprintf("typesafe score answer for question %q carries no value", name), nil)
 			}
+			// A score lies on the rubric's level indices, 0..levels-1.
+			if levels, err := providerUtils.DecisionScoreLevelCount(question.Criteria); err == nil && (*native.Score < 0 || *native.Score > float64(levels-1)) {
+				return nil, providerUtils.NewBifrostOperationError(fmt.Sprintf("typesafe score answer for question %q is outside 0..%d: %v", name, levels-1, *native.Score), nil)
+			}
 			answer.Value = *native.Score
 		}
 		answers[name] = answer
