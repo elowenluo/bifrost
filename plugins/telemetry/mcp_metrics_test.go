@@ -110,6 +110,41 @@ func TestPostMCPHookRecordsToolDuration(t *testing.T) {
 	}
 }
 
+// TestPostMCPHookRecordsUserLabelsWhenEnabled pins that user_labels_enabled reaches the
+// MCP tool histogram too: with the option on, a tool call is attributed to its user.
+func TestPostMCPHookRecordsUserLabelsWhenEnabled(t *testing.T) {
+	enabled := true
+	p, err := Init(&Config{UserLabelsEnabled: &enabled}, nil, bifrost.NewDefaultLogger(schemas.LogLevelError))
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Cleanup() })
+	ctx := mcpHookContext()
+	ctx.SetValue(schemas.BifrostContextKeyUserID, "user-7")
+	ctx.SetValue(schemas.BifrostContextKeyUserName, "Ada")
+
+	req := &schemas.BifrostMCPRequest{RequestType: schemas.MCPRequestTypeChatToolCall}
+	if _, _, err := p.PreMCPHook(ctx, req); err != nil {
+		t.Fatalf("PreMCPHook: %v", err)
+	}
+	resp := &schemas.BifrostMCPResponse{ExtraFields: schemas.BifrostMCPResponseExtraFields{
+		MCPRequestType: schemas.MCPRequestTypeChatToolCall, ClientName: "ctx7", ToolName: "query-docs", Latency: 10,
+	}}
+	if _, _, err := p.PostMCPHook(ctx, resp, nil); err != nil {
+		t.Fatalf("PostMCPHook: %v", err)
+	}
+	samples := gatherMCP(t, p.registry)
+	if len(samples) != 1 {
+		t.Fatalf("want 1 mcp series, got %d", len(samples))
+	}
+	if got := samples[0].labels["user_id"]; got != "user-7" {
+		t.Fatalf("user_id = %q, want user-7", got)
+	}
+	if got := samples[0].labels["user_name"]; got != "Ada" {
+		t.Fatalf("user_name = %q, want Ada", got)
+	}
+}
+
 // TestPostMCPHookSkipsNonToolAndCodemode verifies lifecycle ops (list_tools) and codemode
 // tools are not recorded.
 func TestPostMCPHookSkipsNonToolAndCodemode(t *testing.T) {

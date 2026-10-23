@@ -678,6 +678,9 @@ func Init(config *Config, pricingManager *modelcatalog.ModelCatalog, logger sche
 	// Mirrors the OTel semconv metric mcp.client.operation.duration. _count gives
 	// tool-call volume and error_type the error rate, so no separate MCP counters.
 	defaultMCPLabels := append([]string(nil), defaultMCPLabelNames...)
+	if userLabelsEnabled {
+		defaultMCPLabels = append(defaultMCPLabels, userLabelNames...)
+	}
 	bifrostMCPToolDuration := factory.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "bifrost_mcp_client_operation_duration_seconds",
@@ -1066,6 +1069,10 @@ func (p *PrometheusPlugin) PostMCPHook(ctx *schemas.BifrostContext, resp *schema
 		"business_unit_name": bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyGovernanceBusinessUnitName),
 		"project_id":         bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyGovernanceProjectID),
 		"project_name":       bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyGovernanceProjectName),
+	}
+	if p.userLabelsEnabled.Load() {
+		labelValues["user_id"] = bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyUserID)
+		labelValues["user_name"] = bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyUserName)
 	}
 	p.applyCustomLabels(ctx, labelValues)
 
