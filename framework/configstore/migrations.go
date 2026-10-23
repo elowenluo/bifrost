@@ -13564,6 +13564,14 @@ func migrationAddTimeOfDayPricingColumns(ctx context.Context, db *gorm.DB, logge
 	return nil
 }
 
+// equalPtr reports whether two optional values are both unset or both set to the same value.
+func equalPtr[T comparable](a, b *T) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 // migrationMigrateVKStandaloneLimitsToModelConfigs cleans up the bad state
 // produced by the config.json standalone-limits flow when combined with UI edits:
 //
@@ -13576,7 +13584,9 @@ func migrationAddTimeOfDayPricingColumns(ctx context.Context, db *gorm.DB, logge
 //     by a VK-scoped model config) are deleted and the model config is re-pointed
 //     to the original config.json-created rate limit (the one still on vk.rate_limit_id),
 //     preserving its usage counters. The VK's rate_limit_id column is then cleared
-//     since ownership now lives on the model config.
+//     since ownership now lives on the model config. Both limits are enforced until
+//     then, so only a row with the same token and request limits is a duplicate; a
+//     pair that differs is left as it is, still enforcing both, and logged.
 func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
 	migrationName := "migrate_vk_standalone_limits_to_model_configs"
 	logger.Info("[configstore] starting migration %s", migrationName)
@@ -13686,13 +13696,28 @@ func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *g
 				MCRateLimitID string
 				VKID          string
 				VKRateLimitID string
+
+				MCTokenMaxLimit        *int64
+				MCTokenResetDuration   *string
+				MCRequestMaxLimit      *int64
+				MCRequestResetDuration *string
+				VKTokenMaxLimit        *int64
+				VKTokenResetDuration   *string
+				VKRequestMaxLimit      *int64
+				VKRequestResetDuration *string
 			}
 			var dups []dupRateLimit
 			if err := tx.Raw(`
 				SELECT mc.id AS mc_id, mc.rate_limit_id AS mc_rate_limit_id,
-				       vk.id AS vk_id, vk.rate_limit_id AS vk_rate_limit_id
+				       vk.id AS vk_id, vk.rate_limit_id AS vk_rate_limit_id,
+				       mrl.token_max_limit AS mc_token_max_limit, mrl.token_reset_duration AS mc_token_reset_duration,
+				       mrl.request_max_limit AS mc_request_max_limit, mrl.request_reset_duration AS mc_request_reset_duration,
+				       vrl.token_max_limit AS vk_token_max_limit, vrl.token_reset_duration AS vk_token_reset_duration,
+				       vrl.request_max_limit AS vk_request_max_limit, vrl.request_reset_duration AS vk_request_reset_duration
 				FROM governance_model_configs mc
 				JOIN governance_virtual_keys vk ON vk.id = mc.scope_id
+				JOIN governance_rate_limits mrl ON mrl.id = mc.rate_limit_id
+				JOIN governance_rate_limits vrl ON vrl.id = vk.rate_limit_id
 				WHERE mc.scope = 'virtual_key'
 				  AND mc.model_name = '*'
 				  AND mc.provider IS NULL
@@ -13704,6 +13729,15 @@ func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *g
 			}
 
 			for _, d := range dups {
+				// Until now both rows were enforced. Dropping one that sets different limits
+				// would lift whichever is stricter, so only a row identical to the canonical
+				// one is a duplicate; any other pair keeps both limits for an operator to settle.
+				if !equalPtr(d.MCTokenMaxLimit, d.VKTokenMaxLimit) || !equalPtr(d.MCTokenResetDuration, d.VKTokenResetDuration) ||
+					!equalPtr(d.MCRequestMaxLimit, d.VKRequestMaxLimit) || !equalPtr(d.MCRequestResetDuration, d.VKRequestResetDuration) {
+					logger.Warn("[configstore] %s: VK %s keeps both rate limits %s (model config %s) and %s (virtual key): their limits differ, so neither is a duplicate", migrationName, d.VKID, d.MCRateLimitID, d.MCID, d.VKRateLimitID)
+					continue
+				}
+
 				// Re-point the model config to the canonical config.json row (vk.rate_limit_id),
 				// preserving its usage. The UUID row (mc.rate_limit_id) is the orphan to delete.
 				orphanID := d.MCRateLimitID

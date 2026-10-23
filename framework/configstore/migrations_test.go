@@ -3928,3 +3928,62 @@ func TestMigrationAddGithubCopilotConfigColumns_NonRollbackable(t *testing.T) {
 	assert.Equal(t, "-----BEGIN RSA PRIVATE KEY-----", got.GithubCopilotKeyConfig.PrivateKey.GetValue(),
 		"the private key must survive the refused rollback")
 }
+
+// TestMigrationMigrateVKStandaloneLimitsKeepsDifferingRateLimits pins that the
+// standalone-limits migration (upstream #7291) only drops a VK-scoped model config's
+// rate limit when it duplicates the VK's own config.json row. Before the migration both
+// rows are enforced, so deleting a stricter UI-made limit (10 req/min) in favour of a
+// looser config.json one (1000 req/hour) would admit traffic that was being refused.
+func TestMigrationMigrateVKStandaloneLimitsKeepsDifferingRateLimits(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	for _, ddl := range []string{
+		`CREATE TABLE governance_virtual_keys (id TEXT PRIMARY KEY, rate_limit_id TEXT)`,
+		`CREATE TABLE governance_rate_limits (id TEXT PRIMARY KEY, token_max_limit INTEGER, token_reset_duration TEXT,
+			request_max_limit INTEGER, request_reset_duration TEXT, request_current_usage INTEGER DEFAULT 0)`,
+		`CREATE TABLE governance_model_configs (id TEXT PRIMARY KEY, model_name TEXT NOT NULL, scope TEXT NOT NULL,
+			scope_id TEXT, provider TEXT, rate_limit_id TEXT, created_at DATETIME, updated_at DATETIME)`,
+		`CREATE TABLE governance_budgets (id TEXT PRIMARY KEY, virtual_key_id TEXT, model_config_id TEXT, max_limit REAL,
+			reset_duration TEXT, current_usage REAL, last_reset DATETIME, config_hash TEXT)`,
+	} {
+		require.NoError(t, db.Exec(ddl).Error)
+	}
+	seed := func(vkID, cfgRL, uiRL string, cfgRequests, uiRequests int64, cfgReset, uiReset string) {
+		require.NoError(t, db.Exec(`INSERT INTO governance_rate_limits (id, request_max_limit, request_reset_duration, request_current_usage) VALUES (?, ?, ?, 7)`, cfgRL, cfgRequests, cfgReset).Error)
+		require.NoError(t, db.Exec(`INSERT INTO governance_rate_limits (id, request_max_limit, request_reset_duration, request_current_usage) VALUES (?, ?, ?, 9)`, uiRL, uiRequests, uiReset).Error)
+		require.NoError(t, db.Exec(`INSERT INTO governance_virtual_keys (id, rate_limit_id) VALUES (?, ?)`, vkID, cfgRL).Error)
+		require.NoError(t, db.Exec(`INSERT INTO governance_model_configs (id, model_name, scope, scope_id, rate_limit_id) VALUES (?, '*', 'virtual_key', ?, ?)`, "mc-"+vkID, vkID, uiRL).Error)
+	}
+	// vk-same: the UI copy repeats the config.json limit, so it is a true duplicate.
+	seed("vk-same", "rl-cfg-same", "rl-ui-same", 100, 100, "1m", "1m")
+	// vk-differ: the UI limit is stricter than the config.json one.
+	seed("vk-differ", "rl-cfg-differ", "rl-ui-differ", 1000, 10, "1h", "1m")
+
+	require.NoError(t, migrationMigrateVKStandaloneLimitsToModelConfigs(context.Background(), db, testMigrationLogger))
+
+	refs := func(vkID string) (vkRL, mcRL *string) {
+		require.NoError(t, db.Raw(`SELECT rate_limit_id FROM governance_virtual_keys WHERE id = ?`, vkID).Scan(&vkRL).Error)
+		require.NoError(t, db.Raw(`SELECT rate_limit_id FROM governance_model_configs WHERE id = ?`, "mc-"+vkID).Scan(&mcRL).Error)
+		return vkRL, mcRL
+	}
+	exists := func(id string) bool {
+		var n int64
+		require.NoError(t, db.Raw(`SELECT count(*) FROM governance_rate_limits WHERE id = ?`, id).Scan(&n).Error)
+		return n == 1
+	}
+
+	vkRL, mcRL := refs("vk-same")
+	require.Nil(t, vkRL, "the duplicate's VK reference moves onto the model config")
+	require.NotNil(t, mcRL)
+	require.Equal(t, "rl-cfg-same", *mcRL, "the model config takes the canonical config.json row")
+	require.False(t, exists("rl-ui-same"), "the identical UI copy is removed")
+	require.True(t, exists("rl-cfg-same"))
+
+	vkRL, mcRL = refs("vk-differ")
+	require.NotNil(t, vkRL)
+	require.Equal(t, "rl-cfg-differ", *vkRL, "a differing pair keeps the VK's own limit")
+	require.NotNil(t, mcRL)
+	require.Equal(t, "rl-ui-differ", *mcRL, "a differing pair keeps the stricter model-config limit")
+	require.True(t, exists("rl-cfg-differ"))
+	require.True(t, exists("rl-ui-differ"), "a limit that is not a duplicate is never deleted")
+}

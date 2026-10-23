@@ -49,3 +49,4 @@
 - fix: a caller OAuth bearer forwarded on a passthrough route is stripped before a cleartext non-loopback upstream on the fork's shared native Anthropic Messages client too (Anthropic and xAI), as upstream #7325 does for its own Anthropic and OpenAI passthroughs
 - fix: Volcengine and ModelArk file and video IDs are validated and escaped as one path segment before dispatch, as upstream #7307 does for its own providers
 - note: the deprecated beta realtime session endpoints now return a Bifrost-minted `client_secret.value` (upstream #7317), usable only through Bifrost's realtime endpoints, the same as `client_secrets`
+- fix: migration `migrate_vk_standalone_limits_to_model_configs` deletes a VK-scoped model-config rate limit only when it repeats the VK's config.json limit exactly; a pair with different limits keeps both, still enforced, and is logged for an operator, so the upgrade never loosens a stricter limit
