@@ -433,7 +433,14 @@ func (c *chunkedBody) Read(p []byte) (int, error) {
 	}
 	n, err := c.chunked.Read(p)
 	if errors.Is(err, io.EOF) {
-		if trailerErr := c.resp.Header.ReadTrailer(c.br); trailerErr != nil && !errors.Is(trailerErr, io.EOF) {
+		if trailerErr := c.resp.Header.ReadTrailer(c.br); trailerErr != nil {
+			// A peer that closes after the 0-length chunk but before the trailer
+			// section's final CRLF has not finished the body, as readBufferedBody
+			// also holds. Reporting it as io.EOF would mark the stream fully read and
+			// let a half-framed connection back into the pool.
+			if errors.Is(trailerErr, io.EOF) {
+				return n, io.ErrUnexpectedEOF
+			}
 			return n, trailerErr
 		}
 		c.done = true

@@ -658,6 +658,8 @@ func TestContextTransport_TruncatedNonEventStreamBodiesReportUnexpectedEOF(t *te
 		{"content-length json", "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n", `{"partial":`, io.ErrUnexpectedEOF},
 		{"chunked json", "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n", "b\r\n{\"partial\":\r\n", io.ErrUnexpectedEOF},
 		{"content-length event stream", "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 100\r\n\r\n", "data: a\n\n", nil},
+		{"chunked json missing the trailer CRLF", "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n", "2\r\n{}\r\n0\r\n", io.ErrUnexpectedEOF},
+		{"chunked event stream missing the trailer CRLF", "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n", "9\r\ndata: a\n\n\r\n0\r\n", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -674,6 +676,15 @@ func TestContextTransport_TruncatedNonEventStreamBodiesReportUnexpectedEOF(t *te
 			defer fasthttp.ReleaseResponse(resp)
 			body, err := io.ReadAll(resp.BodyStream())
 			_ = resp.CloseBodyStream()
+			// Whatever the error contract, a half-framed connection is never pooled:
+			// the next request must dial afresh.
+			req2, resp2 := streamGet(t, client, "GET")
+			_ = resp2.CloseBodyStream()
+			fasthttp.ReleaseRequest(req2)
+			fasthttp.ReleaseResponse(resp2)
+			if got := srv.accepted.Load(); got != 2 {
+				t.Fatalf("connections accepted = %d, want 2: the truncated stream's connection was reused", got)
+			}
 			if tc.wantErr == nil {
 				if err != nil {
 					t.Fatalf("truncated event stream read error = %v, want a plain io.EOF so the SSE truncation check decides", err)
