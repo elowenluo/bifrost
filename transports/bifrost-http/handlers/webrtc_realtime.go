@@ -429,7 +429,11 @@ func (h *WebRTCRealtimeHandler) resolveRealtimeWebRTCKeys(
 
 	authKey := selectedKey
 	if mapped && mapping.ProviderToken != "" {
-		authKey.Value = *schemas.NewSecretVar(mapping.ProviderToken)
+		providerToken, redeemErr := redeemRealtimeProviderToken(mapping, providerKey, selectedKey.ID)
+		if redeemErr != nil {
+			return schemas.Key{}, nil, redeemErr
+		}
+		authKey.Value = *schemas.NewSecretVar(providerToken)
 	} else if mapped && inboundToken != "" {
 		authKey.Value = *schemas.NewSecretVar(inboundToken)
 	}
@@ -469,6 +473,7 @@ func parseRealtimeEphemeralKeyMappingValue(raw []byte) (realtimeEphemeralKeyMapp
 		mapping.KeyID = strings.TrimSpace(mapping.KeyID)
 		mapping.VirtualKey = strings.TrimSpace(mapping.VirtualKey)
 		mapping.ProviderToken = strings.TrimSpace(mapping.ProviderToken)
+		mapping.Provider = strings.TrimSpace(mapping.Provider)
 		if mapping.KeyID != "" || mapping.VirtualKey != "" || mapping.ProviderToken != "" {
 			return mapping, true
 		}

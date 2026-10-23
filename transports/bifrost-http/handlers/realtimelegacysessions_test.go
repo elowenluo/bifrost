@@ -306,4 +306,25 @@ func TestLegacyRealtimeSessionSecretOpensUpstreamThroughBifrost(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no upstream realtime connection")
 	}
+
+	// The same secret bound to another provider is refused before anything is dialed:
+	// the hidden provider token only ever goes back to the provider that issued it.
+	raw2, err := kv.Get(buildRealtimeEphemeralKeyMappingKey(session.ClientSecret.Value))
+	require.NoError(t, err)
+	mapping := raw2.(realtimeEphemeralKeyMapping)
+	require.Equal(t, string(schemas.OpenAI), mapping.Provider, "the mapping records the issuing provider")
+	mapping.Provider = string(schemas.Anthropic)
+	require.NoError(t, kv.SetWithTTL(buildRealtimeEphemeralKeyMappingKey(session.ClientSecret.Value), mapping, time.Minute))
+	refused, _, err := ws.DefaultDialer.Dial("ws://"+ln.Addr().String()+"/v1/realtime?model=openai/gpt-realtime", header)
+	require.NoError(t, err)
+	defer refused.Close()
+	_ = refused.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, msg, err = refused.ReadMessage()
+	require.NoError(t, err)
+	require.Contains(t, string(msg), "not issued for this provider and key")
+	select {
+	case got := <-upstreamAuth:
+		t.Fatalf("a refused secret still reached the upstream with %q", got)
+	case <-time.After(200 * time.Millisecond):
+	}
 }

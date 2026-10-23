@@ -477,7 +477,7 @@ func TestReplaceAndCacheRealtimeEphemeralToken(t *testing.T) {
 		"value": "ek_provider_456",
 		"expires_at": 4102444800
 	}`)}
-	if bifrostErr := replaceAndCacheRealtimeEphemeralToken(store, resp, "key_123", "sk-bf-test"); bifrostErr != nil {
+	if bifrostErr := replaceAndCacheRealtimeEphemeralToken(store, resp, "key_123", "sk-bf-test", schemas.OpenAI); bifrostErr != nil {
 		t.Fatalf("replaceAndCacheRealtimeEphemeralToken() error = %v", bifrostErr)
 	}
 
@@ -521,7 +521,7 @@ func TestReplaceAndCacheRealtimeEphemeralTokenRejectsExpiredSecret(t *testing.T)
 		"value": "ek_expired",
 		"expires_at": %d
 	}`, expired)}
-	if bifrostErr := replaceAndCacheRealtimeEphemeralToken(store, resp, "key_123", ""); bifrostErr == nil {
+	if bifrostErr := replaceAndCacheRealtimeEphemeralToken(store, resp, "key_123", "", schemas.OpenAI); bifrostErr == nil {
 		t.Fatal("expected expired provider secret to be rejected")
 	}
 }
@@ -715,5 +715,32 @@ func TestRealtimeClientSecretsEvaluateMintingGovernance_ContinuesWithoutGovernan
 
 	if err := handler.evaluateMintingGovernance(bifrostCtx, schemas.OpenAI, "gpt-realtime"); err != nil {
 		t.Fatalf("unexpected governance error without plugin: %v", err)
+	}
+}
+
+// TestRedeemRealtimeProviderToken pins that a Bifrost-minted secret's provider token is
+// redeemed only for the provider that issued it and through the key it was minted under.
+func TestRedeemRealtimeProviderToken(t *testing.T) {
+	t.Parallel()
+	issued := realtimeEphemeralKeyMapping{KeyID: "key_1", ProviderToken: "ek_provider", Provider: string(schemas.OpenAI)}
+	for name, tc := range map[string]struct {
+		mapping  realtimeEphemeralKeyMapping
+		provider schemas.ModelProvider
+		keyID    string
+		want     string
+		wantErr  bool
+	}{
+		"issuing provider and key":    {mapping: issued, provider: schemas.OpenAI, keyID: "key_1", want: "ek_provider"},
+		"another provider":            {mapping: issued, provider: schemas.Azure, keyID: "key_1", wantErr: true},
+		"another key":                 {mapping: issued, provider: schemas.OpenAI, keyID: "key_2", wantErr: true},
+		"no recorded provider":        {mapping: realtimeEphemeralKeyMapping{KeyID: "key_1", ProviderToken: "ek_provider"}, provider: schemas.OpenAI, keyID: "key_1", wantErr: true},
+		"no provider token to redeem": {mapping: realtimeEphemeralKeyMapping{KeyID: "key_1"}, provider: schemas.Azure, keyID: "key_2"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := redeemRealtimeProviderToken(tc.mapping, tc.provider, tc.keyID)
+			if tc.wantErr != (err != nil) || got != tc.want {
+				t.Fatalf("redeemRealtimeProviderToken() = %q, %v; want %q, error %v", got, err, tc.want, tc.wantErr)
+			}
+		})
 	}
 }

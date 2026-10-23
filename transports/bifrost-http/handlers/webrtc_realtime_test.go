@@ -398,7 +398,7 @@ func TestCacheRealtimeEphemeralKeyMappingPreservesVirtualKeyAcrossKVReplication(
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
 	resp := &schemas.BifrostPassthroughResponse{Body: body}
-	if bifrostErr := replaceAndCacheRealtimeEphemeralToken(source, resp, "key_123", "sk-bf-test"); bifrostErr != nil {
+	if bifrostErr := replaceAndCacheRealtimeEphemeralToken(source, resp, "key_123", "sk-bf-test", schemas.OpenAI); bifrostErr != nil {
 		t.Fatalf("replaceAndCacheRealtimeEphemeralToken() error = %v", bifrostErr)
 	}
 	if delegate.err != nil {

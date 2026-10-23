@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime"
 	"strings"
@@ -203,6 +204,7 @@ func (h *RealtimeClientSecretsHandler) handleRequest(ctx *fasthttp.RequestCtx) {
 		resp,
 		key.ID,
 		virtualKey,
+		providerKey,
 	); bifrostErr != nil {
 		SendBifrostError(ctx, bifrostErr)
 		return
@@ -417,6 +419,23 @@ type realtimeEphemeralKeyMapping struct {
 	KeyID         string `json:"key_id,omitempty"`
 	VirtualKey    string `json:"virtual_key,omitempty"`
 	ProviderToken string `json:"provider_token,omitempty"`
+	// Provider is the provider the token was issued by. A provider token is only ever
+	// presented back to that provider, with the key it was minted under.
+	Provider string `json:"provider,omitempty"`
+}
+
+// redeemRealtimeProviderToken returns the provider token a Bifrost-minted mapping holds
+// for a session that targets providerKey through the key selectedKeyID. The token was
+// issued by one provider for one of its keys; presenting it anywhere else would hand a
+// server-held credential to another endpoint, so any other target is refused.
+func redeemRealtimeProviderToken(mapping realtimeEphemeralKeyMapping, providerKey schemas.ModelProvider, selectedKeyID string) (string, error) {
+	if mapping.ProviderToken == "" {
+		return "", nil
+	}
+	if mapping.Provider == "" || mapping.Provider != string(providerKey) || mapping.KeyID == "" || mapping.KeyID != selectedKeyID {
+		return "", errors.New("realtime client secret was not issued for this provider and key")
+	}
+	return mapping.ProviderToken, nil
 }
 
 func realtimeMappingVirtualKey(ctx *schemas.BifrostContext) string {
@@ -431,7 +450,7 @@ func realtimeMappingVirtualKey(ctx *schemas.BifrostContext) string {
 	return bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyVirtualKey)
 }
 
-func replaceAndCacheRealtimeEphemeralToken(kv schemas.KVStore, resp *schemas.BifrostPassthroughResponse, keyID string, virtualKey string) *schemas.BifrostError {
+func replaceAndCacheRealtimeEphemeralToken(kv schemas.KVStore, resp *schemas.BifrostPassthroughResponse, keyID string, virtualKey string, provider schemas.ModelProvider) *schemas.BifrostError {
 	if kv == nil || resp == nil || len(resp.Body) == 0 || strings.TrimSpace(keyID) == "" {
 		return newRealtimeClientSecretHandlerError(fasthttp.StatusInternalServerError, "server_error", "failed to secure realtime client secret", nil)
 	}
@@ -451,6 +470,7 @@ func replaceAndCacheRealtimeEphemeralToken(kv schemas.KVStore, resp *schemas.Bif
 		KeyID:         strings.TrimSpace(keyID),
 		VirtualKey:    strings.TrimSpace(virtualKey),
 		ProviderToken: strings.TrimSpace(providerToken),
+		Provider:      string(provider),
 	}
 	if err := kv.SetWithTTL(buildRealtimeEphemeralKeyMappingKey(bifrostToken), mapping, ttl); err != nil {
 		logger.Error("failed to cache realtime ephemeral key mapping for key_id=%s: %v", keyID, err)

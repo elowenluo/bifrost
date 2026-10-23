@@ -508,7 +508,12 @@ func (h *WSRealtimeHandler) runRealtimeSession(
 			return
 		}
 		if mapped && mapping.ProviderToken != "" {
-			key.Value = *schemas.NewSecretVar(mapping.ProviderToken)
+			providerToken, redeemErr := redeemRealtimeProviderToken(mapping, providerKey, key.ID)
+			if redeemErr != nil {
+				clientConn.writeRealtimeError(newRealtimeWireBifrostError(401, "invalid_api_key", redeemErr.Error()))
+				return
+			}
+			key.Value = *schemas.NewSecretVar(providerToken)
 		}
 	}
 
