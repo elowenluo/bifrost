@@ -106,6 +106,9 @@ func (bifrost *Bifrost) emulateDecisionViaResponses(
 		if resp.Usage != nil {
 			decision.Usage = resp.Usage.ToBifrostLLMUsage()
 		}
+		decision.ServiceTier = resp.ServiceTier
+		decision.Speed = resp.Speed
+		decision.InferenceGeo = resp.InferenceGeo
 	}
 	// Provider/Model on ExtraFields drive downstream cost calculation.
 	decision.ExtraFields.Provider = req.Provider
@@ -120,7 +123,10 @@ func decisionAnswerError(cause error, resp *schemas.BifrostResponsesResponse) *s
 	bifrostErr := providerUtils.NewBifrostOperationError(cause.Error(), nil)
 	if resp != nil {
 		if resp.Usage != nil {
-			bifrostErr.ExtraFields.BilledUsage = resp.Usage.ToBifrostLLMUsage()
+			billed := resp.Usage.ToBifrostLLMUsage()
+			billed.Speed = resp.Speed
+			billed.InferenceGeo = resp.InferenceGeo
+			bifrostErr.ExtraFields.BilledUsage = billed
 		}
 		bifrostErr.ExtraFields.ResolvedModelUsed = resp.Model
 	}

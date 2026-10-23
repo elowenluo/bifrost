@@ -337,3 +337,25 @@ func TestEmulateDecisionToolChoiceFollowsBaseProvider(t *testing.T) {
 		t.Fatalf("tool_choice = %+v, want auto", choice)
 	}
 }
+
+// The emulating call's served tier rides on the decision, so the decision is priced
+// at the rate of the service actually delivered.
+func TestEmulateDecisionCarriesServedTier(t *testing.T) {
+	resp := emulationFunctionCallResponse(`{
+		"approve":  {"value": 0.9, "confidence": 0.8},
+		"category": {"choice": "billing", "confidence": 0.7, "probabilities": {"billing": 0.7, "bug": 0.1, "support": 0.1, "other": 0.1}},
+		"urgency":  {"value": 2, "confidence": 0.6, "probabilities": {"0": 0.1, "1": 0.1, "2": 0.8}}
+	}`)
+	priority := schemas.BifrostServiceTierPriority
+	fast, us := "fast", "us"
+	resp.ServiceTier, resp.Speed, resp.InferenceGeo = &priority, &fast, &us
+	resp.Usage = &schemas.ResponsesResponseUsage{InputTokens: 10, OutputTokens: 2, TotalTokens: 12}
+	var b Bifrost
+	decision, bifrostErr := b.emulateDecisionViaResponses(nil, &decisionEmulationProvider{response: resp}, schemas.Key{}, structuredDecisionRequest())
+	if bifrostErr != nil {
+		t.Fatalf("unexpected error: %v", bifrostErr)
+	}
+	if decision.ServiceTier == nil || *decision.ServiceTier != priority || decision.Speed == nil || *decision.Speed != fast || decision.InferenceGeo == nil || *decision.InferenceGeo != us {
+		t.Fatalf("served tier not carried: tier=%v speed=%v geo=%v", decision.ServiceTier, decision.Speed, decision.InferenceGeo)
+	}
+}

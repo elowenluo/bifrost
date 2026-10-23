@@ -57,9 +57,13 @@ type DecisionAnswer struct {
 // Answers is keyed by question identifier; every requested question produces
 // an answer.
 type BifrostDecisionResponse struct {
-	ID          string                     `json:"id,omitempty"`
-	Model       string                     `json:"model"`
-	Answers     map[string]DecisionAnswer  `json:"answers"`
-	Usage       *BifrostLLMUsage           `json:"usage,omitempty"`
-	ExtraFields BifrostResponseExtraFields `json:"extra_fields"`
+	ID      string                    `json:"id,omitempty"`
+	Model   string                    `json:"model"`
+	Answers map[string]DecisionAnswer `json:"answers"`
+	Usage   *BifrostLLMUsage          `json:"usage,omitempty"`
+	// Tier the emulating text call was served on, which prices the decision as that call.
+	ServiceTier  *BifrostServiceTier        `json:"service_tier,omitempty"`
+	Speed        *string                    `json:"speed,omitempty"`
+	InferenceGeo *string                    `json:"inference_geo,omitempty"`
+	ExtraFields  BifrostResponseExtraFields `json:"extra_fields"`
 }

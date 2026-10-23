@@ -5487,6 +5487,22 @@ func TestCalculateCost_EmulatedDecisionBilledAsTextCall(t *testing.T) {
 	}
 }
 
+// An emulated decision served at priority is billed at the priority rate, as its text
+// call would be.
+func TestCalculateCost_EmulatedDecisionUsesServedTier(t *testing.T) {
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey("gpt-5.5", "openai", "chat"): {
+			Model: "gpt-5.5", Provider: "openai", Mode: "chat",
+			InputCostPerToken: bifrost.Ptr(0.000001), OutputCostPerToken: bifrost.Ptr(0.000002),
+			InputCostPerTokenPriority: bifrost.Ptr(0.000005),
+		},
+	})
+	resp := makeDecisionResponse(schemas.OpenAI, "gpt-5.5", &schemas.BifrostLLMUsage{PromptTokens: 1000, TotalTokens: 1000})
+	priority := schemas.BifrostServiceTierPriority
+	resp.DecisionResponse.ServiceTier = &priority
+	assert.InDelta(t, 1000*0.000005, s.CalculateCost(resp, nil), 1e-12)
+}
+
 // A native decisions row keeps the token-only decision pricing even when the model
 // also has a chat row.
 func TestCalculateCost_NativeDecisionRowWinsOverChatRow(t *testing.T) {

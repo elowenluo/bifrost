@@ -763,6 +763,7 @@ func extractCostInput(result *schemas.BifrostResponse) costInput {
 
 	case result.DecisionResponse != nil && result.DecisionResponse.Usage != nil:
 		input.usage = result.DecisionResponse.Usage
+		input.tier = tierFromResponse(result.DecisionResponse.ServiceTier, result.DecisionResponse.Speed, result.DecisionResponse.InferenceGeo)
 
 	case result.SpeechResponse != nil && result.SpeechResponse.Usage != nil:
 		input.usage = speechUsageToBifrostUsage(result.SpeechResponse.Usage)
