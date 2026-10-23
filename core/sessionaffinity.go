@@ -304,6 +304,14 @@ func (bifrost *Bifrost) resolveSessionRoute(ctx *schemas.BifrostContext, request
 	if provider == "" {
 		return
 	}
+	// A direct key is the caller's credential for this provider, and it stays on the
+	// context for the primary attempt (only fallbacks clear it). Moving the primary to
+	// another provider would send that credential to the wrong upstream, so the route
+	// the caller's key was given for stands.
+	if _, ok := ctx.Value(schemas.BifrostContextKeyDirectKey).(schemas.Key); ok {
+		ctx.AppendRoutingEngineLog(schemas.RoutingEngineSessionAffinity, schemas.LogLevelInfo, fmt.Sprintf("Request carries a direct key for %s, so the session does not move it", provider))
+		return
+	}
 	// Every route carries the key pinned for it: the primary's is the routing pin
 	// RunPreRequestHooks committed, each fallback's is its own. A pin names a key of one
 	// provider, so it must follow that provider through the reorder: looked up among another

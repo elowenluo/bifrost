@@ -846,6 +846,22 @@ func TestResolveSessionRouteAppliesTheAnswer(t *testing.T) {
 		}
 	})
 
+	// A direct key belongs to the request's own provider; a session binding must not move
+	// the primary to another provider while that credential is still on the context.
+	t.Run("a request with a direct key is not moved", func(t *testing.T) {
+		client, fake := setup(t, reverse)
+		ctx := sessionCtx("s")
+		ctx.SetValue(schemas.BifrostContextKeyDirectKey, schemas.Key{ID: "caller", Value: schemas.SecretVar{Val: "sk-caller"}})
+		req := newRequest(schemas.OpenAI)
+		client.resolveSessionRoute(ctx, routeOf("", "gpt-4o"), req)
+		if provider, _, _ := req.GetRequestFields(); provider != schemas.OpenAI {
+			t.Fatalf("direct-key request moved to %s", provider)
+		}
+		if fake.routeCalls != 0 {
+			t.Fatal("ResolveRoute was asked about a direct-key request")
+		}
+	})
+
 	t.Run("a request no hook could route is not offered", func(t *testing.T) {
 		client, fake := setup(t, reverse)
 		client.resolveSessionRoute(sessionCtx("s"), routeOf("", "gpt-4o"), newRequest(""))
