@@ -981,6 +981,11 @@ func GenerateKeyHash(key schemas.Key) (string, error) {
 	if useAnthropicEndpoints {
 		hash.Write([]byte("useAnthropicEndpoints:true"))
 	}
+	// Hash UseOpenAIEndpoints the same way (nil = false), so a key stored before
+	// the field existed keeps its hash and turning it on or off is detected.
+	if key.UseOpenAIEndpoints != nil && *key.UseOpenAIEndpoints {
+		hash.Write([]byte("useOpenAIEndpoints:true"))
+	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
