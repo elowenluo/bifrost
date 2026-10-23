@@ -828,10 +828,14 @@ func (provider *VolcengineProvider) VideoGeneration(ctx *schemas.BifrostContext,
 
 func (provider *VolcengineProvider) VideoRetrieve(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostVideoRetrieveRequest) (*schemas.BifrostVideoGenerationResponse, *schemas.BifrostError) {
 	videoID := providerUtils.StripVideoIDProviderSuffix(request.ID, provider.GetProviderKey())
+	escapedVideoID, idErr := providerUtils.EscapeResourceID(videoID, "video_id")
+	if idErr != nil {
+		return nil, idErr
+	}
 	return openai.HandleOpenAIVideoRetrieveRequest(
 		ctx,
 		provider.client,
-		provider.networkConfig.BaseURL+providerUtils.GetPathFromContext(ctx, fmt.Sprintf("%s/%s", volcenginePathVideos, videoID)),
+		provider.networkConfig.BaseURL+providerUtils.GetPathFromContext(ctx, fmt.Sprintf("%s/%s", volcenginePathVideos, escapedVideoID)),
 		request,
 		key,
 		provider.networkConfig.ExtraHeaders,
@@ -846,13 +850,17 @@ func (provider *VolcengineProvider) VideoRetrieve(ctx *schemas.BifrostContext, k
 
 func (provider *VolcengineProvider) VideoDownload(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostVideoDownloadRequest) (*schemas.BifrostVideoDownloadResponse, *schemas.BifrostError) {
 	videoID := providerUtils.StripVideoIDProviderSuffix(request.ID, provider.GetProviderKey())
+	escapedVideoID, idErr := providerUtils.EscapeResourceID(videoID, "video_id")
+	if idErr != nil {
+		return nil, idErr
+	}
 	req := fasthttp.AcquireRequest()
 	resp := fasthttp.AcquireResponse()
 	defer fasthttp.ReleaseRequest(req)
 	defer fasthttp.ReleaseResponse(resp)
 
 	providerUtils.SetExtraHeaders(ctx, req, provider.networkConfig.ExtraHeaders, nil)
-	req.SetRequestURI(provider.networkConfig.BaseURL + providerUtils.GetPathFromContext(ctx, fmt.Sprintf("%s/%s/content", volcenginePathVideos, videoID)))
+	req.SetRequestURI(provider.networkConfig.BaseURL + providerUtils.GetPathFromContext(ctx, fmt.Sprintf("%s/%s/content", volcenginePathVideos, escapedVideoID)))
 	req.Header.SetMethod(http.MethodGet)
 	if key.Value.GetValue() != "" {
 		req.Header.Set("Authorization", "Bearer "+key.Value.GetValue())
@@ -891,10 +899,14 @@ func (provider *VolcengineProvider) VideoDownload(ctx *schemas.BifrostContext, k
 
 func (provider *VolcengineProvider) VideoDelete(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostVideoDeleteRequest) (*schemas.BifrostVideoDeleteResponse, *schemas.BifrostError) {
 	videoID := providerUtils.StripVideoIDProviderSuffix(request.ID, provider.GetProviderKey())
+	escapedVideoID, idErr := providerUtils.EscapeResourceID(videoID, "video_id")
+	if idErr != nil {
+		return nil, idErr
+	}
 	return openai.HandleOpenAIVideoDeleteRequest(
 		ctx,
 		provider.client,
-		provider.networkConfig.BaseURL+providerUtils.GetPathFromContext(ctx, fmt.Sprintf("%s/%s", volcenginePathVideos, videoID)),
+		provider.networkConfig.BaseURL+providerUtils.GetPathFromContext(ctx, fmt.Sprintf("%s/%s", volcenginePathVideos, escapedVideoID)),
 		videoID,
 		key,
 		provider.networkConfig.ExtraHeaders,
@@ -1139,6 +1151,10 @@ func (provider *VolcengineProvider) FileRetrieve(ctx *schemas.BifrostContext, ke
 	if len(keys) == 0 {
 		return nil, providerUtils.NewBifrostOperationError("no keys provided", nil)
 	}
+	escapedFileID, idErr := providerUtils.EscapeResourceID(request.FileID, "file_id")
+	if idErr != nil {
+		return nil, idErr
+	}
 
 	sendBackRawRequest := providerUtils.ShouldSendBackRawRequest(ctx, provider.sendBackRawRequest)
 	sendBackRawResponse := providerUtils.ShouldSendBackRawResponse(ctx, provider.sendBackRawResponse)
@@ -1149,7 +1165,7 @@ func (provider *VolcengineProvider) FileRetrieve(ctx *schemas.BifrostContext, ke
 		resp := fasthttp.AcquireResponse()
 
 		providerUtils.SetExtraHeaders(ctx, req, provider.networkConfig.ExtraHeaders, nil)
-		req.SetRequestURI(provider.networkConfig.BaseURL + providerUtils.GetPathFromContext(ctx, fmt.Sprintf("%s/%s", volcenginePathFiles, request.FileID)))
+		req.SetRequestURI(provider.networkConfig.BaseURL + providerUtils.GetPathFromContext(ctx, fmt.Sprintf("%s/%s", volcenginePathFiles, escapedFileID)))
 		req.Header.SetMethod(http.MethodGet)
 		req.Header.SetContentType("application/json")
 		if key.Value.GetValue() != "" {
@@ -1204,6 +1220,10 @@ func (provider *VolcengineProvider) FileDelete(ctx *schemas.BifrostContext, keys
 	if len(keys) == 0 {
 		return nil, providerUtils.NewBifrostOperationError("no keys provided", nil)
 	}
+	escapedFileID, idErr := providerUtils.EscapeResourceID(request.FileID, "file_id")
+	if idErr != nil {
+		return nil, idErr
+	}
 
 	sendBackRawRequest := providerUtils.ShouldSendBackRawRequest(ctx, provider.sendBackRawRequest)
 	sendBackRawResponse := providerUtils.ShouldSendBackRawResponse(ctx, provider.sendBackRawResponse)
@@ -1214,7 +1234,7 @@ func (provider *VolcengineProvider) FileDelete(ctx *schemas.BifrostContext, keys
 		resp := fasthttp.AcquireResponse()
 
 		providerUtils.SetExtraHeaders(ctx, req, provider.networkConfig.ExtraHeaders, nil)
-		req.SetRequestURI(provider.networkConfig.BaseURL + providerUtils.GetPathFromContext(ctx, fmt.Sprintf("%s/%s", volcenginePathFiles, request.FileID)))
+		req.SetRequestURI(provider.networkConfig.BaseURL + providerUtils.GetPathFromContext(ctx, fmt.Sprintf("%s/%s", volcenginePathFiles, escapedFileID)))
 		req.Header.SetMethod(http.MethodDelete)
 		req.Header.SetContentType("application/json")
 		if key.Value.GetValue() != "" {
@@ -1285,6 +1305,10 @@ func (provider *VolcengineProvider) FileContent(ctx *schemas.BifrostContext, key
 	if len(keys) == 0 {
 		return nil, providerUtils.NewBifrostOperationError("no keys provided", nil)
 	}
+	escapedFileID, idErr := providerUtils.EscapeResourceID(request.FileID, "file_id")
+	if idErr != nil {
+		return nil, idErr
+	}
 
 	var lastErr *schemas.BifrostError
 	for _, key := range keys {
@@ -1292,7 +1316,7 @@ func (provider *VolcengineProvider) FileContent(ctx *schemas.BifrostContext, key
 		resp := fasthttp.AcquireResponse()
 
 		providerUtils.SetExtraHeaders(ctx, req, provider.networkConfig.ExtraHeaders, nil)
-		req.SetRequestURI(provider.networkConfig.BaseURL + providerUtils.GetPathFromContext(ctx, fmt.Sprintf("%s/%s/content", volcenginePathFiles, request.FileID)))
+		req.SetRequestURI(provider.networkConfig.BaseURL + providerUtils.GetPathFromContext(ctx, fmt.Sprintf("%s/%s/content", volcenginePathFiles, escapedFileID)))
 		req.Header.SetMethod(http.MethodGet)
 		if key.Value.GetValue() != "" {
 			req.Header.Set("Authorization", "Bearer "+key.Value.GetValue())

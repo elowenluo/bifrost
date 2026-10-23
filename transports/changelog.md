@@ -47,3 +47,5 @@
 - chore: v2.2.1 is upstream `transports/v2.2.1` (6493abd3d) merged onto the fork's v2.2.0, keeping the fork's Go module paths, custom providers (ModelArk, Volcengine), native Anthropic Messages and xAI passthrough, separate streaming and unary clients, the legacy realtime session endpoints, and release guards. Core, framework and plugins are built from the workspace and are not tagged separately
 - note: the abandoned non-streaming request fix (upstream #7313) already shipped in the fork's v2.2.0
 - fix: a caller OAuth bearer forwarded on a passthrough route is stripped before a cleartext non-loopback upstream on the fork's shared native Anthropic Messages client too (Anthropic and xAI), as upstream #7325 does for its own Anthropic and OpenAI passthroughs
+- fix: Volcengine and ModelArk file and video IDs are validated and escaped as one path segment before dispatch, as upstream #7307 does for its own providers
+- note: the deprecated beta realtime session endpoints now return a Bifrost-minted `client_secret.value` (upstream #7317), usable only through Bifrost's realtime endpoints, the same as `client_secrets`
