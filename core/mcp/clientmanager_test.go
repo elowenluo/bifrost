@@ -851,20 +851,19 @@ func TestBuildTLSHTTPClientRefusesProxyingBlockedLiteral(t *testing.T) {
 	}
 }
 
-// TestBuildTLSHTTPClientProxiedHostnameNeedsNoLocalDNS proves a proxied
-// request is handed to the proxy with its hostname unresolved. A proxy-only
-// deployment resolves public names at the proxy, not on the Bifrost host, so
-// the selector must not resolve locally: the target here is under .invalid
-// (RFC 6761, guaranteed not to resolve) and the request must still reach the
-// proxy and succeed.
-func TestBuildTLSHTTPClientProxiedHostnameNeedsNoLocalDNS(t *testing.T) {
+// TestBuildTLSHTTPClientProxiedHostnameNeedsLocalDNS pins the fork's proxied-name
+// contract (upstream hands an unresolved name to the proxy): a name the gateway cannot
+// resolve is refused before the proxy is contacted, since the proxy's resolver could map
+// it to a blocked address, while a name that resolves to a permitted address is still sent
+// to the proxy under its original hostname.
+func TestBuildTLSHTTPClientProxiedHostnameNeedsLocalDNS(t *testing.T) {
 	var (
-		mu      sync.Mutex
-		lastReq string
+		mu       sync.Mutex
+		requests []string
 	)
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		lastReq = r.Method + " " + r.Host
+		requests = append(requests, r.Method+" "+r.Host)
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("via-proxy"))
@@ -883,8 +882,11 @@ func TestBuildTLSHTTPClientProxiedHostnameNeedsNoLocalDNS(t *testing.T) {
 	require.NoError(t, err)
 	httpClient.Timeout = 5 * time.Second
 
-	resp, err := httpClient.Get("http://mcp.invalid/mcp")
-	require.NoError(t, err, "a hostname the host cannot resolve must still be sent to the proxy")
+	_, err = httpClient.Get("http://mcp.invalid/mcp")
+	require.Error(t, err, "a hostname the gateway cannot resolve must not be sent to the proxy")
+
+	resp, err := httpClient.Get("http://localhost/mcp")
+	require.NoError(t, err)
 	body, readErr := io.ReadAll(resp.Body)
 	require.NoError(t, resp.Body.Close())
 	require.NoError(t, readErr)
@@ -892,7 +894,7 @@ func TestBuildTLSHTTPClientProxiedHostnameNeedsNoLocalDNS(t *testing.T) {
 	require.Equal(t, "via-proxy", string(body))
 	mu.Lock()
 	defer mu.Unlock()
-	require.Equal(t, "GET mcp.invalid", lastReq, "the proxy must receive the original hostname")
+	require.Equal(t, []string{"GET localhost"}, requests, "only the resolvable name reaches the proxy, under its original hostname")
 }
 
 // TestBuildTLSHTTPClientBypassedProxyDialsDirect covers the NO_PROXY shape: the
@@ -948,4 +950,32 @@ func TestMCPProxySelectorPassthrough(t *testing.T) {
 	require.NoError(t, err)
 	_, err = sel(req)
 	require.ErrorIs(t, err, wantErr)
+}
+
+// A proxied hostname is resolved on the gateway before the proxy is chosen. A name the
+// gateway cannot resolve is refused rather than handed to the proxy, whose resolver could
+// map it to a blocked address; a name that resolves to a permitted address goes through.
+func TestMCPProxySelectorResolvesProxiedHostnames(t *testing.T) {
+	proxyURL, err := url.Parse("http://127.0.0.1:3128")
+	require.NoError(t, err)
+	sel := mcpProxySelector(http.ProxyURL(proxyURL))
+
+	for _, target := range []string{"http://bifrost.invalid/mcp", "https://bifrost.invalid:8443/mcp"} {
+		req, err := http.NewRequest(http.MethodGet, target, nil)
+		require.NoError(t, err)
+		got, err := sel(req)
+		require.Error(t, err, "%s must not reach the proxy unresolved", target)
+		require.Nil(t, got)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "http://localhost/mcp", nil)
+	require.NoError(t, err)
+	got, err := sel(req)
+	require.NoError(t, err, "a resolvable private-network name is permitted, as on the direct path")
+	require.Equal(t, proxyURL, got)
+
+	req, err = http.NewRequest(http.MethodGet, "http://169.254.169.254/latest/meta-data/", nil)
+	require.NoError(t, err)
+	_, err = sel(req)
+	require.Error(t, err, "a link-local literal is still refused before the proxy")
 }

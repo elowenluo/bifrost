@@ -584,7 +584,7 @@ HTTP and SSE MCP connections honor the standard `HTTP_PROXY`, `HTTPS_PROXY`, and
 
 The `network_config.proxy_config` block in `config.json` does not apply to MCP connections. Its `enable_for_*` flags cover inference, SCIM, and API clients only.
 
-The link-local and cloud-metadata block still applies when a proxy is in use: a connection string whose host is a link-local or metadata IP literal is refused before the proxy is contacted. A hostname on the proxied path is handed to the proxy unresolved, so Bifrost itself does not need to resolve public DNS in a proxy-only deployment.
+The link-local and cloud-metadata block still applies when a proxy is in use: a connection string whose host is a link-local or metadata IP literal is refused before the proxy is contacted. A hostname on the proxied path must resolve on the Bifrost host, and every address it resolves to must pass the same block, before Bifrost sends the request to the proxy. A name Bifrost cannot resolve is refused, so in a deployment whose DNS lives only behind the proxy, Bifrost must still be able to resolve the MCP servers it connects to.
 
 ---
 
