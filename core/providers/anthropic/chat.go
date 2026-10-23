@@ -2108,12 +2108,12 @@ func ToAnthropicChatStreamError(bifrostErr *schemas.BifrostError) string {
 //
 // Anthropic's tool_choice has no subset form (auto, any, tool, none), so the
 // only place the restriction can be expressed is the declaration list itself:
-// a tool that is not declared cannot be called. Callers that pass an empty
-// allowed list are left alone rather than being stripped of every tool, since
-// sending no declarations changes the request into one that cannot use tools
-// at all - a larger change than the caller asked for.
+// a tool that is not declared cannot be called. An explicit empty allowed list
+// (or one naming no function) permits no function tool, so every function
+// declaration is removed; returning the full list would let the model call
+// tools the caller allowed none of.
 func filterToolsByAllowed(tools []AnthropicTool, allowed []schemas.ChatToolChoiceAllowedToolsTool) []AnthropicTool {
-	if len(tools) == 0 || len(allowed) == 0 {
+	if len(tools) == 0 {
 		return tools
 	}
 	permitted := make(map[string]struct{}, len(allowed))
@@ -2121,9 +2121,6 @@ func filterToolsByAllowed(tools []AnthropicTool, allowed []schemas.ChatToolChoic
 		if a.Function.Name != "" {
 			permitted[a.Function.Name] = struct{}{}
 		}
-	}
-	if len(permitted) == 0 {
-		return tools
 	}
 	kept := make([]AnthropicTool, 0, len(tools))
 	for _, t := range tools {

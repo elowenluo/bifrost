@@ -2524,6 +2524,20 @@ func TestToAnthropicChatRequest_AllowedToolsUnknownNamesPermitNothing(t *testing
 		`"any" with an empty tool list is a request Anthropic rejects`)
 }
 
+// An explicit empty allowed list permits no function tool. Leaving the declarations in
+// place would let the model call tools the caller allowed none of.
+func TestToAnthropicChatRequest_AllowedToolsEmptyListPermitsNothing(t *testing.T) {
+	ctx := schemas.NewBifrostContext(nil, schemas.NoDeadline)
+
+	for _, mode := range []string{"auto", "required"} {
+		req, err := ToAnthropicChatRequest(ctx, restrictionRequest(allowedTools(mode), nil))
+		require.NoError(t, err)
+		assert.Empty(t, toolNames(req), "mode %q: an empty allowed list permits no function tool", mode)
+		require.NotNil(t, req.ToolChoice)
+		assert.Equal(t, "none", req.ToolChoice.Type, "mode %q", mode)
+	}
+}
+
 // parallel_tool_calls: false has a direct Anthropic equivalent that was never
 // populated, so the instruction was dropped and calls stayed parallel.
 func TestToAnthropicChatRequest_ParallelToolCallsFalseDisablesParallelUse(t *testing.T) {
