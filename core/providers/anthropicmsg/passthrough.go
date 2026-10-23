@@ -79,7 +79,9 @@ func Passthrough(ctx *schemas.BifrostContext, client *fasthttp.Client, key schem
 	defer fasthttp.ReleaseRequest(upstreamReq)
 
 	upstreamReq.Header.SetMethod(req.Method)
-	upstreamReq.SetRequestURI(cfg.requestURL(req))
+	requestURL := cfg.requestURL(req)
+	upstreamReq.SetRequestURI(requestURL)
+	providerUtils.StripCallerAuthForInsecureURL(requestURL, req.SafeHeaders)
 	cfg.setHeaders(ctx, upstreamReq, key, req.SafeHeaders)
 	if !providerUtils.ApplyLargePayloadRequestBodyWithModelNormalization(ctx, upstreamReq, cfg.Provider) {
 		upstreamReq.SetBody(req.Body)
@@ -124,7 +126,9 @@ func PassthroughStream(ctx *schemas.BifrostContext, postHookRunner schemas.PostH
 	defer fasthttp.ReleaseRequest(upstreamReq)
 
 	upstreamReq.Header.SetMethod(req.Method)
-	upstreamReq.SetRequestURI(cfg.requestURL(req))
+	requestURL := cfg.requestURL(req)
+	upstreamReq.SetRequestURI(requestURL)
+	providerUtils.StripCallerAuthForInsecureURL(requestURL, req.SafeHeaders)
 	cfg.setHeaders(ctx, upstreamReq, key, req.SafeHeaders)
 	upstreamReq.Header.Set("Connection", "close")
 	if !providerUtils.ApplyLargePayloadRequestBodyWithModelNormalization(ctx, upstreamReq, cfg.Provider) {
