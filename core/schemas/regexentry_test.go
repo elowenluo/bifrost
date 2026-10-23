@@ -88,8 +88,8 @@ func TestValidateRegexEntries(t *testing.T) {
 	if err := (WhiteList{"*", "regex:^gpt.*"}).Validate(); err == nil {
 		t.Fatal("the bare wildcard still cannot be mixed with other entries")
 	}
-	if err := (WhiteList{"regex:^gpt.*", "regex:^GPT.*"}).Validate(); err == nil {
-		t.Fatal("duplicate regex entries are still duplicates")
+	if err := (WhiteList{"regex:^gpt.*", "regex:^gpt.*"}).Validate(); err == nil {
+		t.Fatal("identically spelled regex entries are still duplicates")
 	}
 }
 
@@ -129,8 +129,13 @@ func TestListValidateKeepsDistinctRegexSpellings(t *testing.T) {
 	}
 }
 
-func TestListValidateTreatsCaseOnlyRegexDifferencesAsDuplicates(t *testing.T) {
-	if err := (BlackList{`regex:^GPT\d+`, `regex:^gpt\d+`}).Validate(); err == nil {
-		t.Fatal("BlackList accepted regex entries that differ only in the case of literal characters")
+func TestListValidateKeepsCaseSensitiveRegexGroupsDistinct(t *testing.T) {
+	// The scoped (?-i:...) flag overrides the case-insensitive wrapper, so these
+	// two patterns match different values and are not duplicates.
+	if !MatchEntry("regex:(?-i:GPT)", "GPT") || MatchEntry("regex:(?-i:GPT)", "gpt") {
+		t.Fatal("(?-i:...) should make the pattern case-sensitive")
+	}
+	if err := (BlackList{"regex:(?-i:GPT)", "regex:(?-i:gpt)"}).Validate(); err != nil {
+		t.Fatalf("BlackList rejected distinct case-sensitive patterns: %v", err)
 	}
 }

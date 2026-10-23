@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"unicode"
 
 	"github.com/bytedance/sonic"
 )
@@ -83,31 +82,16 @@ func (wl WhiteList) Validate() error {
 	return nil
 }
 
-// listEntryDedupKey is the duplicate-detection key for a list entry. Entries match
-// case-insensitively, so they dedupe case-insensitively too, with one exception
-// for regex: entries: the character after a backslash keeps its case, because
-// escapes such as \d and \D (or \w and \W) differ only in case and match different
-// values.
+// listEntryDedupKey is the duplicate-detection key for a list entry. Plain
+// entries match case-insensitively, so they dedupe case-insensitively. A regex:
+// entry keeps its exact spelling: case can change what a pattern matches even
+// under the case-insensitive wrapper, through escapes (\d vs \D) and scoped flags
+// ((?-i:GPT) vs (?-i:gpt)), so only identically spelled patterns are duplicates.
 func listEntryDedupKey(entry string) string {
-	if !IsRegexEntry(entry) {
-		return strings.ToLower(entry)
+	if IsRegexEntry(entry) {
+		return entry
 	}
-	var b strings.Builder
-	b.Grow(len(entry))
-	escaped := false
-	for _, r := range entry {
-		switch {
-		case escaped:
-			b.WriteRune(r)
-			escaped = false
-		case r == '\\':
-			b.WriteRune(r)
-			escaped = true
-		default:
-			b.WriteRune(unicode.ToLower(r))
-		}
-	}
-	return b.String()
+	return strings.ToLower(entry)
 }
 
 // BlackList is a list of values that are denied.
