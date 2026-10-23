@@ -2538,6 +2538,21 @@ func TestToAnthropicChatRequest_AllowedToolsEmptyListPermitsNothing(t *testing.T
 	}
 }
 
+// The allowed list restricts function tools only. When it permits none but a server
+// tool is declared, the server tool stays usable: "none" would switch it off too.
+func TestToAnthropicChatRequest_AllowedToolsKeepServerToolsUsable(t *testing.T) {
+	ctx := schemas.NewBifrostContext(nil, schemas.NoDeadline)
+	req := restrictionRequest(allowedTools("auto"), nil)
+	req.Params.Tools = append(req.Params.Tools, schemas.ChatTool{Type: schemas.ChatToolType("web_search_20260209"), Name: "web_search"})
+
+	converted, err := ToAnthropicChatRequest(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 0, countFunctionTools(converted.Tools), "no function tool was allowed")
+	require.Len(t, converted.Tools, 1, "the server tool stays declared")
+	require.NotNil(t, converted.ToolChoice)
+	assert.Equal(t, "auto", converted.ToolChoice.Type, `"none" would also switch off the server tool`)
+}
+
 // parallel_tool_calls: false has a direct Anthropic equivalent that was never
 // populated, so the instruction was dropped and calls stayed parallel.
 func TestToAnthropicChatRequest_ParallelToolCallsFalseDisablesParallelUse(t *testing.T) {

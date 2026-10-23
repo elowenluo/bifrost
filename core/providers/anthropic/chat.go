@@ -713,11 +713,16 @@ func ToAnthropicChatRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.Bif
 					if allowed != nil {
 						anthropicReq.Tools = filterToolsByAllowed(anthropicReq.Tools, allowed.Tools)
 						switch {
-						case countFunctionTools(anthropicReq.Tools) == 0:
+						case countFunctionTools(anthropicReq.Tools) == 0 && len(anthropicReq.Tools) == 0:
 							// The allowed list matched nothing declared. "any" or
 							// "auto" with no tools is a request Anthropic rejects,
 							// so the restriction is stated as what it means.
 							toolChoice.Type = "none"
+						case countFunctionTools(anthropicReq.Tools) == 0:
+							// No function is allowed, but server tools remain. The
+							// list restricts functions only, and "none" would switch
+							// those off too, so the model may still use them.
+							toolChoice.Type = "auto"
 						case allowed.Mode == "required":
 							toolChoice.Type = "any"
 						default:
