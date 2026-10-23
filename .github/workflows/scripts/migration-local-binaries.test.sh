@@ -142,8 +142,76 @@ if launch v2.1.1 "v2.1.1=" 2>/dev/null; then
 fi
 grep -q '^npx ' "$CALLS" && fail "empty mapping: start_previous_bifrost fell back to npx"
 
+# MIGRATION_FORK_IMAGES: resolve_fork_baselines against a fake registry probe (a
+# ghcr-tags.sh in a fake SCRIPT_DIR) and a fake docker. The probe answers from
+# FAKE_GHCR_STATES, or fails when FAKE_GHCR_FAIL is set; docker create fails when
+# FAKE_DOCKER_CREATE_FAIL is set.
+FAKE_SCRIPTS="$WORK/scripts"
+mkdir -p "$FAKE_SCRIPTS"
+cat > "$FAKE_SCRIPTS/ghcr-tags.sh" <<EOF
+ghcr_tag_states() {
+  echo "probe \$*" >> "$CALLS"
+  [ -z "\${FAKE_GHCR_FAIL:-}" ] || return 1
+  printf '%b' "\$FAKE_GHCR_STATES"
+}
+EOF
+FORK_DOCKER_BIN="$WORK/fork-docker-bin"
+mkdir -p "$FORK_DOCKER_BIN"
+cat > "$FORK_DOCKER_BIN/docker" <<EOF
+#!/usr/bin/env bash
+echo "docker \$*" >> "$CALLS"
+case "\$1" in
+  login) cat > /dev/null ;;
+  create) [ -z "\${FAKE_DOCKER_CREATE_FAIL:-}" ] || exit 1; echo "cid-\${2##*:}" ;;
+  cp) printf '#!/bin/sh\n' > "\$3" ;;
+esac
+EOF
+chmod +x "$FORK_DOCKER_BIN/docker"
+resolve_functions="$(awk '/^(local_binary_for_version|get_previous_versions|resolve_fork_baselines)\(\) \{$/,/^\}$/' "$TARGET")"
+# resolve <versions> <existing mapping>: prints the resulting MIGRATION_LOCAL_BINARIES.
+resolve() {
+  : > "$CALLS"
+  PATH="$FORK_DOCKER_BIN:$PATH" MIGRATION_TEST_VERSIONS="$1" MIGRATION_LOCAL_BINARIES="$2" \
+    MIGRATION_FORK_IMAGES=txehq/bifrost GITHUB_TOKEN=fake-token-value bash -c "
+    set -euo pipefail
+    log_info() { :; }
+    log_error() { echo \"\$1\" >&2; }
+    SCRIPT_DIR='$FAKE_SCRIPTS' REPO_ROOT='$REPO_ROOT' VERSIONS_TO_TEST=3 FORK_BASELINE_DIR=''
+    $resolve_functions
+    resolve_fork_baselines || exit 1
+    echo \"\$MIGRATION_LOCAL_BINARIES\"
+    for pair in \$MIGRATION_LOCAL_BINARIES; do [ -x \"\${pair#*=}\" ] || echo \"not executable: \$pair\" >&2; done
+  "
+}
+
+mapping="$(FAKE_GHCR_STATES='v1.5.11 absent\nv2.1.3 present\n' resolve "v1.5.11 v2.1.3" "" 2>"$WORK/err")" \
+  || fail "fork image: resolve_fork_baselines failed: $(cat "$WORK/err")"
+grep -qE '^v2\.1\.3=.*/bifrost-http-v2\.1\.3$' <<< "$mapping" || fail "fork image: v2.1.3 was not mapped (got '$mapping')"
+grep -q 'v1\.5\.11=' <<< "$mapping" && fail "fork image: v1.5.11 has no fork image but was mapped"
+grep -q 'not executable' "$WORK/err" && fail "fork image: $(cat "$WORK/err")"
+grep -qx 'docker create ghcr.io/txehq/bifrost:v2.1.3' "$CALLS" || fail "fork image: v2.1.3 was not pulled"
+grep -q 'docker create .*v1\.5\.11' "$CALLS" && fail "fork image: v1.5.11 was pulled"
+grep -q 'fake-token-value' "$CALLS" && fail "fork image: the token reached docker's argv"
+
+FAKE_GHCR_STATES='v2.1.3 present\n' resolve "v2.1.1 v2.1.3" "v2.1.1=$BASELINE" > /dev/null 2>&1 \
+  || fail "mapped version: resolve_fork_baselines failed"
+grep -qx 'probe txehq/bifrost v2.1.3' "$CALLS" || fail "mapped version: an explicit mapping was probed again ($(grep probe "$CALLS"))"
+
+if FAKE_GHCR_FAIL=1 resolve "v2.1.3" "" > /dev/null 2>&1; then
+  fail "probe failure: resolve_fork_baselines succeeded"
+fi
+grep -q '^docker create' "$CALLS" && fail "probe failure: an image was pulled"
+
+if FAKE_GHCR_STATES='v1.5.11 absent\n' resolve "v1.5.11 v2.1.3" "" > /dev/null 2>&1; then
+  fail "missing state: a version the probe did not classify was accepted"
+fi
+
+if FAKE_GHCR_STATES='v2.1.3 present\n' FAKE_DOCKER_CREATE_FAIL=1 resolve "v2.1.3" "" > /dev/null 2>&1; then
+  fail "pull failure: resolve_fork_baselines succeeded without the fork binary"
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "$failures check(s) failed" >&2
   exit 1
 fi
-echo "OK: invalid MIGRATION_LOCAL_BINARIES mappings fail closed; valid and absent mappings start the right baseline."
+echo "OK: invalid MIGRATION_LOCAL_BINARIES mappings fail closed; valid and absent mappings start the right baseline; fork images resolve only on a definite registry answer."

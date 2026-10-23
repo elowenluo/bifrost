@@ -28,6 +28,10 @@ set -euo pipefail
 #   MIGRATION_LOCAL_BINARIES - Space-separated version=path pairs; a listed version runs
 #                              that bifrost-http binary instead of the npx release, e.g. a
 #                              fork build of the deployed version ("v2.1.1=/tmp/bifrost-http")
+#   MIGRATION_FORK_IMAGES    - <owner>/<name> on ghcr.io (e.g. "txehq/bifrost"); every
+#                              previous version with an image there runs that image's
+#                              binary instead of the npx release. Needs GITHUB_TOKEN with
+#                              read access to the package, and a Linux host.
 
 # Pull all the tags available. Version discovery reads them, so a failed fetch would
 # leave stale or missing tags and quietly narrow the coverage this test reports. It is
@@ -74,6 +78,8 @@ NC='\033[0m' # No Color
 
 # Temp directory for test artifacts
 TEMP_DIR=""
+# Holds the binaries resolve_fork_baselines extracts; removed on exit.
+FORK_BASELINE_DIR=""
 BIFROST_PID=""
 # Set once this run starts a bifrost server; cleanup only sweeps the port after that.
 BIFROST_STARTED=false
@@ -147,6 +153,9 @@ cleanup() {
     log_info "Removing temp directory: $TEMP_DIR"
     rm -rf "$TEMP_DIR"
   fi
+  if [ -n "${FORK_BASELINE_DIR:-}" ] && [ -d "$FORK_BASELINE_DIR" ]; then
+    rm -rf "$FORK_BASELINE_DIR"
+  fi
 
   exit $exit_code
 }
@@ -203,6 +212,68 @@ validate_local_binaries() {
     fi
   done
   return $status
+}
+
+# resolve_fork_baselines maps every previous version that the fork published as an image
+# to that image's own binary, appending it to MIGRATION_LOCAL_BINARIES. A fork-only release
+# (v2.1.3) is unknown to upstream's npx CLI, so without this the run cannot start it at
+# all; a version the fork never published as an image keeps the npx release. Only a
+# definite registry answer decides which: an image the probe cannot classify fails the
+# run, because guessing "absent" would migrate from upstream's build while reporting
+# success for the fork's. The image's /app/main is statically linked (Dockerfile:
+# -extldflags '-static'), so it runs on the host like a local build. Linux hosts only.
+# Requires MIGRATION_FORK_IMAGES=<owner>/<name>, GITHUB_TOKEN with read access to the
+# package, curl, jq and docker.
+resolve_fork_baselines() {
+  local repository="$MIGRATION_FORK_IMAGES" versions=() version states dir cid binary
+  # shellcheck source=ghcr-tags.sh
+  source "$SCRIPT_DIR/ghcr-tags.sh"
+  while IFS= read -r version; do
+    [ -n "$version" ] || continue
+    local_binary_for_version "$version" >/dev/null || versions+=("$version")
+  done < <(get_previous_versions "$VERSIONS_TO_TEST")
+  if [ ${#versions[@]} -eq 0 ]; then
+    return 0
+  fi
+  log_info "Checking ghcr.io/${repository} for fork baselines: ${versions[*]}"
+  if ! states=$(ghcr_tag_states "$repository" "${versions[@]}"); then
+    log_error "Could not establish which baselines the fork published as images"
+    return 1
+  fi
+  FORK_BASELINE_DIR=$(mktemp -d)
+  dir="$FORK_BASELINE_DIR"
+  # A throwaway docker config keeps the registry login out of the runner's own.
+  mkdir -p "$dir/docker"
+  if ! printf '%s\n' "$GITHUB_TOKEN" | DOCKER_CONFIG="$dir/docker" \
+      docker login ghcr.io --username "${GITHUB_ACTOR:-token}" --password-stdin >/dev/null; then
+    log_error "docker login to ghcr.io failed"
+    return 1
+  fi
+  for version in "${versions[@]}"; do
+    if grep -qxF "${version} absent" <<<"$states"; then
+      log_info "  ${version}: no fork image, uses the npx release"
+      continue
+    fi
+    if ! grep -qxF "${version} present" <<<"$states"; then
+      log_error "GHCR probe returned no state for ${version}"
+      return 1
+    fi
+    binary="$dir/bifrost-http-${version}"
+    if ! cid=$(DOCKER_CONFIG="$dir/docker" docker create "ghcr.io/${repository}:${version}"); then
+      log_error "Could not pull ghcr.io/${repository}:${version}"
+      return 1
+    fi
+    if ! docker cp "${cid}:/app/main" "$binary" >/dev/null; then
+      docker rm "$cid" >/dev/null 2>&1 || true
+      log_error "ghcr.io/${repository}:${version} has no /app/main"
+      return 1
+    fi
+    docker rm "$cid" >/dev/null 2>&1 || true
+    chmod +x "$binary"
+    log_info "  ${version}: fork image ghcr.io/${repository}:${version}"
+    MIGRATION_LOCAL_BINARIES="${MIGRATION_LOCAL_BINARIES:+$MIGRATION_LOCAL_BINARIES }${version}=${binary}"
+  done
+  rm -rf "$dir/docker"
 }
 
 # start_previous_bifrost starts a previous version in the background (setting BIFROST_PID):
@@ -6469,6 +6540,9 @@ main() {
   log_info ""
 
   if ! validate_local_binaries; then
+    exit 1
+  fi
+  if [ -n "${MIGRATION_FORK_IMAGES:-}" ] && ! resolve_fork_baselines; then
     exit 1
   fi
 
