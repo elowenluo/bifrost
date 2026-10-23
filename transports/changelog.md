@@ -99,6 +99,7 @@
 
 ## 🍴 Fork changes (txehq/bifrost)
 
+- breaking: upstream retired the beta realtime session endpoints `POST /v1/realtime/sessions` and `POST /openai/v1/realtime/sessions` (and the `OpenAI-Beta: realtime=v1` header) in favour of GA `POST /v1/realtime/client_secrets` (`/openai/v1/realtime/client_secrets`), which takes `{"session": {...}}` and returns a top-level `value` and `expires_at`; the old routes now return 404
 - chore: v2.2.0 is upstream `transports/v2.2.0` (ed79592fc) merged onto the fork's v2.1.3, keeping the fork's Go module paths, custom providers (ModelArk, Volcengine), native Anthropic Messages passthrough, separate streaming and unary clients, and release guards. Core, framework and plugins are built from the workspace and are not tagged separately
 - fix: a realtime transcription session stays on the model it was admitted for across `session.update` and `transcription_session.update`, the GA `audio.input.transcription` and legacy `input_audio_transcription` shapes, over WebSocket and WebRTC; malformed shapes, `session.model` and a non-transcription `session.type` are refused
 - fix: provider key listings and MCP client configs mask a service URL or connection string that carries userinfo (`http://user:pass@host`) instead of showing it in plaintext
@@ -107,3 +108,11 @@
 - fix: a non-streaming request cancelled just as its result arrives no longer leaves the caller waiting forever (upstream #7313)
 - fix: the Claude Desktop marketplace git endpoints no longer race server shutdown
 - fix: the model pattern editor accepts Go inline regex flags such as `(?i)`
+- fix: a non-event-stream response that the upstream cuts short (a large JSON body, say) now fails with a truncation error instead of reaching the client shortened
+- fix: a transcription WebSocket counts against `max_connections` while it waits for its first session update, and `?model=` opens the session immediately
+- fix: realtime sessions keep the key restrictions and routing attribution set by pre-request hooks
+- fix: Bedrock streamed tool search replays its `tool_search_tool_result`, and Bedrock stream bookkeeping no longer lives on the request context
+- fix: `regex:` allow and block entries that only compile inside the anchoring wrapper are rejected, and `regex:\d+` and `regex:\D+` are no longer reported as duplicates
+- fix: team, customer and business-unit filters on logs and MCP logs match the multi-value attribution columns on SQLite and ClickHouse as well as Postgres
+- fix: off-peak pricing applies to routing classifier calls and semantic-cache embedding lookups
+- fix: multipart `/v1/images/edits` keeps `aspect_ratio`; Gemini keeps parallel function responses together around a reminder; Bedrock keeps a placeholder in a tool result emptied by cache stripping; OpenAI raw capture keeps large frames it forwards
