@@ -276,7 +276,11 @@ resolve_fork_baselines() {
       log_error "ghcr.io/${repository}:${version} has no /app/main"
       return 1
     fi
-    docker rm -v "$cid" >/dev/null 2>&1 || true
+    # A failed removal keeps the id for the exit trap rather than leaking the container.
+    if ! docker rm -v "$cid" >/dev/null 2>&1; then
+      log_error "Could not remove extraction container ${cid}"
+      return 1
+    fi
     FORK_BASELINE_CID=""
     chmod +x "$binary"
     log_info "  ${version}: fork image ghcr.io/${repository}:${version}"

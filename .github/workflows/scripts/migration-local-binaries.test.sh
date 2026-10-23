@@ -164,6 +164,7 @@ case "\$1" in
   login) cat > /dev/null ;;
   create) [ -z "\${FAKE_DOCKER_CREATE_FAIL:-}" ] || exit 1; img="\${*: -1}"; echo "cid-\${img##*:}" ;;
   cp) [ -z "\${FAKE_DOCKER_CP_FAIL:-}" ] || exit 1; printf '#!/bin/sh\n' > "\$3" ;;
+  rm) [ -z "\${FAKE_DOCKER_RM_FAIL:-}" ] || exit 1 ;;
 esac
 EOF
 chmod +x "$FORK_DOCKER_BIN/docker"
@@ -212,11 +213,13 @@ if FAKE_GHCR_STATES='v2.1.3 present\n' FAKE_DOCKER_CREATE_FAIL=1 resolve "v2.1.3
   fail "pull failure: resolve_fork_baselines succeeded without the fork binary"
 fi
 
-# A failed copy leaves the container for the exit trap: FORK_BASELINE_CID still names it.
-: > "$CALLS"
-cid_left="$(PATH="$FORK_DOCKER_BIN:$PATH" MIGRATION_TEST_VERSIONS="v2.1.3" MIGRATION_LOCAL_BINARIES="" \
-  MIGRATION_FORK_IMAGES=txehq/bifrost GITHUB_TOKEN=fake-token-value FAKE_GHCR_STATES='v2.1.3 present\n' \
-  FAKE_DOCKER_CP_FAIL=1 bash -c "
+# A failed copy or removal fails the run and leaves the container for the exit trap:
+# FORK_BASELINE_CID still names it.
+left_for_cleanup() {
+  : > "$CALLS"
+  env PATH="$FORK_DOCKER_BIN:$PATH" MIGRATION_TEST_VERSIONS="v2.1.3" MIGRATION_LOCAL_BINARIES="" \
+    MIGRATION_FORK_IMAGES=txehq/bifrost GITHUB_TOKEN=fake-token-value FAKE_GHCR_STATES='v2.1.3 present\n' \
+    "$@" bash -c "
     set -uo pipefail
     log_info() { :; }
     log_error() { :; }
@@ -224,8 +227,12 @@ cid_left="$(PATH="$FORK_DOCKER_BIN:$PATH" MIGRATION_TEST_VERSIONS="v2.1.3" MIGRA
     $resolve_functions
     resolve_fork_baselines && exit 1
     echo \"\$FORK_BASELINE_CID\"
-  ")" || fail "copy failure: resolve_fork_baselines succeeded without /app/main"
-[ "$cid_left" = "cid-v2.1.3" ] || fail "copy failure: the extraction container was not left for cleanup (got '$cid_left')"
+  "
+}
+for failing in FAKE_DOCKER_CP_FAIL FAKE_DOCKER_RM_FAIL; do
+  cid_left="$(left_for_cleanup "$failing=1")" || fail "$failing: resolve_fork_baselines succeeded"
+  [ "$cid_left" = "cid-v2.1.3" ] || fail "$failing: the extraction container was not left for cleanup (got '$cid_left')"
+done
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures check(s) failed" >&2
