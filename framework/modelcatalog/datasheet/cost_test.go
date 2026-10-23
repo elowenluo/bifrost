@@ -5447,6 +5447,67 @@ func TestCalculateCost_DecisionTokenBilling(t *testing.T) {
 	assert.InDelta(t, 50000*0.000000042, s.CalculateCost(resp, nil), 1e-12)
 }
 
+// A model with no decisions row answers a decision by emulation: one Responses call
+// to the provider, which must be billed as that text call, cache reads and writes
+// included, from its chat row or, failing that, its responses row. Without the
+// fallback the decision found no row and cost nothing, so every emulated decision
+// was a free paid call outside every budget.
+func TestCalculateCost_EmulatedDecisionBilledAsTextCall(t *testing.T) {
+	usage := &schemas.BifrostLLMUsage{
+		PromptTokens:     1000,
+		CompletionTokens: 100,
+		TotalTokens:      1100,
+		PromptTokensDetails: &schemas.ChatPromptTokensDetails{
+			CachedReadTokens:  800,
+			CachedWriteTokens: 100,
+		},
+	}
+	row := configstoreTables.TableModelPricing{
+		Model: "gpt-5.5", Provider: "openai",
+		InputCostPerToken:           bifrost.Ptr(0.000003),
+		OutputCostPerToken:          bifrost.Ptr(0.00001),
+		CacheReadInputTokenCost:     bifrost.Ptr(0.0000003),
+		CacheCreationInputTokenCost: bifrost.Ptr(0.00000375),
+	}
+	want := computeTextCostTotal(&row, usage, serviceTier{})
+	if want <= 0 {
+		t.Fatalf("text cost of the emulated call = %v, want > 0", want)
+	}
+
+	for _, mode := range []string{"chat", "responses"} {
+		t.Run(mode, func(t *testing.T) {
+			r := row
+			r.Mode = mode
+			s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+				makeKey("gpt-5.5", "openai", mode): r,
+			})
+			got := s.CalculateCost(makeDecisionResponse(schemas.OpenAI, "gpt-5.5", usage), nil)
+			assert.InDelta(t, want, got, 1e-12)
+		})
+	}
+}
+
+// A native decisions row keeps the token-only decision pricing even when the model
+// also has a chat row.
+func TestCalculateCost_NativeDecisionRowWinsOverChatRow(t *testing.T) {
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey("jev-1.13.0", "typesafe", "decisions"): {
+			Model: "jev-1.13.0", Provider: "typesafe", Mode: "decisions",
+			InputCostPerToken:  bifrost.Ptr(0.000000042),
+			OutputCostPerToken: bifrost.Ptr(0.0),
+		},
+		makeKey("jev-1.13.0", "typesafe", "chat"): {
+			Model: "jev-1.13.0", Provider: "typesafe", Mode: "chat",
+			InputCostPerToken:  bifrost.Ptr(0.001),
+			OutputCostPerToken: bifrost.Ptr(0.001),
+		},
+	})
+	resp := makeDecisionResponse(schemas.Typesafe, "jev-1.13.0", &schemas.BifrostLLMUsage{
+		PromptTokens: 50000, CompletionTokens: 40, TotalTokens: 50040,
+	})
+	assert.InDelta(t, 50000*0.000000042, s.CalculateCost(resp, nil), 1e-12)
+}
+
 func TestCalculateCost_RerankPerTokenStillWorks(t *testing.T) {
 	// Voyage and Jina style rerankers bill per token and carry no per-query rate; the two
 	// pricing shapes must not interfere.
