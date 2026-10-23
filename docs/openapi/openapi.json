@@ -11808,6 +11808,75 @@
         ]
       }
     },
+    "/v1/realtime/sessions": {
+      "post": {
+        "operationId": "createRealtimeSession",
+        "summary": "Mint a realtime session (legacy alias)",
+        "deprecated": true,
+        "description": "Deprecated: OpenAI retired the beta realtime session API. Bifrost keeps this\nroute for existing clients by translating the beta request (flat `model`,\n`voice`, `modalities`, `pcm16`/`g711_ulaw`/`g711_alaw` formats,\n`input_audio_transcription`, `turn_detection`, `client_secret.expires_after`)\ninto a GA `POST /v1/realtime/client_secrets` request and the response back\ninto the beta `realtime.session` object with `client_secret.value` and\n`client_secret.expires_at`. OpenAI only. New integrations should call\n`client_secrets` with `{\"session\": {...}}` directly.\n",
+        "tags": [
+          "Realtime"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Provider-specific realtime session payload (passthrough)."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Upstream session response (provider passthrough)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Provider-specific response body"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed"
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "VirtualKeyAuth": []
+          },
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
+    },
     "/openai/v1/chat/completions": {
       "post": {
         "operationId": "openaiCreateChatCompletion",
@@ -21509,6 +21578,73 @@
         "responses": {
           "200": {
             "description": "Ephemeral client secret payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          },
+          {
+            "VirtualKeyAuth": []
+          },
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/openai/v1/realtime/sessions": {
+      "post": {
+        "operationId": "openaiRealtimeSession",
+        "summary": "Create realtime session (OpenAI alias)",
+        "deprecated": true,
+        "description": "Deprecated: OpenAI retired the beta realtime session API. Bifrost keeps this\nroute for existing clients by translating the beta request (flat `model`,\n`voice`, `modalities`, `pcm16`/`g711_ulaw`/`g711_alaw` formats,\n`input_audio_transcription`, `turn_detection`, `client_secret.expires_after`)\ninto a GA `POST /v1/realtime/client_secrets` request and the response back\ninto the beta `realtime.session` object with `client_secret.value` and\n`client_secret.expires_at`. OpenAI only. New integrations should call\n`client_secrets` with `{\"session\": {...}}` directly.\n",
+        "tags": [
+          "OpenAI Integration"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "OpenAI realtime session configuration."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Realtime session payload.",
             "content": {
               "application/json": {
                 "schema": {

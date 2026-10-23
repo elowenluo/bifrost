@@ -99,7 +99,7 @@
 
 ## 🍴 Fork changes (txehq/bifrost)
 
-- breaking: upstream retired the beta realtime session endpoints `POST /v1/realtime/sessions` and `POST /openai/v1/realtime/sessions` (and the `OpenAI-Beta: realtime=v1` header) in favour of GA `POST /v1/realtime/client_secrets` (`/openai/v1/realtime/client_secrets`), which takes `{"session": {...}}` and returns a top-level `value` and `expires_at`; the old routes now return 404
+- deprecated: upstream retired the beta realtime session endpoints `POST /v1/realtime/sessions` and `POST /openai/v1/realtime/sessions`; the fork keeps both for existing clients by translating the beta request and response to and from GA `POST /v1/realtime/client_secrets` (OpenAI only, no `OpenAI-Beta` header sent). New integrations should call `client_secrets` with `{"session": {...}}`
 - chore: v2.2.0 is upstream `transports/v2.2.0` (ed79592fc) merged onto the fork's v2.1.3, keeping the fork's Go module paths, custom providers (ModelArk, Volcengine), native Anthropic Messages passthrough, separate streaming and unary clients, and release guards. Core, framework and plugins are built from the workspace and are not tagged separately
 - fix: a realtime transcription session stays on the model it was admitted for across `session.update` and `transcription_session.update`, the GA `audio.input.transcription` and legacy `input_audio_transcription` shapes, over WebSocket and WebRTC; malformed shapes, `session.model` and a non-transcription `session.type` are refused
 - fix: provider key listings and MCP client configs mask a service URL or connection string that carries userinfo (`http://user:pass@host`) instead of showing it in plaintext

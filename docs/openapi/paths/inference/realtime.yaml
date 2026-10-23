@@ -158,3 +158,45 @@ realtime-client-secrets:
     - BearerAuth: []
     - VirtualKeyAuth: []
     - ApiKeyAuth: []
+
+realtime-sessions:
+  post:
+    operationId: createRealtimeSession
+    summary: Mint a realtime session (legacy alias)
+    deprecated: true
+    description: |
+      Deprecated: OpenAI retired the beta realtime session API. Bifrost keeps this
+      route for existing clients by translating the beta request (flat `model`,
+      `voice`, `modalities`, `pcm16`/`g711_ulaw`/`g711_alaw` formats,
+      `input_audio_transcription`, `turn_detection`, `client_secret.expires_after`)
+      into a GA `POST /v1/realtime/client_secrets` request and the response back
+      into the beta `realtime.session` object with `client_secret.value` and
+      `client_secret.expires_at`. OpenAI only. New integrations should call
+      `client_secrets` with `{"session": {...}}` directly.
+    tags:
+    - Realtime
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            description: Provider-specific realtime session payload (passthrough).
+    responses:
+      '200':
+        description: Upstream session response (provider passthrough)
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Provider-specific response body
+      '400':
+        $ref: '../../openapi.yaml#/components/responses/BadRequest'
+      '401':
+        description: Authentication failed
+      '500':
+        $ref: '../../openapi.yaml#/components/responses/InternalError'
+    security:
+    - BearerAuth: []
+    - VirtualKeyAuth: []
+    - ApiKeyAuth: []
