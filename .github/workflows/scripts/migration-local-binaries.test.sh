@@ -168,11 +168,15 @@ case "\$1" in
 esac
 EOF
 chmod +x "$FORK_DOCKER_BIN/docker"
+# resolve_fork_baselines allocates with mktemp -d and the child shells below have no exit
+# trap, so TMPDIR points into $WORK and the test's own cleanup removes every allocation.
+RESOLVE_TMP="$WORK/tmp"
+mkdir -p "$RESOLVE_TMP"
 resolve_functions="$(awk '/^(local_binary_for_version|get_previous_versions|resolve_fork_baselines)\(\) \{$/,/^\}$/' "$TARGET")"
 # resolve <versions> <existing mapping>: prints the resulting MIGRATION_LOCAL_BINARIES.
 resolve() {
   : > "$CALLS"
-  PATH="$FORK_DOCKER_BIN:$PATH" MIGRATION_TEST_VERSIONS="$1" MIGRATION_LOCAL_BINARIES="$2" \
+  TMPDIR="$RESOLVE_TMP" PATH="$FORK_DOCKER_BIN:$PATH" MIGRATION_TEST_VERSIONS="$1" MIGRATION_LOCAL_BINARIES="$2" \
     MIGRATION_FORK_IMAGES=txehq/bifrost GITHUB_TOKEN=fake-token-value bash -c "
     set -euo pipefail
     log_info() { :; }
@@ -217,7 +221,7 @@ fi
 # FORK_BASELINE_CID still names it.
 left_for_cleanup() {
   : > "$CALLS"
-  env PATH="$FORK_DOCKER_BIN:$PATH" MIGRATION_TEST_VERSIONS="v2.1.3" MIGRATION_LOCAL_BINARIES="" \
+  env TMPDIR="$RESOLVE_TMP" PATH="$FORK_DOCKER_BIN:$PATH" MIGRATION_TEST_VERSIONS="v2.1.3" MIGRATION_LOCAL_BINARIES="" \
     MIGRATION_FORK_IMAGES=txehq/bifrost GITHUB_TOKEN=fake-token-value FAKE_GHCR_STATES='v2.1.3 present\n' \
     "$@" bash -c "
     set -uo pipefail
@@ -233,6 +237,8 @@ for failing in FAKE_DOCKER_CP_FAIL FAKE_DOCKER_RM_FAIL; do
   cid_left="$(left_for_cleanup "$failing=1")" || fail "$failing: resolve_fork_baselines succeeded"
   [ "$cid_left" = "cid-v2.1.3" ] || fail "$failing: the extraction container was not left for cleanup (got '$cid_left')"
 done
+
+[ -n "$(ls -A "$RESOLVE_TMP")" ] || fail "resolver allocations did not land under \$WORK, so they outlive this test"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures check(s) failed" >&2

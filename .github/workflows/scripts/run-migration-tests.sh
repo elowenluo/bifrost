@@ -245,7 +245,8 @@ resolve_fork_baselines() {
     log_error "Could not establish which baselines the fork published as images"
     return 1
   fi
-  FORK_BASELINE_DIR=$(mktemp -d)
+  # An explicit template: BSD mktemp -d ignores TMPDIR without one.
+  FORK_BASELINE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/bifrost-fork-baselines.XXXXXX")
   dir="$FORK_BASELINE_DIR"
   # A throwaway docker config keeps the registry login out of the runner's own.
   mkdir -p "$dir/docker"
