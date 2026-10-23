@@ -60,6 +60,11 @@ func TestClassifyErrorType(t *testing.T) {
 			explanation: "declared, so it is not confused with the provider's own 404 verdict",
 		},
 		{
+			name: "provider 408 is the provider timing out, not a bad request",
+			err:  providerErr(408), requestType: ChatCompletionRequest,
+			want: ErrorTypeProviderTimeout,
+		},
+		{
 			name: "provider rejects an unknown model",
 			err:  providerErr(404), requestType: EmbeddingRequest,
 			want: ErrorTypeCallerModelUnknown,

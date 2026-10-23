@@ -200,7 +200,9 @@ func classifyProviderStatus(status int, requestType RequestType) (ErrorType, boo
 		return ErrorTypeCallerCancelled, true
 	case status == 503 || status == 529:
 		return ErrorTypeProviderOverloaded, true
-	case status == 504:
+	case status == 408 || status == 504:
+		// 408 is the provider saying the request timed out on its side; it must
+		// precede the 4xx catch-all, which would blame the caller.
 		return ErrorTypeProviderTimeout, true
 	case status >= 400 && status < 500:
 		// Keeps ErrorTypeOther meaning "nobody declared and no rule matched".
