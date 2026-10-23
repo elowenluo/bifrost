@@ -761,20 +761,22 @@ Once all approved changes are applied:
    make run-e2e FLOW=<feature>
    ```
 
-2. Run the provider harness (mandatory for every non-exempt wire-visible change, always scoped;
+2. Prepare the provider-harness run for the user (mandatory for every non-exempt wire-visible change, always scoped;
    the exemptions are AGENTS.md's: no wire-visible effect, or behaviour no HTTP request can
    reach, and an exempt change must say so in the report). It is a paid live sweep
    against real provider accounts: the unfiltered collection is ~1,900 requests. The scope keeps
-   the run small, and `HARNESS_MAX_REQUESTS` (below) is an optional ceiling on top of that. Start
-   the server against the shared integration config with `make dev
+   the run small, and `HARNESS_MAX_REQUESTS` (below) is an optional ceiling on top of that.
+   The harness is the user's to run, not yours: do not launch it (AGENTS.md "Every fix ends
+   with a provider-harness run"). Your job is to name the scope, count it, and hand over the
+   commands. The run starts the server against the shared integration config with `make dev
    APP_DIR=$(pwd)/tests/integrations/python` (that is `tests/integrations/python/config.json`,
    which the harness target already defaults to), and scope the run to the change with `PROVIDER`
-   and `FEATURE`, or `SMOKE=1` for a cross-cutting change. Never run the unscoped sweep, and never
-   widen the scope beyond the change, without a separate explicit yes from the user that names
+   and `FEATURE`, or `SMOKE=1` for a cross-cutting change. Never hand over the unscoped sweep, and
+   never widen the scope beyond the change, without a separate explicit yes from the user that names
    the scope.
 
-   Before launching, resolve the exact request count for the chosen scope (the same filter the
-   recipe applies) and put the command, the scope, and that count in the plan the user approves:
+   Resolve the exact request count for the chosen scope (the same filter the recipe applies) and
+   put the command, the scope, and that count in the report you hand over:
    ```bash
    node tests/e2e/api/runners/augment-provider-harness.mjs --source tests/e2e/api/collections/provider-harness.json --out tmp/harness-augmented.json
    # PROVIDER/FEATURE scope: one pass
@@ -784,7 +786,7 @@ Once all approved changes are applied:
    node tests/e2e/api/runners/filter-collection.mjs --source tmp/harness-augmented.json --out tmp/harness-smoke-cache.json --smoke tests/e2e/api/collections/smoke-manifest.json --feature-any cache-parity
    # stderr of each command ends with: [filter-collection] wrote ... with N requests after filter
    ```
-   State N for a scoped run, or N_main + N_cache for SMOKE=1, in the plan. When SMOKE=1 is
+   State N for a scoped run, or N_main + N_cache for SMOKE=1, in the report. When SMOKE=1 is
    combined with PROVIDER, FEATURE or FOLDER, apply the same filters to both smoke commands.
    The preflight is an estimate: the main pass forks one newman per provider and a producer
    shared by several forks runs once per fork, so the live total can exceed the preflight sum
@@ -800,7 +802,7 @@ Once all approved changes are applied:
    front; if they are wanted, run them as a separately approved `SKIP_STREAM_CANCEL=` run
    without the cap. After the run, quote the provider table's Total column as the actual.
 
-   Port 8080 is a blocking precondition. The recipe reuses any server whose `/health` answers
+   Tell the user that port 8080 is a blocking precondition. The recipe reuses any server whose `/health` answers
    and then never starts the `APP_DIR` one, so a stale listener silently tests old code. Run
    `lsof -nP -iTCP:8080 -sTCP:LISTEN` first: if it reports a listener you did not start on the
    current working tree in this session, stop, ask the user to shut it down (never kill a
@@ -816,8 +818,10 @@ Once all approved changes are applied:
    # cross-cutting change: the curated smoke set instead
    make run-provider-harness-test SMOKE=1
    ```
-   Report the provider status table and `tmp/harness-failures.md` findings, and state exactly
-   which scope ran. See AGENTS.md "Every fix ends with a provider-harness run".
+   End the report with exactly these two commands in a plain code block, ready to paste, with
+   the scope filled in, and stop there. When the user has run it and shares the provider status
+   table and `tmp/harness-failures.md`, investigate the findings. See AGENTS.md "Every fix ends
+   with a provider-harness run".
 
 3. Report results to the user, including the red-then-green transcript/summary for Bug issues (what failed before, what passes now)
 4. If tests fail, investigate and propose fixes (with approval)
