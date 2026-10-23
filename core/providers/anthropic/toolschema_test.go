@@ -2,8 +2,11 @@ package anthropic
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/capsohq/bifrost/core/schemas"
 )
@@ -420,5 +423,92 @@ func TestNormalizeAnthropicToolInputSchemaConjoinsRefSiblings(t *testing.T) {
 	}
 	if normalized.AdditionalProperties == nil || normalized.AdditionalProperties.AdditionalPropertiesBool == nil || *normalized.AdditionalProperties.AdditionalPropertiesBool {
 		t.Fatalf("additionalProperties = %+v, want the sibling false kept", normalized.AdditionalProperties)
+	}
+}
+
+// TestNormalizeAnthropicToolInputSchemaBoundsRepeatedReferences pins one work budget for
+// the whole expansion. Each Dn is an allOf of ten references to Dn-1, so every expansion
+// yields a single branch and the depth stays at eleven; without a shared budget the
+// root reference to D10 visits about 10^10 schemas before returning.
+func TestNormalizeAnthropicToolInputSchemaBoundsRepeatedReferences(t *testing.T) {
+	defs := map[string]any{"D0": map[string]any{"type": "object", "properties": map[string]any{"x": map[string]any{"type": "string"}}}}
+	for i := 1; i <= 10; i++ {
+		refs := make([]any, 10)
+		for j := range refs {
+			refs[j] = map[string]any{"$ref": fmt.Sprintf("#/$defs/D%d", i-1)}
+		}
+		defs[fmt.Sprintf("D%d", i)] = map[string]any{"allOf": refs}
+	}
+	raw, err := json.Marshal(map[string]any{"type": "object", "properties": map[string]any{}, "$defs": defs,
+		"allOf": []any{map[string]any{"$ref": "#/$defs/D10"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema schemas.ToolFunctionParameters
+	if err := schemas.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unmarshal test schema: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := normalizeAnthropicToolInputSchema(&schema)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "too complex") {
+			t.Fatalf("a reference DAG that multiplies work must be refused as too complex, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("normalization of a repeated-reference DAG did not return")
+	}
+}
+
+// TestNormalizeAnthropicToolInputSchemaRefusesSchemaValuedAdditionalProperties pins that a
+// branch constraining undeclared properties with a schema is refused: the flattened root
+// cannot carry it, and dropping it would accept {"count":123} where the original rejects it.
+func TestNormalizeAnthropicToolInputSchemaRefusesSchemaValuedAdditionalProperties(t *testing.T) {
+	for name, raw := range map[string]string{
+		"direct conjunct": `{"type":"object","properties":{},"allOf":[{"additionalProperties":{"type":"string"}}]}`,
+		"reference sibling": `{"type":"object","properties":{},"$defs":{"base":{"type":"object"}},
+			"allOf":[{"$ref":"#/$defs/base","additionalProperties":{"type":"string"}}]}`,
+	} {
+		var schema schemas.ToolFunctionParameters
+		if err := schemas.Unmarshal([]byte(raw), &schema); err != nil {
+			t.Fatalf("%s: unmarshal: %v", name, err)
+		}
+		if _, err := normalizeAnthropicToolInputSchema(&schema); err == nil || !strings.Contains(err.Error(), "additionalProperties") {
+			t.Fatalf("%s: want a refusal naming additionalProperties, got %v", name, err)
+		}
+	}
+}
+
+// TestNormalizeAnthropicToolInputSchemaResolvesReferencesThroughArrays pins that a pointer
+// may step through array indices (#/$defs/group/allOf/0) as long as it ends on a schema
+// object, and that an index with a leading zero or out of range names nothing.
+func TestNormalizeAnthropicToolInputSchemaResolvesReferencesThroughArrays(t *testing.T) {
+	body := func(ref string) []byte {
+		return []byte(`{"type":"object","properties":{},
+			"$defs":{"group":{"allOf":[{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}]}},
+			"oneOf":[{"$ref":"` + ref + `"},{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}]}`)
+	}
+	var schema schemas.ToolFunctionParameters
+	if err := schemas.Unmarshal(body("#/$defs/group/allOf/0"), &schema); err != nil {
+		t.Fatal(err)
+	}
+	normalized, err := normalizeAnthropicToolInputSchema(&schema)
+	if err != nil {
+		t.Fatalf("normalize schema: %v", err)
+	}
+	if got := normalized.Required; !equalStringSlices(got, []string{"id"}) {
+		t.Fatalf("required = %v, want the array element's requirement", got)
+	}
+	for _, ref := range []string{"#/$defs/group/allOf/00", "#/$defs/group/allOf/1", "#/$defs/group/allOf"} {
+		var refused schemas.ToolFunctionParameters
+		if err := schemas.Unmarshal(body(ref), &refused); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := normalizeAnthropicToolInputSchema(&refused); err == nil || !strings.Contains(err.Error(), ref) {
+			t.Fatalf("%s: want an unresolved-reference refusal, got %v", ref, err)
+		}
 	}
 }

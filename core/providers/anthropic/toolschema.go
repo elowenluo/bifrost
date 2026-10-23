@@ -3,6 +3,7 @@ package anthropic
 import (
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 
 	providerUtils "github.com/capsohq/bifrost/core/providers/utils"
@@ -14,7 +15,19 @@ const (
 	// produce exponentially many intermediate branches through nested unions.
 	maxAnthropicSchemaExpansionDepth = 32
 	maxAnthropicSchemaBranches       = 64
+	// Every schema the expansion visits counts against one budget for the whole
+	// tool, so repeated references to shared definitions cannot multiply the work
+	// while each expansion stays within the branch and depth limits.
+	maxAnthropicSchemaVisits = 1024
 )
+
+// anthropicSchemaExpander carries the definitions a tool schema's references resolve
+// against and the visit budget shared by every branch of its normalization.
+type anthropicSchemaExpander struct {
+	defs        *schemas.OrderedMap
+	definitions *schemas.OrderedMap
+	visits      int
+}
 
 // anthropicSchemaBranch is one object-shaped alternative extracted from a
 // top-level JSON Schema composition.
@@ -47,6 +60,7 @@ func normalizeAnthropicToolInputSchema(input *schemas.ToolFunctionParameters) (*
 		additionalPropertiesFalse: hasFalseAdditionalProperties(out.AdditionalProperties),
 	}
 	branches := []anthropicSchemaBranch{base}
+	expander := &anthropicSchemaExpander{defs: out.Defs, definitions: out.Definitions}
 
 	// Multiple composition keywords at the root are cumulative constraints.
 	// Expanding each group in turn preserves their object fields before the
@@ -60,7 +74,7 @@ func normalizeAnthropicToolInputSchema(input *schemas.ToolFunctionParameters) (*
 		}
 		expanded := make([]anthropicSchemaBranch, 0, len(alternatives))
 		for i := range alternatives {
-			alternativeBranches, err := expandAnthropicSchemaBranch(&alternatives[i], out.Defs, out.Definitions, nil, 1)
+			alternativeBranches, err := expander.expand(&alternatives[i], nil, 1)
 			if err != nil {
 				return nil, err
 			}
@@ -79,7 +93,7 @@ func normalizeAnthropicToolInputSchema(input *schemas.ToolFunctionParameters) (*
 	// Every allOf member applies, so combine each member with the accumulated
 	// alternatives rather than treating the members as alternatives themselves.
 	for i := range out.AllOf {
-		expanded, err := expandAnthropicSchemaBranch(&out.AllOf[i], out.Defs, out.Definitions, nil, 1)
+		expanded, err := expander.expand(&out.AllOf[i], nil, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -102,11 +116,15 @@ func normalizeAnthropicToolInputSchema(input *schemas.ToolFunctionParameters) (*
 	return out, nil
 }
 
-// expandAnthropicSchemaBranch resolves local root references and recursively
-// expands root-level compositions into object-shaped alternatives.
-func expandAnthropicSchemaBranch(schema *schemas.OrderedMap, defs, definitions *schemas.OrderedMap, seen map[string]bool, depth int) ([]anthropicSchemaBranch, error) {
+// expand resolves local root references and recursively expands root-level
+// compositions into object-shaped alternatives.
+func (e *anthropicSchemaExpander) expand(schema *schemas.OrderedMap, seen map[string]bool, depth int) ([]anthropicSchemaBranch, error) {
 	if depth > maxAnthropicSchemaExpansionDepth {
 		return nil, anthropicSchemaComplexityError("composition depth exceeds %d", maxAnthropicSchemaExpansionDepth)
+	}
+	e.visits++
+	if e.visits > maxAnthropicSchemaVisits {
+		return nil, anthropicSchemaComplexityError("expansion visits more than %d schemas", maxAnthropicSchemaVisits)
 	}
 	if schema == nil {
 		return []anthropicSchemaBranch{{properties: schemas.NewOrderedMap()}}, nil
@@ -120,11 +138,11 @@ func expandAnthropicSchemaBranch(schema *schemas.OrderedMap, defs, definitions *
 			// that carries it, whose own keywords are read below.
 			if !seen[ref] {
 				seen[ref] = true
-				target, err := resolveAnthropicSchemaRef(ref, defs, definitions)
+				target, err := resolveAnthropicSchemaRef(ref, e.defs, e.definitions)
 				if err != nil {
 					return nil, err
 				}
-				branches, err := expandAnthropicSchemaBranch(target, defs, definitions, seen, depth+1)
+				branches, err := e.expand(target, seen, depth+1)
 				if err != nil {
 					return nil, err
 				}
@@ -134,7 +152,7 @@ func expandAnthropicSchemaBranch(schema *schemas.OrderedMap, defs, definitions *
 				if siblings == nil {
 					return branches, nil
 				}
-				siblingBranches, err := expandAnthropicSchemaBranch(siblings, defs, definitions, cloneAnthropicSeenRefs(seen), depth+1)
+				siblingBranches, err := e.expand(siblings, cloneAnthropicSeenRefs(seen), depth+1)
 				if err != nil {
 					return nil, err
 				}
@@ -152,8 +170,14 @@ func expandAnthropicSchemaBranch(schema *schemas.OrderedMap, defs, definitions *
 		base.required = anthropicStringSlice(required)
 	}
 	if additional, ok := schema.Get("additionalProperties"); ok {
-		if value, ok := additional.(bool); ok && !value {
-			base.additionalPropertiesFalse = true
+		switch value := additional.(type) {
+		case nil:
+		case bool:
+			base.additionalPropertiesFalse = !value
+		default:
+			// A schema-valued constraint on undeclared properties cannot be carried
+			// onto the flattened root, so refuse rather than silently widening it.
+			return nil, providerUtils.InvalidRequestErrorf("anthropic tool input schema composition branches cannot set a schema-valued additionalProperties")
 		}
 	}
 
@@ -170,7 +194,7 @@ func expandAnthropicSchemaBranch(schema *schemas.OrderedMap, defs, definitions *
 		}
 		expanded := make([]anthropicSchemaBranch, 0, len(alternatives))
 		for _, alternative := range alternatives {
-			alternativeBranches, err := expandAnthropicSchemaBranch(alternative, defs, definitions, cloneAnthropicSeenRefs(seen), depth+1)
+			alternativeBranches, err := e.expand(alternative, cloneAnthropicSeenRefs(seen), depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -186,7 +210,7 @@ func expandAnthropicSchemaBranch(schema *schemas.OrderedMap, defs, definitions *
 	}
 	if value, ok := schema.Get("allOf"); ok {
 		for _, member := range anthropicOrderedMapSlice(value) {
-			memberBranches, err := expandAnthropicSchemaBranch(member, defs, definitions, cloneAnthropicSeenRefs(seen), depth+1)
+			memberBranches, err := e.expand(member, cloneAnthropicSeenRefs(seen), depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -238,29 +262,61 @@ func resolveAnthropicSchemaRef(ref string, defs, definitions *schemas.OrderedMap
 	if err != nil {
 		return nil, anthropicUnresolvedSchemaRefError(ref)
 	}
-	var current *schemas.OrderedMap
+	var current interface{}
 	switch {
-	case strings.HasPrefix(pointer, "/$defs/"):
+	case strings.HasPrefix(pointer, "/$defs/") && defs != nil:
 		current, pointer = defs, strings.TrimPrefix(pointer, "/$defs/")
-	case strings.HasPrefix(pointer, "/definitions/"):
+	case strings.HasPrefix(pointer, "/definitions/") && definitions != nil:
 		current, pointer = definitions, strings.TrimPrefix(pointer, "/definitions/")
 	default:
 		return nil, anthropicUnresolvedSchemaRefError(ref)
 	}
 	for _, token := range strings.Split(pointer, "/") {
-		if current == nil {
-			return nil, anthropicUnresolvedSchemaRefError(ref)
-		}
-		value, ok := current.Get(strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~"))
+		next, ok := anthropicSchemaPointerStep(current, strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~"))
 		if !ok {
 			return nil, anthropicUnresolvedSchemaRefError(ref)
 		}
-		current = anthropicOrderedMap(value)
+		current = next
 	}
-	if current == nil {
+	// Intermediate nodes may be arrays (#/$defs/group/allOf/0); the target must be a schema object.
+	resolved := anthropicOrderedMap(current)
+	if resolved == nil {
 		return nil, anthropicUnresolvedSchemaRefError(ref)
 	}
-	return current, nil
+	return resolved, nil
+}
+
+// anthropicSchemaPointerStep follows one JSON Pointer token: an object member, or the
+// element of an array that a non-negative decimal index without leading zeros names.
+func anthropicSchemaPointerStep(node interface{}, token string) (interface{}, bool) {
+	if object := anthropicOrderedMap(node); object != nil {
+		return object.Get(token)
+	}
+	var elements []interface{}
+	switch typed := node.(type) {
+	case []interface{}:
+		elements = typed
+	case []schemas.OrderedMap:
+		elements = make([]interface{}, len(typed))
+		for i := range typed {
+			elements[i] = &typed[i]
+		}
+	case []*schemas.OrderedMap:
+		elements = make([]interface{}, len(typed))
+		for i := range typed {
+			elements[i] = typed[i]
+		}
+	default:
+		return nil, false
+	}
+	if token == "" || (len(token) > 1 && token[0] == '0') {
+		return nil, false
+	}
+	index, err := strconv.Atoi(token)
+	if err != nil || index < 0 || index >= len(elements) {
+		return nil, false
+	}
+	return elements[index], true
 }
 
 func anthropicUnresolvedSchemaRefError(ref string) error {
