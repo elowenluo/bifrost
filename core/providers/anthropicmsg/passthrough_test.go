@@ -210,3 +210,76 @@ func TestExtractUsagePreservesThinkingTokensAndInferenceGeo(t *testing.T) {
 func testKey(value string) schemas.Key {
 	return schemas.Key{Value: schemas.SecretVar{Val: value}}
 }
+
+func TestStripAnthropicOnlyFields(t *testing.T) {
+	const billing = "x-anthropic-billing-header: cc_version=2.1.80.a1b; cc_entrypoint=cli; cch=0f3c2;"
+	cases := []struct {
+		name, body, want string
+	}{
+		{
+			name: "string system that is only the billing line",
+			body: `{"model":"m","system":"` + billing + `","messages":[]}`,
+			want: `{"model":"m","messages":[]}`,
+		},
+		{
+			name: "billing block removed, others kept in order with their cache markers",
+			body: `{"system":[{"type":"text","text":"a"},{"type":"text","text":"` + billing + `"},{"type":"text","text":"b","cache_control":{"type":"ephemeral"}}]}`,
+			want: `{"system":[{"type":"text","text":"a"},{"type":"text","text":"b","cache_control":{"type":"ephemeral"}}]}`,
+		},
+		{
+			name: "system of only billing blocks is dropped",
+			body: `{"system":[{"type":"text","text":"` + billing + `"}],"messages":[]}`,
+			want: `{"messages":[]}`,
+		},
+		{
+			name: "billing line mixed with instructions is real system content",
+			body: `{"system":"` + billing + ` Always answer in French."}`,
+			want: `{"system":"` + billing + ` Always answer in French."}`,
+		},
+		{
+			name: "safeguards and diagnostics removed",
+			body: `{"model":"m","safeguards":{"a":1},"diagnostics":{"previous_message_id":"x"},"max_tokens":8}`,
+			want: `{"model":"m","max_tokens":8}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := StripAnthropicOnlyFields([]byte(tc.body))
+			if err != nil {
+				t.Fatalf("StripAnthropicOnlyFields: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("got  %s\nwant %s", got, tc.want)
+			}
+		})
+	}
+
+	clean := []byte(`{"model":"m","system":[{"type":"text","text":"keep"}],"messages":[]}`)
+	got, err := StripAnthropicOnlyFields(clean)
+	if err != nil || &got[0] != &clean[0] {
+		t.Fatalf("a body with nothing to strip must be returned as is (err %v)", err)
+	}
+}
+
+// Anthropic itself must still receive Claude Code's fields: the strip is opt-in.
+func TestPassthroughKeepsAnthropicOnlyFieldsUnlessAsked(t *testing.T) {
+	body := []byte(`{"model":"claude","safeguards":{"a":1},"system":"x-anthropic-billing-header: cc_version=1;","messages":[]}`)
+	received := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ := io.ReadAll(r.Body)
+		received <- got
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"type":"message","content":[]}`))
+	}))
+	defer server.Close()
+
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	if _, bifrostErr := Passthrough(ctx, &fasthttp.Client{}, testKey("k"), &schemas.BifrostPassthroughRequest{
+		Method: http.MethodPost, Path: "/v1/messages", Body: body,
+	}, Config{Provider: schemas.Anthropic, Endpoint: server.URL}); bifrostErr != nil {
+		t.Fatalf("Passthrough: %+v", bifrostErr)
+	}
+	if got := <-received; !bytes.Equal(got, body) {
+		t.Fatalf("Anthropic body changed:\n got: %s\nwant: %s", got, body)
+	}
+}

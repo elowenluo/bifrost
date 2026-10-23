@@ -282,6 +282,11 @@ func deepCopyResponsesMessage(original schemas.ResponsesMessage) schemas.Respons
 			copy.ResponsesToolMessage.Arguments = &copyArguments
 		}
 
+		if original.ResponsesToolMessage.ToolsetName != nil {
+			copyToolsetName := *original.ResponsesToolMessage.ToolsetName
+			copy.ResponsesToolMessage.ToolsetName = &copyToolsetName
+		}
+
 		if original.ResponsesToolMessage.Namespace != nil {
 			copyNamespace := *original.ResponsesToolMessage.Namespace
 			copy.ResponsesToolMessage.Namespace = &copyNamespace
@@ -289,8 +294,28 @@ func deepCopyResponsesMessage(original schemas.ResponsesMessage) schemas.Respons
 
 		copyOptionalStringFieldByName(copy.ResponsesToolMessage, original.ResponsesToolMessage, "Execution")
 
+		if original.ResponsesToolMessage.Async != nil {
+			copy.ResponsesToolMessage.Async = new(*original.ResponsesToolMessage.Async)
+		}
+
 		if original.ResponsesToolMessage.Error != nil {
-			copyError := *original.ResponsesToolMessage.Error
+			copyError := schemas.ResponsesToolMessageError{}
+			if original.ResponsesToolMessage.Error.ResponsesToolMessageErrorStr != nil {
+				copyError.ResponsesToolMessageErrorStr = new(*original.ResponsesToolMessage.Error.ResponsesToolMessageErrorStr)
+			}
+			if original.ResponsesToolMessage.Error.ResponsesToolMessageErrorStruct != nil {
+				copyErrorStruct := *original.ResponsesToolMessage.Error.ResponsesToolMessageErrorStruct
+				if copyErrorStruct.Code != nil {
+					copyCode := *copyErrorStruct.Code
+					copyErrorStruct.Code = &copyCode
+				}
+				if copyErrorStruct.Message != nil {
+					copyMessage := *copyErrorStruct.Message
+					copyErrorStruct.Message = &copyMessage
+				}
+				copyErrorStruct.Content = append(json.RawMessage(nil), copyErrorStruct.Content...)
+				copyError.ResponsesToolMessageErrorStruct = &copyErrorStruct
+			}
 			copy.ResponsesToolMessage.Error = &copyError
 		}
 
