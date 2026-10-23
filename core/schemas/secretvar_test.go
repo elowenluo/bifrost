@@ -888,6 +888,9 @@ func TestRedactedServiceURL(t *testing.T) {
 		{"user and password", "http://admin:s3cret@vllm.internal:8000", true},
 		{"token as user", "https://tok_abcdef123456@ollama.example.com", true},
 		{"unparsable with at sign", "admin:s3cret@vllm.internal:8000", true},
+		{"query credential", "https://service.example/mcp?api_key=s3cret-value", true},
+		{"query with any parameter name", "https://service.example/mcp?x=abcdef123456", true},
+		{"fragment", "https://service.example/mcp#token=s3cret", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

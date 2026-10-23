@@ -302,16 +302,18 @@ func (e *SecretVar) RedactedIfSecret() *SecretVar {
 	return e.Clone()
 }
 
-// RedactedServiceURL is RedactedIfSecret for a service URL: the literal URL is
-// shown, except that a URL carrying userinfo ("https://user:pass@host") is
-// Redacted, because the userinfo is a credential. Anything with an "@" counts, so
-// a value url.Parse cannot read is hidden rather than shown. The Redacted form is
-// the masked placeholder an update round-trips back to the stored value.
+// RedactedServiceURL is RedactedIfSecret for a service URL: a bare service
+// address (scheme, host, port, path) is shown, and anything that can carry a
+// credential is Redacted. That is userinfo ("https://user:pass@host"), a query
+// string ("https://host/mcp?api_key=..."), or a fragment, whatever its parameter
+// names, since credential names cannot be enumerated. Any "@", "?" or "#" counts,
+// so a value url.Parse cannot read is hidden rather than shown. The Redacted form
+// is the masked placeholder an update round-trips back to the stored value.
 func (e *SecretVar) RedactedServiceURL() *SecretVar {
 	if e == nil {
 		return nil
 	}
-	if e.IsFromSecret() || strings.Contains(e.Val, "@") {
+	if e.IsFromSecret() || strings.ContainsAny(e.Val, "@?#") {
 		return e.Redacted()
 	}
 	return e.Clone()

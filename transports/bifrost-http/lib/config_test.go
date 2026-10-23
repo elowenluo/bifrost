@@ -22567,3 +22567,32 @@ func TestRedactMCPClientConfig_MasksSecretBackedConnectionString(t *testing.T) {
 	assert.Equal(t, "env.MCP_REDACTION_TEST_URL", redacted.ConnectionString.GetRawRef(),
 		"secret ref must be preserved so the UI can show it")
 }
+
+// TestRedactMCPClientConfig_MasksQueryCredentialInConnectionString: an MCP URL that
+// carries its credential in the query (https://host/mcp?api_key=...) is masked in
+// the management response, whatever the parameter is called, so serializing the
+// redacted config never emits the credential; the live config the runtime dials
+// keeps the full URL.
+func TestRedactMCPClientConfig_MasksQueryCredentialInConnectionString(t *testing.T) {
+	c := &Config{}
+	const sentinel = "sentinel-credential-7f3a"
+	for _, url := range []string{
+		"https://service.example/mcp?api_key=" + sentinel,
+		"https://service.example/mcp?x=1&" + "t=" + sentinel,
+		"https://service.example/mcp#" + sentinel,
+	} {
+		config := &schemas.MCPClientConfig{
+			ID:               "mcp-q",
+			Name:             "query",
+			ConnectionType:   schemas.MCPConnectionTypeHTTP,
+			ConnectionString: schemas.NewSecretVar(url),
+		}
+		redacted := c.RedactMCPClientConfig(config)
+		require.NotNil(t, redacted)
+		body, err := json.Marshal(redacted)
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), sentinel, "query credential leaked in %s", url)
+		assert.True(t, redacted.ConnectionString.IsMaskedPlaceholder(), "%s should be the masked placeholder an update restores", url)
+		assert.Equal(t, url, config.ConnectionString.GetValue(), "the live config keeps the full URL")
+	}
+}
