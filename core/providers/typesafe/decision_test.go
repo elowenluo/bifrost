@@ -697,6 +697,25 @@ func TestToBifrostDecisionResponseFailures(t *testing.T) {
 		}
 	})
 
+	// A rejected response was still answered and billed by Typesafe.
+	t.Run("rejection carries billed usage", func(t *testing.T) {
+		native := &TypesafeDecisionResponse{
+			Model:   "jev-1.13.0",
+			Answers: map[string]TypesafeAnswer{},
+			Usage:   &TypesafeUsage{InputTokens: 5000, OutputTokens: 4},
+		}
+		_, err := ToBifrostDecisionResponse(native, req)
+		if err == nil {
+			t.Fatal("expected error for missing answer")
+		}
+		if billed := err.ExtraFields.BilledUsage; billed == nil || billed.PromptTokens != 5000 || billed.CompletionTokens != 4 {
+			t.Fatalf("billed usage = %+v, want 5000 in / 4 out", billed)
+		}
+		if err.ExtraFields.ResolvedModelUsed != "jev-1.13.0" {
+			t.Fatalf("served model = %q", err.ExtraFields.ResolvedModelUsed)
+		}
+	})
+
 	t.Run("noul value outside range", func(t *testing.T) {
 		// The provider response is untrusted; a noul outside [0,1] violates the
 		// documented contract and must not surface as a successful answer.

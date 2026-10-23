@@ -1,6 +1,7 @@
 package bifrost
 
 import (
+	"context"
 	"math"
 	"reflect"
 	"strings"
@@ -278,5 +279,61 @@ func TestEmulateDecisionToolChoicePerSurface(t *testing.T) {
 				t.Errorf("tool_choice = %+v, want %q", choice, tc.want)
 			}
 		})
+	}
+}
+
+// A turn whose answer cannot be used was still answered and billed by the
+// provider, so the error must carry its usage and served model; otherwise
+// governance and logging record the paid call as free.
+func TestEmulateDecisionRejectedAnswerCarriesBilledUsage(t *testing.T) {
+	cases := map[string]*schemas.BifrostResponsesResponse{
+		"no function call": {Model: "gpt-4o-mini-2026"},
+		"answer outside options": emulationFunctionCallResponse(`{
+			"approve":  {"value": 0.9, "confidence": 0.8},
+			"category": {"choice": "nonexistent", "confidence": 0.7, "probabilities": {"billing": 0.7, "bug": 0.1, "support": 0.1, "other": 0.1}},
+			"urgency":  {"value": 1, "confidence": 0.6, "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1}}
+		}`),
+	}
+	for name, resp := range cases {
+		t.Run(name, func(t *testing.T) {
+			resp.Usage = &schemas.ResponsesResponseUsage{InputTokens: 1200, OutputTokens: 80, TotalTokens: 1280}
+			provider := &decisionEmulationProvider{response: resp}
+			var b Bifrost
+			_, bifrostErr := b.emulateDecisionViaResponses(nil, provider, schemas.Key{}, structuredDecisionRequest())
+			if bifrostErr == nil {
+				t.Fatal("expected the unusable answer to be rejected")
+			}
+			billed := bifrostErr.ExtraFields.BilledUsage
+			if billed == nil || billed.PromptTokens != 1200 || billed.CompletionTokens != 80 {
+				t.Fatalf("billed usage = %+v, want the provider's 1200 in / 80 out", billed)
+			}
+			if bifrostErr.ExtraFields.ResolvedModelUsed != resp.Model {
+				t.Fatalf("served model = %q, want %q", bifrostErr.ExtraFields.ResolvedModelUsed, resp.Model)
+			}
+		})
+	}
+}
+
+// A custom provider wrapping Bedrock Mantle gets Mantle's "auto" tool_choice for
+// gpt-oss, which rejects "required".
+func TestEmulateDecisionToolChoiceFollowsBaseProvider(t *testing.T) {
+	args := `{
+		"approve":  {"value": 0.9, "confidence": 0.8},
+		"category": {"choice": "billing", "confidence": 0.7, "probabilities": {"billing": 0.7, "bug": 0.1, "support": 0.1, "other": 0.1}},
+		"urgency":  {"value": 2, "confidence": 0.6, "probabilities": {"0": 0.1, "1": 0.1, "2": 0.8}}
+	}`
+	provider := &decisionEmulationProvider{response: emulationFunctionCallResponse(args)}
+	req := structuredDecisionRequest()
+	req.Provider, req.Model = "my-mantle", "openai.gpt-oss-120b"
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	ctx.SetValue(schemas.BifrostContextKeyBaseProviderType, schemas.BedrockMantle)
+
+	var b Bifrost
+	if _, bifrostErr := b.emulateDecisionViaResponses(ctx, provider, schemas.Key{}, req); bifrostErr != nil {
+		t.Fatalf("unexpected error: %v", bifrostErr)
+	}
+	choice := provider.lastRequest.Params.ToolChoice
+	if choice == nil || choice.ResponsesToolChoiceStr == nil || *choice.ResponsesToolChoiceStr != string(schemas.ResponsesToolChoiceTypeAuto) {
+		t.Fatalf("tool_choice = %+v, want auto", choice)
 	}
 }

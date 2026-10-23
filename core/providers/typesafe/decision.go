@@ -253,8 +253,21 @@ func isJSONNull(value any) bool {
 
 // ToBifrostDecisionResponse converts a native systemone response back into
 // the shared decision shape. Every requested question must produce an answer
-// of its declared kind.
+// of its declared kind. A response it rejects was still answered and billed,
+// so the error carries that usage for governance and logging to charge.
 func ToBifrostDecisionResponse(resp *TypesafeDecisionResponse, request *schemas.BifrostDecisionRequest) (*schemas.BifrostDecisionResponse, *schemas.BifrostError) {
+	response, bifrostErr := toBifrostDecisionResponse(resp, request)
+	if bifrostErr != nil {
+		bifrostErr.ExtraFields.BilledUsage = decisionUsage(resp.Usage)
+		if resp.Model != "" {
+			bifrostErr.ExtraFields.ResolvedModelUsed = resp.Model
+		}
+		return nil, bifrostErr
+	}
+	return response, nil
+}
+
+func toBifrostDecisionResponse(resp *TypesafeDecisionResponse, request *schemas.BifrostDecisionRequest) (*schemas.BifrostDecisionResponse, *schemas.BifrostError) {
 	answers := make(map[string]schemas.DecisionAnswer, len(request.Questions))
 	for name, question := range request.Questions {
 		native, ok := resp.Answers[name]
@@ -298,14 +311,20 @@ func ToBifrostDecisionResponse(resp *TypesafeDecisionResponse, request *schemas.
 		Model:   resp.Model,
 		Answers: answers,
 	}
-	if resp.Usage != nil {
-		response.Usage = &schemas.BifrostLLMUsage{
-			PromptTokens:     resp.Usage.InputTokens,
-			CompletionTokens: resp.Usage.OutputTokens,
-			TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
-		}
-	}
+	response.Usage = decisionUsage(resp.Usage)
 	return response, nil
+}
+
+// decisionUsage converts systemone usage into Bifrost's, or nil when none was reported.
+func decisionUsage(usage *TypesafeUsage) *schemas.BifrostLLMUsage {
+	if usage == nil {
+		return nil
+	}
+	return &schemas.BifrostLLMUsage{
+		PromptTokens:     usage.InputTokens,
+		CompletionTokens: usage.OutputTokens,
+		TotalTokens:      usage.InputTokens + usage.OutputTokens,
+	}
 }
 
 // ToBifrostDecisionRequest converts a native systemone request into the

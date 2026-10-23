@@ -81,12 +81,12 @@ func (bifrost *Bifrost) emulateDecisionViaResponses(
 
 	argsJSON, extractErr := extractDecisionToolArguments(resp)
 	if extractErr != nil {
-		return nil, providerUtils.NewBifrostOperationError(extractErr.Error(), nil)
+		return nil, decisionAnswerError(extractErr, resp)
 	}
 
 	answers, parseErr := providerUtils.ParseDecisionAnswers([]byte(argsJSON), req.Questions)
 	if parseErr != nil {
-		return nil, providerUtils.NewBifrostOperationError(parseErr.Error(), nil)
+		return nil, decisionAnswerError(parseErr, resp)
 	}
 
 	decision := &schemas.BifrostDecisionResponse{
@@ -113,6 +113,20 @@ func (bifrost *Bifrost) emulateDecisionViaResponses(
 	return decision, nil
 }
 
+// decisionAnswerError reports a turn whose answer could not be used. The provider
+// still answered and billed it, so the error carries that usage and the served
+// model for governance and logging to charge.
+func decisionAnswerError(cause error, resp *schemas.BifrostResponsesResponse) *schemas.BifrostError {
+	bifrostErr := providerUtils.NewBifrostOperationError(cause.Error(), nil)
+	if resp != nil {
+		if resp.Usage != nil {
+			bifrostErr.ExtraFields.BilledUsage = resp.Usage.ToBifrostLLMUsage()
+		}
+		bifrostErr.ExtraFields.ResolvedModelUsed = resp.Model
+	}
+	return bifrostErr
+}
+
 // decisionToolChoice picks the tool_choice that forces the emit_decision call.
 // It prefers the "required" mode over a named-function choice: emit_decision is
 // the only tool, so "required" obliges the model to call it, and the string mode
@@ -122,7 +136,8 @@ func (bifrost *Bifrost) emulateDecisionViaResponses(
 // ("Supported options: [auto]"), so the call there rests on the system prompt,
 // and extraction already accepts a lone call or a JSON text body.
 func decisionToolChoice(ctx *schemas.BifrostContext, provider schemas.ModelProvider, model string) string {
-	if provider == schemas.BedrockMantle && !schemas.IsAnthropicModelFamily(ctx, model) {
+	// A custom provider wrapping Bedrock Mantle gets Mantle's default.
+	if schemas.ResolveBaseProvider(ctx, provider) == schemas.BedrockMantle && !schemas.IsAnthropicModelFamily(ctx, model) {
 		return string(schemas.ResponsesToolChoiceTypeAuto)
 	}
 	return string(schemas.ResponsesToolChoiceTypeRequired)
