@@ -2262,17 +2262,28 @@ func TestGate_TransformInPlaceMutationIsRepriced(t *testing.T) {
 	err := a.TransformPausedStreamBuffer(traceID, func(buffered []*schemas.BifrostStreamChunk) (schemas.PausedStreamBufferTransformResult, error) {
 		pt := buffered[0].BifrostPassthroughResponse
 		pt.Body = append(pt.Body, bytes.Repeat([]byte("z"), grow)...) // in-place, same pointer
-		return schemas.PausedStreamBufferTransformResult{Chunks: buffered, ReleaseCount: len(buffered)}, nil
+		// Keep the chunk held: what is under test is the re-pricing, and a released
+		// chunk is drained by the flusher concurrently, emptying the buffer this test
+		// reads next.
+		return schemas.PausedStreamBufferTransformResult{Chunks: buffered, ReleaseCount: 0}, nil
 	})
 	if err != nil {
 		t.Fatalf("in-place transform rejected: %v", err)
 	}
 
 	sa.mu.Lock()
-	after := sa.gateReplayBufBytes
-	entrySize := sa.gateReplayBuf[0].size
-	entryEstimate := estimateChunkBytes(sa.gateReplayBuf[0].chunk)
+	held := len(sa.gateReplayBuf)
+	var after, entrySize, entryEstimate int64
+	if held == 1 {
+		after = sa.gateReplayBufBytes
+		entrySize = sa.gateReplayBuf[0].size
+		entryEstimate = estimateChunkBytes(sa.gateReplayBuf[0].chunk)
+	}
 	sa.mu.Unlock()
+	if held != 1 {
+		// Reported after unlocking: a panic under sa.mu deadlocks the cleanup.
+		t.Fatalf("paused buffer holds %d chunks after the transform, want the 1 still held", held)
+	}
 	if after < before+grow {
 		t.Fatalf("in-place growth not re-priced: before=%d after=%d grow=%d", before, after, grow)
 	}
