@@ -100,7 +100,11 @@ func RunToolSearchTest(t *testing.T, client *bifrost.Bifrost, ctx context.Contex
 		})
 
 		t.Run("Streaming", func(t *testing.T) {
-			bfCtx := schemas.NewBifrostContext(rawCtx, schemas.NoDeadline)
+			// The timeout bounds the whole request, setup included, and cancelling it
+			// on every exit stops the stream rather than only the receive loop.
+			streamCtx, cancel := context.WithTimeout(rawCtx, 90*time.Second)
+			defer cancel()
+			bfCtx := schemas.NewBifrostContext(streamCtx, schemas.NoDeadline)
 			responseChan, err := client.ResponsesStreamRequest(bfCtx, newRequest())
 			if err != nil {
 				t.Fatalf("ToolSearch streaming request failed: %s", GetErrorMessage(err))
@@ -108,8 +112,6 @@ func RunToolSearchTest(t *testing.T, client *bifrost.Bifrost, ctx context.Contex
 			var chunkCount int
 			var hasCompleted bool
 			var streamRawRequest interface{}
-			streamCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-			defer cancel()
 			for {
 				select {
 				case chunk, ok := <-responseChan:
