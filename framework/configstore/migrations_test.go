@@ -3939,12 +3939,13 @@ func TestMigrationMigrateVKStandaloneLimitsKeepsDifferingRateLimits(t *testing.T
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	for _, ddl := range []string{
-		`CREATE TABLE governance_virtual_keys (id TEXT PRIMARY KEY, rate_limit_id TEXT)`,
+		`CREATE TABLE governance_virtual_keys (id TEXT PRIMARY KEY, rate_limit_id TEXT, calendar_aligned BOOLEAN DEFAULT false)`,
 		`CREATE TABLE governance_rate_limits (id TEXT PRIMARY KEY, token_max_limit INTEGER, token_reset_duration TEXT,
 			token_current_usage INTEGER DEFAULT 0, token_last_reset DATETIME,
-			request_max_limit INTEGER, request_reset_duration TEXT, request_current_usage INTEGER DEFAULT 0, request_last_reset DATETIME)`,
+			request_max_limit INTEGER, request_reset_duration TEXT, request_current_usage INTEGER DEFAULT 0, request_last_reset DATETIME,
+			created_at DATETIME)`,
 		`CREATE TABLE governance_model_configs (id TEXT PRIMARY KEY, model_name TEXT NOT NULL, scope TEXT NOT NULL,
-			scope_id TEXT, provider TEXT, rate_limit_id TEXT, created_at DATETIME, updated_at DATETIME)`,
+			scope_id TEXT, provider TEXT, rate_limit_id TEXT, calendar_aligned BOOLEAN DEFAULT false, created_at DATETIME, updated_at DATETIME)`,
 		`CREATE TABLE governance_budgets (id TEXT PRIMARY KEY, virtual_key_id TEXT, model_config_id TEXT, max_limit REAL,
 			reset_duration TEXT, current_usage REAL, last_reset DATETIME, config_hash TEXT)`,
 	} {
@@ -3960,8 +3961,8 @@ func TestMigrationMigrateVKStandaloneLimitsKeepsDifferingRateLimits(t *testing.T
 	seed := func(vkID string, cfg, ui window) {
 		for id, w := range map[string]window{"rl-cfg-" + vkID: cfg, "rl-ui-" + vkID: ui} {
 			require.NoError(t, db.Exec(`INSERT INTO governance_rate_limits (id, request_max_limit, request_reset_duration, request_current_usage,
-				request_last_reset, token_current_usage, token_last_reset) VALUES (?, ?, ?, ?, ?, 0, ?)`,
-				id, w.requests, w.reset, w.usage, w.lastSet, epoch).Error)
+				request_last_reset, token_current_usage, token_last_reset, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+				id, w.requests, w.reset, w.usage, w.lastSet, epoch, epoch).Error)
 		}
 		require.NoError(t, db.Exec(`INSERT INTO governance_virtual_keys (id, rate_limit_id) VALUES (?, ?)`, vkID, "rl-cfg-"+vkID).Error)
 		require.NoError(t, db.Exec(`INSERT INTO governance_model_configs (id, model_name, scope, scope_id, rate_limit_id) VALUES (?, '*', 'virtual_key', ?, ?)`, "mc-"+vkID, vkID, "rl-ui-"+vkID).Error)
@@ -3974,6 +3975,9 @@ func TestMigrationMigrateVKStandaloneLimitsKeepsDifferingRateLimits(t *testing.T
 	seed("vk-exhausted", window{10, "1m", 0, epoch.Add(50 * time.Second)}, window{10, "1m", 10, epoch})
 	// vk-aligned: same limit and usage, windows reset at different moments.
 	seed("vk-aligned", window{10, "1m", 3, epoch}, window{10, "1m", 3, epoch.Add(30 * time.Second)})
+	// vk-calendar: identical rows, but the VK resets on calendar boundaries and its model config does not.
+	seed("vk-calendar", window{10, "1d", 3, epoch}, window{10, "1d", 3, epoch})
+	require.NoError(t, db.Exec(`UPDATE governance_virtual_keys SET calendar_aligned = true WHERE id = 'vk-calendar'`).Error)
 
 	require.NoError(t, migrationMigrateVKStandaloneLimitsToModelConfigs(context.Background(), db, testMigrationLogger))
 
@@ -3995,7 +3999,7 @@ func TestMigrationMigrateVKStandaloneLimitsKeepsDifferingRateLimits(t *testing.T
 	require.False(t, exists("rl-ui-vk-same"), "the identical UI copy is removed")
 	require.True(t, exists("rl-cfg-vk-same"))
 
-	for _, vkID := range []string{"vk-differ", "vk-exhausted", "vk-aligned"} {
+	for _, vkID := range []string{"vk-differ", "vk-exhausted", "vk-aligned", "vk-calendar"} {
 		vkRL, mcRL = refs(vkID)
 		require.NotNil(t, vkRL, vkID)
 		require.Equal(t, "rl-cfg-"+vkID, *vkRL, "%s: a pair that is not a duplicate keeps the VK's own limit", vkID)
@@ -4004,4 +4008,55 @@ func TestMigrationMigrateVKStandaloneLimitsKeepsDifferingRateLimits(t *testing.T
 		require.True(t, exists("rl-cfg-"+vkID), vkID)
 		require.True(t, exists("rl-ui-"+vkID), "%s: a limit that is not a duplicate is never deleted", vkID)
 	}
+}
+
+// TestMigrationMigrateVKStandaloneLimitsKeepsCalendarAlignment pins that moving a VK's
+// standalone budgets under a model config keeps their reset boundary: a new model config
+// takes the VK's calendar alignment, and a VK whose existing model config is aligned
+// differently keeps its standalone budgets instead of having them re-anchored.
+func TestMigrationMigrateVKStandaloneLimitsKeepsCalendarAlignment(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	for _, ddl := range []string{
+		`CREATE TABLE governance_virtual_keys (id TEXT PRIMARY KEY, rate_limit_id TEXT, calendar_aligned BOOLEAN DEFAULT false)`,
+		`CREATE TABLE governance_rate_limits (id TEXT PRIMARY KEY, token_max_limit INTEGER, token_reset_duration TEXT,
+			token_current_usage INTEGER DEFAULT 0, token_last_reset DATETIME, request_max_limit INTEGER, request_reset_duration TEXT,
+			request_current_usage INTEGER DEFAULT 0, request_last_reset DATETIME, created_at DATETIME)`,
+		`CREATE TABLE governance_model_configs (id TEXT PRIMARY KEY, model_name TEXT NOT NULL, scope TEXT NOT NULL,
+			scope_id TEXT, provider TEXT, rate_limit_id TEXT, calendar_aligned BOOLEAN DEFAULT false, created_at DATETIME, updated_at DATETIME)`,
+		`CREATE TABLE governance_budgets (id TEXT PRIMARY KEY, virtual_key_id TEXT, model_config_id TEXT, max_limit REAL,
+			reset_duration TEXT, current_usage REAL, last_reset DATETIME, config_hash TEXT)`,
+		// vk-new: calendar-aligned, no model config yet.
+		`INSERT INTO governance_virtual_keys (id, calendar_aligned) VALUES ('vk-new', true)`,
+		`INSERT INTO governance_budgets (id, virtual_key_id, max_limit, reset_duration, current_usage) VALUES ('b-new', 'vk-new', 10, '1d', 10)`,
+		// vk-mismatch: calendar-aligned, with an existing model config that is not.
+		`INSERT INTO governance_virtual_keys (id, calendar_aligned) VALUES ('vk-mismatch', true)`,
+		`INSERT INTO governance_model_configs (id, model_name, scope, scope_id, calendar_aligned) VALUES ('mc-mismatch', '*', 'virtual_key', 'vk-mismatch', false)`,
+		`INSERT INTO governance_budgets (id, virtual_key_id, max_limit, reset_duration, current_usage) VALUES ('b-mismatch', 'vk-mismatch', 10, '1d', 10)`,
+	} {
+		require.NoError(t, db.Exec(ddl).Error)
+	}
+
+	require.NoError(t, migrationMigrateVKStandaloneLimitsToModelConfigs(context.Background(), db, testMigrationLogger))
+
+	var created struct {
+		ID              string
+		CalendarAligned bool
+	}
+	require.NoError(t, db.Raw(`SELECT id, calendar_aligned FROM governance_model_configs WHERE scope_id = 'vk-new'`).Scan(&created).Error)
+	require.NotEmpty(t, created.ID, "the VK gets a top-level model config")
+	require.True(t, created.CalendarAligned, "the new model config resets by the VK's calendar alignment")
+	var owner *string
+	require.NoError(t, db.Raw(`SELECT model_config_id FROM governance_budgets WHERE id = 'b-new'`).Scan(&owner).Error)
+	require.NotNil(t, owner)
+	require.Equal(t, created.ID, *owner)
+
+	var budget struct {
+		VirtualKeyID  *string
+		ModelConfigID *string
+	}
+	require.NoError(t, db.Raw(`SELECT virtual_key_id, model_config_id FROM governance_budgets WHERE id = 'b-mismatch'`).Scan(&budget).Error)
+	require.NotNil(t, budget.VirtualKeyID, "a budget whose destination is aligned differently stays with its VK")
+	require.Equal(t, "vk-mismatch", *budget.VirtualKeyID)
+	require.Nil(t, budget.ModelConfigID)
 }

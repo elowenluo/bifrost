@@ -13626,30 +13626,48 @@ func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *g
 			}
 
 			for vkID, budgets := range budgetsByVK {
-				// Look up whether this VK has a direct rate_limit_id that also needs moving.
-				var vkRateLimitID *string
-				if err := tx.Raw(`SELECT rate_limit_id FROM governance_virtual_keys WHERE id = ?`, vkID).Scan(&vkRateLimitID).Error; err != nil {
+				// Look up whether this VK has a direct rate_limit_id that also needs moving, and
+				// the calendar alignment its limits reset by.
+				var vkRow struct {
+					RateLimitID     *string
+					CalendarAligned bool
+				}
+				if err := tx.Raw(`SELECT rate_limit_id, calendar_aligned FROM governance_virtual_keys WHERE id = ?`, vkID).Scan(&vkRow).Error; err != nil {
 					return fmt.Errorf("failed to query VK %s rate_limit_id: %w", vkID, err)
 				}
+				vkRateLimitID := vkRow.RateLimitID
 
 				// Find or create the VK's top-level model config (scope=virtual_key, model_name=*).
-				var mcID string
+				var mcRow struct {
+					ID              string
+					CalendarAligned bool
+				}
 				err := tx.Raw(`
-					SELECT id FROM governance_model_configs
+					SELECT id, calendar_aligned FROM governance_model_configs
 					WHERE scope = 'virtual_key' AND scope_id = ? AND model_name = '*' AND provider IS NULL
 					LIMIT 1
-				`, vkID).Scan(&mcID).Error
+				`, vkID).Scan(&mcRow).Error
 				if err != nil {
 					return fmt.Errorf("failed to query model config for VK %s: %w", vkID, err)
+				}
+				mcID := mcRow.ID
+
+				// A limit resets by its owner's calendar alignment, so moving it under an owner
+				// aligned differently would move its reset boundary: an exhausted daily budget
+				// could clear hours early, or a fresh one stay blocked. Such a VK keeps its
+				// standalone limits.
+				if mcID != "" && mcRow.CalendarAligned != vkRow.CalendarAligned {
+					logger.Warn("[configstore] %s: VK %s keeps its standalone budgets and rate limit: model config %s resets by a different calendar alignment", migrationName, vkID, mcID)
+					continue
 				}
 
 				if mcID == "" {
 					mcID = uuid.NewString()
 					now := time.Now()
 					if err := tx.Exec(`
-						INSERT INTO governance_model_configs (id, model_name, scope, scope_id, created_at, updated_at)
-						VALUES (?, '*', 'virtual_key', ?, ?, ?)
-					`, mcID, vkID, now, now).Error; err != nil {
+						INSERT INTO governance_model_configs (id, model_name, scope, scope_id, calendar_aligned, created_at, updated_at)
+						VALUES (?, '*', 'virtual_key', ?, ?, ?, ?)
+					`, mcID, vkID, vkRow.CalendarAligned, now, now).Error; err != nil {
 						return fmt.Errorf("failed to create model config for VK %s: %w", vkID, err)
 					}
 					logger.Info("[configstore] %s: created model config %s for VK %s", migrationName, mcID, vkID)
@@ -13715,6 +13733,11 @@ func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *g
 				VKTokenLastReset      time.Time
 				VKRequestCurrentUsage int64
 				VKRequestLastReset    time.Time
+
+				MCCreatedAt       time.Time
+				VKCreatedAt       time.Time
+				MCCalendarAligned bool
+				VKCalendarAligned bool
 			}
 			var dups []dupRateLimit
 			if err := tx.Raw(`
@@ -13727,7 +13750,9 @@ func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *g
 				       mrl.token_current_usage AS mc_token_current_usage, mrl.token_last_reset AS mc_token_last_reset,
 				       mrl.request_current_usage AS mc_request_current_usage, mrl.request_last_reset AS mc_request_last_reset,
 				       vrl.token_current_usage AS vk_token_current_usage, vrl.token_last_reset AS vk_token_last_reset,
-				       vrl.request_current_usage AS vk_request_current_usage, vrl.request_last_reset AS vk_request_last_reset
+				       vrl.request_current_usage AS vk_request_current_usage, vrl.request_last_reset AS vk_request_last_reset,
+				       mrl.created_at AS mc_created_at, vrl.created_at AS vk_created_at,
+				       mc.calendar_aligned AS mc_calendar_aligned, vk.calendar_aligned AS vk_calendar_aligned
 				FROM governance_model_configs mc
 				JOIN governance_virtual_keys vk ON vk.id = mc.scope_id
 				JOIN governance_rate_limits mrl ON mrl.id = mc.rate_limit_id
@@ -13755,7 +13780,8 @@ func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *g
 					continue
 				}
 				if d.MCTokenCurrentUsage != d.VKTokenCurrentUsage || !d.MCTokenLastReset.Equal(d.VKTokenLastReset) ||
-					d.MCRequestCurrentUsage != d.VKRequestCurrentUsage || !d.MCRequestLastReset.Equal(d.VKRequestLastReset) {
+					d.MCRequestCurrentUsage != d.VKRequestCurrentUsage || !d.MCRequestLastReset.Equal(d.VKRequestLastReset) ||
+					!d.MCCreatedAt.Equal(d.VKCreatedAt) || d.MCCalendarAligned != d.VKCalendarAligned {
 					logger.Warn("[configstore] %s: VK %s keeps both rate limits %s (model config %s) and %s (virtual key): their usage windows differ, so neither is a duplicate", migrationName, d.VKID, d.MCRateLimitID, d.MCID, d.VKRateLimitID)
 					continue
 				}
@@ -13787,12 +13813,13 @@ func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *g
 			// and no duplicate), move the reference onto a model config so future UI
 			// edits use the single-row path.
 			type vkOnlyRL struct {
-				VKID          string
-				VKRateLimitID string
+				VKID            string
+				VKRateLimitID   string
+				CalendarAligned bool
 			}
 			var vkOnlyRLs []vkOnlyRL
 			if err := tx.Raw(`
-				SELECT vk.id AS vk_id, vk.rate_limit_id AS vk_rate_limit_id
+				SELECT vk.id AS vk_id, vk.rate_limit_id AS vk_rate_limit_id, vk.calendar_aligned AS calendar_aligned
 				FROM governance_virtual_keys vk
 				WHERE vk.rate_limit_id IS NOT NULL
 				  AND NOT EXISTS (
@@ -13808,9 +13835,9 @@ func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *g
 				mcID := uuid.NewString()
 				now := time.Now()
 				if err := tx.Exec(`
-					INSERT INTO governance_model_configs (id, model_name, scope, scope_id, rate_limit_id, created_at, updated_at)
-					VALUES (?, '*', 'virtual_key', ?, ?, ?, ?)
-				`, mcID, v.VKID, v.VKRateLimitID, now, now).Error; err != nil {
+					INSERT INTO governance_model_configs (id, model_name, scope, scope_id, rate_limit_id, calendar_aligned, created_at, updated_at)
+					VALUES (?, '*', 'virtual_key', ?, ?, ?, ?, ?)
+				`, mcID, v.VKID, v.VKRateLimitID, v.CalendarAligned, now, now).Error; err != nil {
 					return fmt.Errorf("failed to create model config for VK %s: %w", v.VKID, err)
 				}
 				if err := tx.Exec(`UPDATE governance_virtual_keys SET rate_limit_id = NULL WHERE id = ?`, v.VKID).Error; err != nil {
