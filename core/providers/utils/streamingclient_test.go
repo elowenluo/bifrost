@@ -275,7 +275,21 @@ type silentUpstream struct {
 	conns      []net.Conn
 	accepted   atomic.Int32
 	acceptedCh chan struct{} // one send per accepted connection
+	requestCh  chan struct{} // one send per connection that has received request bytes
 	hangups    chan struct{} // one send per accepted connection the client closed
+}
+
+// waitRequest blocks until the upstream has received request bytes on a
+// connection. Acquiring a connection runs concurrently with its request (the
+// transport hands the dial to its own goroutine), so an accepted socket may not
+// carry a request yet; only once bytes arrived is the client in its header wait.
+func (s *silentUpstream) waitRequest(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.requestCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream never received the request")
+	}
 }
 
 // awaitAccept blocks until the upstream has accepted a connection, so a test
@@ -303,7 +317,7 @@ func newSilentUpstream(t *testing.T) *silentUpstream {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	s := &silentUpstream{ln: ln, acceptedCh: make(chan struct{}, 64), hangups: make(chan struct{}, 64)}
+	s := &silentUpstream{ln: ln, acceptedCh: make(chan struct{}, 64), requestCh: make(chan struct{}, 64), hangups: make(chan struct{}, 64)}
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -320,8 +334,17 @@ func newSilentUpstream(t *testing.T) *silentUpstream {
 			}
 			go func() {
 				buf := make([]byte, 4096)
+				signalled := false
 				for {
-					if _, err := conn.Read(buf); err != nil {
+					n, err := conn.Read(buf)
+					if n > 0 && !signalled {
+						signalled = true
+						select {
+						case s.requestCh <- struct{}{}:
+						default:
+						}
+					}
+					if err != nil {
 						// Read only fails once the client hangs up or cleanup closes
 						// the socket; the server itself never writes.
 						select {
@@ -416,7 +439,7 @@ func TestDoStreamingRequest_CtxCancelClosesSocketDuringHeaderWait(t *testing.T) 
 	errCh := make(chan error, 1)
 	start := time.Now()
 	go func() { errCh <- DoStreamingRequest(ctx, stream, req, resp) }()
-	upstream.waitAccepted(t) // cancel lands on an accepted connection in its header wait
+	upstream.waitRequest(t) // cancel lands on a sent request in its header wait
 	cancel()
 
 	select {

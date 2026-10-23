@@ -121,7 +121,7 @@ func (t *contextTransport) RoundTrip(hc *fasthttp.HostClient, req *fasthttp.Requ
 
 	customSkipBody := resp.SkipBody
 
-	cc, err := acquireWithContext(ctx, hc.AcquireConn, req.ConnectionClose(), hc.CloseConn)
+	cc, err := acquireWithContext(ctx, hc.AcquireConn, req.ConnectionClose(), hc.ReleaseConn)
 	if err != nil {
 		return false, err
 	}
@@ -270,9 +270,11 @@ func (t *contextTransport) RoundTrip(hc *fasthttp.HostClient, req *fasthttp.Requ
 // once a connection is in hand, so with every MaxConns slot busy or a dial stalled
 // a cancelled request kept waiting for up to the default 300s. The context's
 // remaining deadline is passed as reqTimeout, and a cancellation returns at once;
-// a connection the acquisition yields after the caller gave up is closed, as the
-// cancellation watcher would have closed it, so the upstream sees the hang-up.
-func acquireWithContext[C any](ctx context.Context, acquire func(timeout time.Duration, connectionClose bool) (C, error), connectionClose bool, discard func(C)) (C, error) {
+// a connection the acquisition yields after the caller gave up has carried no
+// request, so it goes back to the pool. Closing it instead drains the pool under
+// cancelled traffic: every later request then dials, dials are slower, more of
+// them are abandoned, and the churn feeds itself.
+func acquireWithContext[C any](ctx context.Context, acquire func(timeout time.Duration, connectionClose bool) (C, error), connectionClose bool, release func(C)) (C, error) {
 	var zero C
 	var timeout time.Duration
 	if deadline, ok := ctx.Deadline(); ok {
@@ -284,7 +286,7 @@ func acquireWithContext[C any](ctx context.Context, acquire func(timeout time.Du
 		return acquire(timeout, connectionClose)
 	}
 	// One goroutine does the acquisition and, if the caller has gone by the time a
-	// connection arrives, discards it itself, so a cancelled request leaves nothing
+	// connection arrives, releases it itself, so a cancelled request leaves nothing
 	// else behind. That goroutine cannot be interrupted: fasthttp offers no way to
 	// abandon AcquireConn, and polling it in short reqTimeout slices would also cut
 	// the dial short, since reqTimeout doubles as the dial timeout. It ends when
@@ -302,7 +304,7 @@ func acquireWithContext[C any](ctx context.Context, acquire func(timeout time.Du
 		defer mu.Unlock()
 		if abandoned {
 			if err == nil {
-				discard(cc)
+				release(cc)
 			}
 			return
 		}
@@ -319,7 +321,7 @@ func acquireWithContext[C any](ctx context.Context, acquire func(timeout time.Du
 		select {
 		case r := <-done:
 			if r.err == nil {
-				discard(r.cc)
+				release(r.cc)
 			}
 		default:
 		}
