@@ -297,6 +297,8 @@ func TestEmulateDecisionRejectedAnswerCarriesBilledUsage(t *testing.T) {
 	for name, resp := range cases {
 		t.Run(name, func(t *testing.T) {
 			resp.Usage = &schemas.ResponsesResponseUsage{InputTokens: 1200, OutputTokens: 80, TotalTokens: 1280}
+			priority := schemas.BifrostServiceTierPriority
+			resp.ServiceTier = &priority
 			provider := &decisionEmulationProvider{response: resp}
 			var b Bifrost
 			_, bifrostErr := b.emulateDecisionViaResponses(nil, provider, schemas.Key{}, structuredDecisionRequest())
@@ -306,6 +308,9 @@ func TestEmulateDecisionRejectedAnswerCarriesBilledUsage(t *testing.T) {
 			billed := bifrostErr.ExtraFields.BilledUsage
 			if billed == nil || billed.PromptTokens != 1200 || billed.CompletionTokens != 80 {
 				t.Fatalf("billed usage = %+v, want the provider's 1200 in / 80 out", billed)
+			}
+			if billed.ServiceTier == nil || *billed.ServiceTier != schemas.BifrostServiceTierPriority {
+				t.Fatalf("billed usage dropped the served tier: %v", billed.ServiceTier)
 			}
 			if bifrostErr.ExtraFields.ResolvedModelUsed != resp.Model {
 				t.Fatalf("served model = %q, want %q", bifrostErr.ExtraFields.ResolvedModelUsed, resp.Model)

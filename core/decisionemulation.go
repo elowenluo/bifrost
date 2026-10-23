@@ -126,6 +126,7 @@ func decisionAnswerError(cause error, resp *schemas.BifrostResponsesResponse) *s
 			billed := resp.Usage.ToBifrostLLMUsage()
 			billed.Speed = resp.Speed
 			billed.InferenceGeo = resp.InferenceGeo
+			billed.ServiceTier = resp.ServiceTier
 			bifrostErr.ExtraFields.BilledUsage = billed
 		}
 		bifrostErr.ExtraFields.ResolvedModelUsed = resp.Model

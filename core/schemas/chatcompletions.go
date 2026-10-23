@@ -1944,6 +1944,9 @@ type BifrostLLMUsage struct {
 	// the tier multiplier. json:"-" keeps them out of every serialized usage payload.
 	Speed        *string `json:"-"`
 	InferenceGeo *string `json:"-"`
+	// ServiceTier is the served processing tier, carried for the same bare-usage
+	// billing path; json:"-" for the same reason.
+	ServiceTier *BifrostServiceTier `json:"-"`
 	// Model that actually served the turn after a server-side fallback handoff.
 	// Carried here for the same reason as the two above: the bare-usage billing path
 	// (CalculateCostForUsage) never sees RoutingInfo, so without it a fallback-served
@@ -2412,6 +2415,10 @@ func (u *BifrostLLMUsage) DeepCopy() *BifrostLLMUsage {
 	if u.InferenceGeo != nil {
 		g := *u.InferenceGeo
 		c.InferenceGeo = &g
+	}
+	if u.ServiceTier != nil {
+		st := *u.ServiceTier
+		c.ServiceTier = &st
 	}
 	if u.ServerSideFallbackModel != nil {
 		m := *u.ServerSideFallbackModel

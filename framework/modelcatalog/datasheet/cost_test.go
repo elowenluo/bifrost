@@ -5503,6 +5503,20 @@ func TestCalculateCost_EmulatedDecisionUsesServedTier(t *testing.T) {
 	assert.InDelta(t, 1000*0.000005, s.CalculateCost(resp, nil), 1e-12)
 }
 
+// A failed request billed from its bare usage keeps the served processing tier.
+func TestCalculateCostForUsage_UsesServedServiceTier(t *testing.T) {
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey("gpt-5.5", "openai", "responses"): {
+			Model: "gpt-5.5", Provider: "openai", Mode: "responses",
+			InputCostPerToken: bifrost.Ptr(0.000001), OutputCostPerToken: bifrost.Ptr(0.000002),
+			InputCostPerTokenPriority: bifrost.Ptr(0.000005),
+		},
+	})
+	priority := schemas.BifrostServiceTierPriority
+	usage := &schemas.BifrostLLMUsage{PromptTokens: 1000, TotalTokens: 1000, ServiceTier: &priority}
+	assert.InDelta(t, 1000*0.000005, s.CalculateCostForUsage(usage, schemas.OpenAI, "gpt-5.5", schemas.ResponsesRequest, nil), 1e-12)
+}
+
 // A native decisions row keeps the token-only decision pricing even when the model
 // also has a chat row.
 func TestCalculateCost_NativeDecisionRowWinsOverChatRow(t *testing.T) {
