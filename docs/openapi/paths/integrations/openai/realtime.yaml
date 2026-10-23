@@ -137,7 +137,8 @@ realtime-sessions:
       `input_audio_transcription`, `turn_detection`, `client_secret.expires_after`)
       into a GA `POST /v1/realtime/client_secrets` request and the response back
       into the beta `realtime.session` object with `client_secret.value` and
-      `client_secret.expires_at`. OpenAI only. New integrations should call
+      `client_secret.expires_at`. OpenAI only. GA has no `temperature`, so a
+      non-default value is rejected with 400 rather than ignored. New integrations should call
       `client_secrets` with `{"session": {...}}` directly.
     tags:
     - OpenAI Integration

@@ -31,6 +31,9 @@ func isLegacyRealtimeSessionPath(path string) bool {
 	return strings.HasSuffix(path, "/realtime/sessions")
 }
 
+// legacyRealtimeDefaultTemperature is the beta session API's default temperature.
+const legacyRealtimeDefaultTemperature = 0.8
+
 // legacyRealtimeAudioFormats maps beta audio format names to GA format objects.
 var legacyRealtimeAudioFormats = map[string]string{
 	"pcm16":     `{"type":"audio/pcm","rate":24000}`,
@@ -45,8 +48,13 @@ func legacyRealtimeSessionToClientSecretBody(body []byte) ([]byte, *schemas.Bifr
 	if err := json.Unmarshal(body, &legacy); err != nil || legacy == nil {
 		return nil, newRealtimeClientSecretHandlerError(fasthttp.StatusBadRequest, "invalid_request_error", "request body must be a JSON object", err)
 	}
-	// Base accepted the beta fields nested under "session" too, and flattened them
-	// with top-level fields taking precedence; do the same before translating.
+	// The model is chosen first, as base did, with the shared helper: a nonempty
+	// session.model wins over the top-level one. Only then are the remaining beta
+	// fields nested under "session" flattened, top-level fields taking precedence.
+	selectedModel, modelErr := schemas.ExtractRealtimeClientSecretModel(legacy)
+	if modelErr != nil {
+		return nil, modelErr
+	}
 	if nested, ok := legacy["session"]; ok {
 		delete(legacy, "session")
 		if !isJSONNull(nested) {
@@ -60,6 +68,9 @@ func legacyRealtimeSessionToClientSecretBody(body []byte) ([]byte, *schemas.Bifr
 				}
 			}
 		}
+	}
+	if selectedModel != "" {
+		legacy["model"], _ = json.Marshal(selectedModel)
 	}
 	session := map[string]json.RawMessage{"type": json.RawMessage(`"realtime"`)}
 	input := map[string]json.RawMessage{}
@@ -86,8 +97,17 @@ func legacyRealtimeSessionToClientSecretBody(body []byte) ([]byte, *schemas.Bifr
 			}
 			session["output_modalities"] = modalities
 		case "temperature":
-			// The GA realtime session has no temperature; forwarding it would make
-			// the upstream reject the whole request.
+			// The GA realtime session has no temperature: it always samples as the
+			// beta default did. That default (or null) is honoured by omitting it;
+			// any other value cannot be, so it is refused before a credential is
+			// minted rather than silently ignored.
+			if !isJSONNull(value) {
+				var temperature float64
+				if err := json.Unmarshal(value, &temperature); err != nil || temperature != legacyRealtimeDefaultTemperature {
+					return nil, newRealtimeClientSecretHandlerError(fasthttp.StatusBadRequest, "invalid_request_error",
+						"temperature is not supported by the GA realtime API behind this legacy endpoint; omit it (the default 0.8 is the only value it honours)", err)
+				}
+			}
 		case "max_response_output_tokens":
 			session["max_output_tokens"] = value
 		case "voice", "speed":

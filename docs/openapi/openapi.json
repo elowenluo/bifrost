@@ -11813,7 +11813,7 @@
         "operationId": "createRealtimeSession",
         "summary": "Mint a realtime session (legacy alias)",
         "deprecated": true,
-        "description": "Deprecated: OpenAI retired the beta realtime session API. Bifrost keeps this\nroute for existing clients by translating the beta request (flat `model`,\n`voice`, `modalities`, `pcm16`/`g711_ulaw`/`g711_alaw` formats,\n`input_audio_transcription`, `turn_detection`, `client_secret.expires_after`)\ninto a GA `POST /v1/realtime/client_secrets` request and the response back\ninto the beta `realtime.session` object with `client_secret.value` and\n`client_secret.expires_at`. OpenAI only. New integrations should call\n`client_secrets` with `{\"session\": {...}}` directly.\n",
+        "description": "Deprecated: OpenAI retired the beta realtime session API. Bifrost keeps this\nroute for existing clients by translating the beta request (flat `model`,\n`voice`, `modalities`, `pcm16`/`g711_ulaw`/`g711_alaw` formats,\n`input_audio_transcription`, `turn_detection`, `client_secret.expires_after`)\ninto a GA `POST /v1/realtime/client_secrets` request and the response back\ninto the beta `realtime.session` object with `client_secret.value` and\n`client_secret.expires_at`. OpenAI only. GA has no `temperature`, so a\nnon-default value is rejected with 400 rather than ignored. New integrations should call\n`client_secrets` with `{\"session\": {...}}` directly.\n",
         "tags": [
           "Realtime"
         ],
@@ -21626,7 +21626,7 @@
         "operationId": "openaiRealtimeSession",
         "summary": "Create realtime session (OpenAI alias)",
         "deprecated": true,
-        "description": "Deprecated: OpenAI retired the beta realtime session API. Bifrost keeps this\nroute for existing clients by translating the beta request (flat `model`,\n`voice`, `modalities`, `pcm16`/`g711_ulaw`/`g711_alaw` formats,\n`input_audio_transcription`, `turn_detection`, `client_secret.expires_after`)\ninto a GA `POST /v1/realtime/client_secrets` request and the response back\ninto the beta `realtime.session` object with `client_secret.value` and\n`client_secret.expires_at`. OpenAI only. New integrations should call\n`client_secrets` with `{\"session\": {...}}` directly.\n",
+        "description": "Deprecated: OpenAI retired the beta realtime session API. Bifrost keeps this\nroute for existing clients by translating the beta request (flat `model`,\n`voice`, `modalities`, `pcm16`/`g711_ulaw`/`g711_alaw` formats,\n`input_audio_transcription`, `turn_detection`, `client_secret.expires_after`)\ninto a GA `POST /v1/realtime/client_secrets` request and the response back\ninto the beta `realtime.session` object with `client_secret.value` and\n`client_secret.expires_at`. OpenAI only. GA has no `temperature`, so a\nnon-default value is rejected with 400 rather than ignored. New integrations should call\n`client_secrets` with `{\"session\": {...}}` directly.\n",
         "tags": [
           "OpenAI Integration"
         ],

@@ -44,9 +44,28 @@ func TestLegacyRealtimeSessionRequestTranslatesToGAClientSecret(t *testing.T) {
 	got, err = legacyRealtimeSessionToClientSecretBody([]byte(`{"session":{"model":"openai/gpt-realtime","instructions":"Keep answers brief"}}`))
 	require.Nil(t, err)
 	require.JSONEq(t, `{"session":{"type":"realtime","model":"openai/gpt-realtime","instructions":"Keep answers brief"}}`, string(got))
-	got, err = legacyRealtimeSessionToClientSecretBody([]byte(`{"model":"openai/gpt-realtime","voice":"ash","session":{"model":"openai/other","voice":"alloy","instructions":"nested"}}`))
+	// The model follows base's selection (a nonempty session.model first); other
+	// fields keep top-level precedence.
+	got, err = legacyRealtimeSessionToClientSecretBody([]byte(`{"model":"openai/gpt-realtime","voice":"ash","session":{"model":"openai/gpt-realtime-mini","voice":"alloy","instructions":"nested"}}`))
 	require.Nil(t, err)
-	require.JSONEq(t, `{"session":{"type":"realtime","model":"openai/gpt-realtime","instructions":"nested","audio":{"output":{"voice":"ash"}}}}`, string(got))
+	require.JSONEq(t, `{"session":{"type":"realtime","model":"openai/gpt-realtime-mini","instructions":"nested","audio":{"output":{"voice":"ash"}}}}`, string(got))
+	got, err = legacyRealtimeSessionToClientSecretBody([]byte(`{"model":"","session":{"model":"openai/gpt-realtime-mini"}}`))
+	require.Nil(t, err)
+	require.JSONEq(t, `{"session":{"type":"realtime","model":"openai/gpt-realtime-mini"}}`, string(got), "an empty top-level model must not hide a valid nested one")
+
+	// A non-default temperature cannot be honoured through GA and is refused,
+	// top-level or nested; the beta default is accepted (and is what GA does).
+	for _, body := range []string{
+		`{"model":"gpt-realtime","temperature":0.6}`,
+		`{"session":{"model":"gpt-realtime","temperature":1.2}}`,
+		`{"model":"gpt-realtime","temperature":"hot"}`,
+	} {
+		_, err = legacyRealtimeSessionToClientSecretBody([]byte(body))
+		require.NotNil(t, err, body)
+		require.Contains(t, err.Error.Message, "temperature", body)
+	}
+	_, err = legacyRealtimeSessionToClientSecretBody([]byte(`{"model":"gpt-realtime","temperature":null}`))
+	require.Nil(t, err)
 	_, err = legacyRealtimeSessionToClientSecretBody([]byte(`{"session":"gpt-realtime"}`))
 	require.NotNil(t, err)
 
@@ -172,6 +191,15 @@ func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 	status, nested := post("/v1/realtime/sessions", `{"session":{"model":"openai/gpt-realtime","instructions":"Keep answers brief"}}`)
 	require.Equal(t, 200, status, "nested legacy session: %v", nested)
 	require.Equal(t, "realtime.session", nested["object"])
+
+	status, _ = post("/v1/realtime/sessions", `{"model":"openai/gpt-realtime","session":{"model":"openai/gpt-realtime-mini"}}`)
+	require.Equal(t, 200, status)
+	mu.Lock()
+	require.Contains(t, gotBody, `"model":"gpt-realtime-mini"`, "the nested model is the one minted, as at base")
+	mu.Unlock()
+
+	status, refused := post("/openai/v1/realtime/sessions", `{"model":"gpt-realtime","temperature":0.6}`)
+	require.Equal(t, 400, status, "%v", refused)
 
 	status, out := post("/v1/realtime/client_secrets", `{"session":{"type":"realtime","model":"openai/gpt-realtime"}}`)
 	require.Equal(t, 200, status, "%v", out)
