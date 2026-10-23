@@ -716,6 +716,25 @@ func TestToBifrostDecisionResponseFailures(t *testing.T) {
 		}
 	})
 
+	t.Run("choice outside the requested options", func(t *testing.T) {
+		choiceReq := decisionRequest("state", map[string]schemas.DecisionQuestion{
+			"category": {Kind: schemas.DecisionKindChoice, Instructions: "d", Criteria: map[string]any{"billing": "b", "bug": "g"}},
+		})
+		bad := "refund"
+		native := &TypesafeDecisionResponse{
+			Model:   "jev-1.13.0",
+			Answers: map[string]TypesafeAnswer{"category": {Type: TypesafeQuestionTypeChoice, Choice: &bad}},
+			Usage:   &TypesafeUsage{InputTokens: 300},
+		}
+		_, err := ToBifrostDecisionResponse(native, choiceReq)
+		if err == nil {
+			t.Fatal("expected error for a choice outside the requested options")
+		}
+		if billed := err.ExtraFields.BilledUsage; billed == nil || billed.PromptTokens != 300 {
+			t.Fatalf("billed usage = %+v, want the 300 input tokens Typesafe charged", billed)
+		}
+	})
+
 	t.Run("noul value outside range", func(t *testing.T) {
 		// The provider response is untrusted; a noul outside [0,1] violates the
 		// documented contract and must not surface as a successful answer.

@@ -210,6 +210,13 @@ func choiceOptions(criteria interface{}) ([]string, map[string]string, error) {
 	return opts, descs, nil
 }
 
+// DecisionChoiceOptions returns a choice question's allowed options, sorted, or an error
+// when its criteria name none.
+func DecisionChoiceOptions(criteria interface{}) ([]string, error) {
+	opts, _, err := choiceOptions(criteria)
+	return opts, err
+}
+
 // scoreLevels renders a score question's ordered criteria into a description.
 func scoreLevels(criteria interface{}) string {
 	var levels []interface{}

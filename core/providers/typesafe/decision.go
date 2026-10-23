@@ -3,6 +3,7 @@ package typesafe
 import (
 	"fmt"
 	"reflect"
+	"slices"
 
 	"github.com/tidwall/gjson"
 
@@ -296,6 +297,10 @@ func toBifrostDecisionResponse(resp *TypesafeDecisionResponse, request *schemas.
 		case schemas.DecisionKindChoice:
 			if native.Choice == nil {
 				return nil, providerUtils.NewBifrostOperationError(fmt.Sprintf("typesafe choice answer for question %q carries no value", name), nil)
+			}
+			// An answer outside the requested options is impossible, as emulation also enforces.
+			if opts, err := providerUtils.DecisionChoiceOptions(question.Criteria); err == nil && !slices.Contains(opts, *native.Choice) {
+				return nil, providerUtils.NewBifrostOperationError(fmt.Sprintf("typesafe choice answer %q for question %q is not an allowed option", *native.Choice, name), nil)
 			}
 			answer.Value = *native.Choice
 		case schemas.DecisionKindScore:
