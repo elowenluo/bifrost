@@ -98,6 +98,13 @@ realtime-client-secrets:
     description: |
       OpenAI-prefixed alias of `POST /v1/realtime/client_secrets`. Mints an
       ephemeral client secret used to authorize a downstream Realtime client.
+
+      The returned secret is minted by Bifrost (`ek_bf_...`), not the provider's
+      own token: Bifrost keeps the provider token and redeems it only when the
+      secret is presented to Bifrost's realtime endpoints (WebSocket
+      `/v1/realtime`, WebRTC `/v1/realtime/calls`) for the provider and key it
+      was minted for. A client that used to send the secret straight to the
+      provider must connect through Bifrost instead.
     tags:
     - OpenAI Integration
     requestBody:
@@ -140,6 +147,11 @@ realtime-sessions:
       `client_secret.expires_at`. OpenAI only. GA has no `temperature`, so a
       non-default value is rejected with 400 rather than ignored. New integrations should call
       `client_secrets` with `{"session": {...}}` directly.
+
+      `client_secret.value` is minted by Bifrost (`ek_bf_...`) and works only
+      against Bifrost's realtime endpoints (WebSocket `/v1/realtime`, WebRTC
+      `/v1/realtime/calls`); a client that sent it straight to the provider must
+      connect through Bifrost instead.
     tags:
     - OpenAI Integration
     requestBody:

@@ -11744,7 +11744,7 @@
       "post": {
         "operationId": "createRealtimeClientSecret",
         "summary": "Mint a realtime ephemeral client secret",
-        "description": "Calls the upstream realtime provider's `client_secrets` endpoint to mint a\nshort-lived ephemeral token (e.g. for browser-based WebRTC clients).\nBifrost selects a provider key, evaluates governance, and proxies the\nresponse. The returned token is cached and mapped to the originating\nvirtual key for downstream attribution.\n\nRequest body must be JSON. `session.model` (or top-level `model`) must use\n`provider/model` form.\n",
+        "description": "Calls the upstream realtime provider's `client_secrets` endpoint to mint a\nshort-lived ephemeral token (e.g. for browser-based WebRTC clients).\nBifrost selects a provider key, evaluates governance, and proxies the\nresponse. The returned token is cached and mapped to the originating\nvirtual key for downstream attribution.\n\nThe returned secret is minted by Bifrost (`ek_bf_...`), not the provider's\nown token: Bifrost keeps the provider token and redeems it only when the\nsecret is presented to Bifrost's realtime endpoints (WebSocket\n`/v1/realtime`, WebRTC `/v1/realtime/calls`) for the provider and key it\nwas minted for. A client that used to send the secret straight to the\nprovider must connect through Bifrost instead.\n\nRequest body must be JSON. `session.model` (or top-level `model`) must use\n`provider/model` form.\n",
         "tags": [
           "Realtime"
         ],
@@ -11813,7 +11813,7 @@
         "operationId": "createRealtimeSession",
         "summary": "Mint a realtime session (legacy alias)",
         "deprecated": true,
-        "description": "Deprecated: OpenAI retired the beta realtime session API. Bifrost keeps this\nroute for existing clients by translating the beta request (flat `model`,\n`voice`, `modalities`, `pcm16`/`g711_ulaw`/`g711_alaw` formats,\n`input_audio_transcription`, `turn_detection`, `client_secret.expires_after`)\ninto a GA `POST /v1/realtime/client_secrets` request and the response back\ninto the beta `realtime.session` object with `client_secret.value` and\n`client_secret.expires_at`. OpenAI only. GA has no `temperature`, so a\nnon-default value is rejected with 400 rather than ignored. New integrations should call\n`client_secrets` with `{\"session\": {...}}` directly.\n",
+        "description": "Deprecated: OpenAI retired the beta realtime session API. Bifrost keeps this\nroute for existing clients by translating the beta request (flat `model`,\n`voice`, `modalities`, `pcm16`/`g711_ulaw`/`g711_alaw` formats,\n`input_audio_transcription`, `turn_detection`, `client_secret.expires_after`)\ninto a GA `POST /v1/realtime/client_secrets` request and the response back\ninto the beta `realtime.session` object with `client_secret.value` and\n`client_secret.expires_at`. OpenAI only. GA has no `temperature`, so a\nnon-default value is rejected with 400 rather than ignored. New integrations should call\n`client_secrets` with `{\"session\": {...}}` directly.\n\n`client_secret.value` is minted by Bifrost (`ek_bf_...`) and works only\nagainst Bifrost's realtime endpoints (WebSocket `/v1/realtime`, WebRTC\n`/v1/realtime/calls`); a client that sent it straight to the provider must\nconnect through Bifrost instead.\n",
         "tags": [
           "Realtime"
         ],
@@ -21559,7 +21559,7 @@
       "post": {
         "operationId": "openaiRealtimeClientSecret",
         "summary": "Create realtime client secret (OpenAI alias)",
-        "description": "OpenAI-prefixed alias of `POST /v1/realtime/client_secrets`. Mints an\nephemeral client secret used to authorize a downstream Realtime client.\n",
+        "description": "OpenAI-prefixed alias of `POST /v1/realtime/client_secrets`. Mints an\nephemeral client secret used to authorize a downstream Realtime client.\n\nThe returned secret is minted by Bifrost (`ek_bf_...`), not the provider's\nown token: Bifrost keeps the provider token and redeems it only when the\nsecret is presented to Bifrost's realtime endpoints (WebSocket\n`/v1/realtime`, WebRTC `/v1/realtime/calls`) for the provider and key it\nwas minted for. A client that used to send the secret straight to the\nprovider must connect through Bifrost instead.\n",
         "tags": [
           "OpenAI Integration"
         ],
@@ -21626,7 +21626,7 @@
         "operationId": "openaiRealtimeSession",
         "summary": "Create realtime session (OpenAI alias)",
         "deprecated": true,
-        "description": "Deprecated: OpenAI retired the beta realtime session API. Bifrost keeps this\nroute for existing clients by translating the beta request (flat `model`,\n`voice`, `modalities`, `pcm16`/`g711_ulaw`/`g711_alaw` formats,\n`input_audio_transcription`, `turn_detection`, `client_secret.expires_after`)\ninto a GA `POST /v1/realtime/client_secrets` request and the response back\ninto the beta `realtime.session` object with `client_secret.value` and\n`client_secret.expires_at`. OpenAI only. GA has no `temperature`, so a\nnon-default value is rejected with 400 rather than ignored. New integrations should call\n`client_secrets` with `{\"session\": {...}}` directly.\n",
+        "description": "Deprecated: OpenAI retired the beta realtime session API. Bifrost keeps this\nroute for existing clients by translating the beta request (flat `model`,\n`voice`, `modalities`, `pcm16`/`g711_ulaw`/`g711_alaw` formats,\n`input_audio_transcription`, `turn_detection`, `client_secret.expires_after`)\ninto a GA `POST /v1/realtime/client_secrets` request and the response back\ninto the beta `realtime.session` object with `client_secret.value` and\n`client_secret.expires_at`. OpenAI only. GA has no `temperature`, so a\nnon-default value is rejected with 400 rather than ignored. New integrations should call\n`client_secrets` with `{\"session\": {...}}` directly.\n\n`client_secret.value` is minted by Bifrost (`ek_bf_...`) and works only\nagainst Bifrost's realtime endpoints (WebSocket `/v1/realtime`, WebRTC\n`/v1/realtime/calls`); a client that sent it straight to the provider must\nconnect through Bifrost instead.\n",
         "tags": [
           "OpenAI Integration"
         ],
@@ -46793,7 +46793,7 @@
           {
             "name": "search",
             "in": "query",
-            "description": "Case-insensitive search by virtual key name",
+            "description": "Case-insensitive search across the virtual key name, its team name, and its customer name. Enterprise additionally matches the name and email of the user the key is assigned to.",
             "schema": {
               "type": "string"
             }
@@ -111629,6 +111629,30 @@
           },
           "rate_limit": {
             "$ref": "#/components/schemas/RateLimit"
+          },
+          "assigned_user": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "readOnly": true,
+            "description": "The user this virtual key is assigned to, or null when it is assigned to a team, a customer, or nothing. Read-only and resolved per request. Enterprise only; always null in the open-source build, which has no user directory. Omitted entirely when the assignee lookup could not be completed, so null always means \"nobody is assigned\" and an absent field means \"not known\" - clients should refetch the assignee for the key rather than reading its absence as unassigned.\n",
+            "required": [
+              "id",
+              "name",
+              "email"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              }
+            }
           },
           "config_hash": {
             "type": "string"

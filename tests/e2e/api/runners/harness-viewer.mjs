@@ -11,6 +11,7 @@
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { readReport } from "./lib/read-report.mjs";
 import { redactItemsForPublic } from "./lib/redact-report.mjs";
+import { isFailedExecution } from "./lib/expected-status.mjs";
 import { createServer } from "node:http";
 import { URL } from "node:url";
 
@@ -78,10 +79,20 @@ const summarize = () => {
     const respHeaders = (e.response?.header || []).map((h) => ({ key: h.key, value: h.value }));
     const assertions = (e.assertions || []).map((a) => ({
       name: a.assertion,
-      passed: !a.error,
+      passed: !a.error && !a.skipped,
+      skipped: !!a.skipped,
       error: a.error?.message || null,
     }));
-    const failed = assertions.some((a) => !a.passed) || (e.response?.code ?? 0) >= 400 || !e.response;
+    // Same verdict as analyze-failures: a failed assertion fails the row, and so does a
+    // status the row did not ask for, even when another assertion passed. A row tagged
+    // [EXPECT-4XX] or [EXPECT-400] that got that status is a pass; a skipped assertion
+    // is neither a pass nor a failure.
+    const failed = isFailedExecution(
+      e.item?.name,
+      e.response?.code ?? 0,
+      assertions.filter((a) => a.error).length,
+      !!e.response,
+    );
     return {
       idx,
       name: e.item?.name || `request-${idx}`,

@@ -10,12 +10,16 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	bifrost "github.com/capsohq/bifrost/core"
 	"github.com/capsohq/bifrost/core/schemas"
 	"github.com/capsohq/bifrost/framework/configstore"
+	"github.com/capsohq/bifrost/framework/kvstore"
 	"github.com/capsohq/bifrost/transports/bifrost-http/lib"
+	bfws "github.com/capsohq/bifrost/transports/bifrost-http/websocket"
 	"github.com/fasthttp/router"
+	ws "github.com/fasthttp/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/valyala/fasthttp"
 )
@@ -113,7 +117,8 @@ func (a legacySessionAccount) GetConfigForProvider(schemas.ModelProvider) (*sche
 // retired beta routes and the GA route, through the real handler and OpenAI
 // provider: a beta request reaches the upstream as a GA client-secret request and
 // the client receives the beta realtime.session object, while the GA route is
-// passed through unchanged.
+// passed through unchanged apart from the Bifrost-minted secret (upstream #7317),
+// which on every route maps back to the provider's token.
 func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 	SetLogger(&mockLogger{})
 	var mu sync.Mutex
@@ -137,7 +142,7 @@ func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"value":"ek_abc","expires_at":1760000000,"session":{"type":"realtime","object":"realtime.session","id":"sess_9","model":"gpt-realtime","output_modalities":["audio"],"audio":{"output":{"voice":"alloy"}}}}`))
+		_, _ = w.Write([]byte(`{"value":"ek_abc","expires_at":4102444800,"session":{"type":"realtime","object":"realtime.session","id":"sess_9","model":"gpt-realtime","output_modalities":["audio"],"audio":{"output":{"voice":"alloy"}}}}`))
 	}))
 	defer upstream.Close()
 
@@ -148,7 +153,21 @@ func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Shutdown()
 
-	h := NewRealtimeClientSecretsHandler(client, &lib.Config{ClientConfig: &configstore.ClientConfig{}})
+	kv, err := kvstore.New(kvstore.Config{})
+	require.NoError(t, err)
+	defer kv.Close()
+	h := NewRealtimeClientSecretsHandler(client, &lib.Config{ClientConfig: &configstore.ClientConfig{}, KVStore: kv})
+	requireMintedSecret := func(value any, label string) {
+		t.Helper()
+		token, _ := value.(string)
+		require.True(t, strings.HasPrefix(token, "ek_bf_"), "%s: client secret %q must be Bifrost-minted", label, token)
+		raw, err := kv.Get(buildRealtimeEphemeralKeyMappingKey(token))
+		require.NoError(t, err, label)
+		mapping, ok := raw.(realtimeEphemeralKeyMapping)
+		require.True(t, ok, "%s: mapping type %T", label, raw)
+		require.Equal(t, "ek_abc", mapping.ProviderToken, label)
+		require.Equal(t, "k1", mapping.KeyID, label)
+	}
 	r := router.New()
 	h.RegisterRoutes(r)
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
@@ -185,7 +204,11 @@ func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 		require.Equal(t, "sess_9", out["id"], path)
 		require.Equal(t, []any{"audio", "text"}, out["modalities"], path)
 		require.Equal(t, "alloy", out["voice"], path)
-		require.Equal(t, map[string]any{"value": "ek_abc", "expires_at": float64(1760000000)}, out["client_secret"], path)
+		secret, ok := out["client_secret"].(map[string]any)
+		require.True(t, ok, "%s: client_secret %v", path, out["client_secret"])
+		require.Len(t, secret, 2, path)
+		require.Equal(t, float64(4102444800), secret["expires_at"], path)
+		requireMintedSecret(secret["value"], path)
 	}
 
 	status, nested := post("/v1/realtime/sessions", `{"session":{"model":"openai/gpt-realtime","instructions":"Keep answers brief"}}`)
@@ -203,6 +226,105 @@ func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 
 	status, out := post("/v1/realtime/client_secrets", `{"session":{"type":"realtime","model":"openai/gpt-realtime"}}`)
 	require.Equal(t, 200, status, "%v", out)
-	require.Equal(t, "ek_abc", out["value"], "the GA route returns the GA shape unchanged")
+	requireMintedSecret(out["value"], "GA route")
+	require.Equal(t, float64(4102444800), out["expires_at"], "the GA route keeps the GA shape")
 	require.NotContains(t, out, "client_secret")
+}
+
+// TestLegacyRealtimeSessionSecretOpensUpstreamThroughBifrost is the end-to-end contract
+// for a beta-session client after upstream #7317: the client_secret.value it receives
+// is Bifrost-minted, and presenting it to Bifrost's realtime WebSocket opens the
+// upstream session with the provider's own ephemeral token, never the minted one.
+func TestLegacyRealtimeSessionSecretOpensUpstreamThroughBifrost(t *testing.T) {
+	SetLogger(&mockLogger{})
+	upstreamAuth := make(chan string, 1)
+	upgrader := ws.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/realtime" {
+			upstreamAuth <- r.Header.Get("Authorization")
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			_ = conn.WriteMessage(ws.TextMessage, []byte(`{"type":"session.created","session":{"id":"sess_9"}}`))
+			_, _, _ = conn.ReadMessage()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"value":"ek_abc","expires_at":4102444800,"session":{"type":"realtime","object":"realtime.session","id":"sess_9","model":"gpt-realtime"}}`))
+	}))
+	defer upstream.Close()
+
+	client, err := bifrost.Init(context.Background(), schemas.BifrostConfig{
+		Account: legacySessionAccount{baseURL: upstream.URL},
+		Logger:  bifrost.NewDefaultLogger(schemas.LogLevelError),
+	})
+	require.NoError(t, err)
+	defer client.Shutdown()
+
+	kv, err := kvstore.New(kvstore.Config{})
+	require.NoError(t, err)
+	defer kv.Close()
+	cfg := &lib.Config{ClientConfig: &configstore.ClientConfig{}, KVStore: kv, WebSocketConfig: &schemas.WebSocketConfig{}}
+	r := router.New()
+	NewRealtimeClientSecretsHandler(client, cfg).RegisterRoutes(r)
+	wsHandler := NewWSRealtimeHandler(client, cfg, bfws.NewPool(nil))
+	defer wsHandler.Close()
+	wsHandler.RegisterRoutes(r)
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv := &fasthttp.Server{Handler: r.Handler}
+	go func() { _ = srv.Serve(ln) }()
+	defer srv.Shutdown() //nolint:errcheck
+
+	resp, err := http.Post("http://"+ln.Addr().String()+"/v1/realtime/sessions", "application/json", strings.NewReader(`{"model":"openai/gpt-realtime"}`))
+	require.NoError(t, err)
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	require.Equal(t, 200, resp.StatusCode, string(raw))
+	var session struct {
+		ClientSecret struct {
+			Value string `json:"value"`
+		} `json:"client_secret"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &session))
+	require.True(t, strings.HasPrefix(session.ClientSecret.Value, "ek_bf_"), "minted secret %q", session.ClientSecret.Value)
+
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+session.ClientSecret.Value)
+	conn, _, err := ws.DefaultDialer.Dial("ws://"+ln.Addr().String()+"/v1/realtime?model=openai/gpt-realtime", header)
+	require.NoError(t, err)
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.Contains(t, string(msg), "session.created", "the upstream session reaches the client")
+	select {
+	case got := <-upstreamAuth:
+		require.Equal(t, "Bearer ek_abc", got, "Bifrost presents the provider's token upstream")
+	case <-time.After(5 * time.Second):
+		t.Fatal("no upstream realtime connection")
+	}
+
+	// The same secret bound to another provider is refused before anything is dialed:
+	// the hidden provider token only ever goes back to the provider that issued it.
+	raw2, err := kv.Get(buildRealtimeEphemeralKeyMappingKey(session.ClientSecret.Value))
+	require.NoError(t, err)
+	mapping := raw2.(realtimeEphemeralKeyMapping)
+	require.Equal(t, string(schemas.OpenAI), mapping.Provider, "the mapping records the issuing provider")
+	mapping.Provider = string(schemas.Anthropic)
+	require.NoError(t, kv.SetWithTTL(buildRealtimeEphemeralKeyMappingKey(session.ClientSecret.Value), mapping, time.Minute))
+	refused, _, err := ws.DefaultDialer.Dial("ws://"+ln.Addr().String()+"/v1/realtime?model=openai/gpt-realtime", header)
+	require.NoError(t, err)
+	defer refused.Close()
+	_ = refused.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, msg, err = refused.ReadMessage()
+	require.NoError(t, err)
+	require.Contains(t, string(msg), "not issued for this provider and key")
+	select {
+	case got := <-upstreamAuth:
+		t.Fatalf("a refused secret still reached the upstream with %q", got)
+	case <-time.After(200 * time.Millisecond):
+	}
 }

@@ -4243,3 +4243,151 @@ func TestBudgetLastResetUsesBudgetQuarterStart(t *testing.T) {
 	assert.False(t, budgetLastReset(false, nil).IsZero())
 	assert.False(t, budgetLastReset(true, nil).IsZero())
 }
+
+// TestApplyAssignees covers the hook that puts each virtual key's assigned user on
+// the read responses. Before it existed the assignee was only reachable through a
+// per-key endpoint, so the CSV export - which cannot issue one request per row -
+// left the "Assigned To" column blank for every user-assigned key.
+func TestApplyAssignees(t *testing.T) {
+	SetLogger(&mockLogger{})
+
+	newVKs := func() []*configstoreTables.TableVirtualKey {
+		return []*configstoreTables.TableVirtualKey{
+			{ID: "vk-1", Name: "One"},
+			{ID: "vk-2", Name: "Two"},
+		}
+	}
+
+	t.Run("fills in assignees in one batched call", func(t *testing.T) {
+		var gotIDs [][]string
+		h := &GovernanceHandler{
+			virtualKeyAssigneeResolver: func(_ context.Context, vkIDs []string) (map[string]*configstoreTables.AssignedUser, error) {
+				gotIDs = append(gotIDs, vkIDs)
+				return map[string]*configstoreTables.AssignedUser{
+					"vk-1": {ID: "user-1", Name: "Ada", Email: "ada@example.com"},
+				}, nil
+			},
+		}
+		vks := newVKs()
+		h.applyAssignees(context.Background(), vks)
+
+		// One call for the whole page, not one per key.
+		if len(gotIDs) != 1 {
+			t.Fatalf("expected a single resolver call, got %d", len(gotIDs))
+		}
+		if len(gotIDs[0]) != 2 || gotIDs[0][0] != "vk-1" || gotIDs[0][1] != "vk-2" {
+			t.Fatalf("expected both VK ids in one call, got %#v", gotIDs[0])
+		}
+		if vks[0].AssignedUser == nil || vks[0].AssignedUser.Email != "ada@example.com" {
+			t.Fatalf("expected vk-1 to carry its assignee, got %#v", vks[0].AssignedUser)
+		}
+		// A key the resolver did not mention is unassigned, not stale.
+		if vks[1].AssignedUser != nil {
+			t.Fatalf("expected vk-2 to have no assignee, got %#v", vks[1].AssignedUser)
+		}
+		// Both keys carry a settled answer, so both serialize assigned_user.
+		for _, vk := range vks {
+			if !vk.AssigneeResolved {
+				t.Fatalf("expected %s to be marked resolved after a successful lookup", vk.ID)
+			}
+		}
+	})
+
+	t.Run("no-ops without a resolver", func(t *testing.T) {
+		h := &GovernanceHandler{}
+		vks := newVKs()
+		h.applyAssignees(context.Background(), vks)
+		for _, vk := range vks {
+			if vk.AssignedUser != nil {
+				t.Fatalf("expected no assignee in OSS, got %#v", vk.AssignedUser)
+			}
+			// OSS has no VK-user link at all, so "nobody is assigned" is a settled
+			// answer, not an unknown one: the UI must not refetch what cannot exist.
+			if !vk.AssigneeResolved {
+				t.Fatalf("expected %s to be marked resolved in OSS", vk.ID)
+			}
+		}
+	})
+
+	t.Run("degrades to no assignee when the resolver fails", func(t *testing.T) {
+		h := &GovernanceHandler{
+			virtualKeyAssigneeResolver: func(_ context.Context, _ []string) (map[string]*configstoreTables.AssignedUser, error) {
+				return nil, errors.New("boom")
+			},
+		}
+		vks := newVKs()
+		h.applyAssignees(context.Background(), vks)
+		// One degraded column beats a failed page.
+		for _, vk := range vks {
+			if vk.AssignedUser != nil {
+				t.Fatalf("expected no assignee after a resolver error, got %#v", vk.AssignedUser)
+			}
+			// But the column degrades to "unknown", not to "unassigned": leaving these
+			// marked resolved would serialize null and make the UI show "-" for a key
+			// that does have an assignee, instead of falling back to a per-key lookup.
+			if vk.AssigneeResolved {
+				t.Fatalf("expected %s to stay unresolved after a resolver error", vk.ID)
+			}
+		}
+	})
+
+	t.Run("skips the resolver for an empty page", func(t *testing.T) {
+		called := false
+		h := &GovernanceHandler{
+			virtualKeyAssigneeResolver: func(_ context.Context, _ []string) (map[string]*configstoreTables.AssignedUser, error) {
+				called = true
+				return nil, nil
+			},
+		}
+		h.applyAssignees(context.Background(), nil)
+		if called {
+			t.Fatal("expected no resolver call for an empty page")
+		}
+	})
+}
+
+// TestReconcileVKModelConfig_OnlyWildcardTierAdoptsVKRateLimit pins that a new
+// provider-specific VK model config never takes over the VK's own (config.json)
+// rate limit. Upstream #7291 adopts that row instead of creating a duplicate; doing
+// it for a provider tier would overwrite a key-wide 10/min limit with the provider's
+// 100/min and move it onto that one provider, lifting it for every other provider.
+// Only the provider-independent "*" tier stands in for the VK's limits.
+func TestReconcileVKModelConfig_OnlyWildcardTierAdoptsVKRateLimit(t *testing.T) {
+	SetLogger(&mockLogger{})
+	ctx := context.Background()
+	store := setupPricingOverrideHandlerStore(t)
+	db := store.DB()
+	handler := &GovernanceHandler{configStore: store, governanceManager: pricingOverrideTestGovernanceManager{}}
+
+	keyWide := configstoreTables.TableRateLimit{ID: "rl-vk", RequestMaxLimit: schemas.Ptr(int64(10)), RequestResetDuration: schemas.Ptr("1m"),
+		TokenLastReset: time.Now(), RequestLastReset: time.Now()}
+	require.NoError(t, store.CreateRateLimit(ctx, &keyWide))
+	vk := configstoreTables.TableVirtualKey{ID: "vk-adopt", Name: "vk-adopt", Value: *schemas.NewSecretVar("sk-bf-adopt"), IsActive: schemas.Ptr(true), RateLimitID: schemas.Ptr("rl-vk")}
+	require.NoError(t, db.Create(&vk).Error)
+
+	openai := "openai"
+	providerTier := vkModelConfigDesired{provider: &openai, rateLimitProvided: true,
+		rateLimit: &configstoreTables.TableRateLimit{RequestMaxLimit: schemas.Ptr(int64(100)), RequestResetDuration: schemas.Ptr("1m")}}
+	require.NoError(t, handler.reconcileVKModelConfig(ctx, db, &vk, providerTier, nil))
+
+	var stored configstoreTables.TableRateLimit
+	require.NoError(t, db.First(&stored, "id = ?", "rl-vk").Error)
+	require.Equal(t, int64(10), *stored.RequestMaxLimit, "the key-wide limit keeps its own value")
+	var vkRow configstoreTables.TableVirtualKey
+	require.NoError(t, db.First(&vkRow, "id = ?", "vk-adopt").Error)
+	require.NotNil(t, vkRow.RateLimitID)
+	require.Equal(t, "rl-vk", *vkRow.RateLimitID, "the VK keeps its key-wide limit")
+	var providerMC configstoreTables.TableModelConfig
+	require.NoError(t, db.First(&providerMC, "scope = ? AND scope_id = ? AND provider = ?", configstoreTables.ModelConfigScopeVirtualKey, "vk-adopt", openai).Error)
+	require.NotNil(t, providerMC.RateLimitID)
+	require.NotEqual(t, "rl-vk", *providerMC.RateLimitID, "the provider tier gets a limit of its own")
+
+	// The wildcard tier still adopts the VK's row rather than creating a duplicate.
+	wildcard := vkModelConfigDesired{rateLimitProvided: true,
+		rateLimit: &configstoreTables.TableRateLimit{RequestMaxLimit: schemas.Ptr(int64(20)), RequestResetDuration: schemas.Ptr("1m")}}
+	require.NoError(t, handler.reconcileVKModelConfig(ctx, db, &vk, wildcard, nil))
+	var wildcardMC configstoreTables.TableModelConfig
+	require.NoError(t, db.First(&wildcardMC, "scope = ? AND scope_id = ? AND provider IS NULL AND model_name = ?", configstoreTables.ModelConfigScopeVirtualKey, "vk-adopt", configstoreTables.ModelConfigAllModels).Error)
+	require.NotNil(t, wildcardMC.RateLimitID)
+	require.Equal(t, "rl-vk", *wildcardMC.RateLimitID, "the wildcard tier adopts the VK's own row")
+}

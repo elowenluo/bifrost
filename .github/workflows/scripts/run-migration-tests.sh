@@ -1119,6 +1119,21 @@ mcp_tool_logs|redaction_mapping|NULL|id = 'mcp-log-migration-001'
 mcp_tool_logs|device_id|'migration-device'|id = 'mcp-log-migration-001'
 mcp_tool_logs|app_key|'migration-app'|id = 'mcp-log-migration-001'
 mcp_tool_logs|decision|'allow'|id = 'mcp-log-migration-001'
+config_keys|use_openai_endpoints|false|name = 'migration-test-key-anthropic'
+governance_model_pricing|off_peak_cost_multiplier|NULL|id = 1
+governance_model_pricing|peak_hours|NULL|id = 1
+mcp_tool_logs|user_name|'Migration Test User'|id = 'mcp-log-migration-001'
+mcp_tool_logs|team_name|'Migration Test Team'|id = 'mcp-log-migration-001'
+mcp_tool_logs|customer_name|'Migration Test Customer'|id = 'mcp-log-migration-001'
+mcp_tool_logs|business_unit_name|'Migration Test BU'|id = 'mcp-log-migration-001'
+mcp_tool_logs|team_ids|'["team-migration-test-1"]'|id = 'mcp-log-migration-001'
+mcp_tool_logs|team_names|'["Migration Test Team"]'|id = 'mcp-log-migration-001'
+mcp_tool_logs|customer_ids|'["customer-migration-test-2"]'|id = 'mcp-log-migration-001'
+mcp_tool_logs|customer_names|'["Migration Test Customer"]'|id = 'mcp-log-migration-001'
+mcp_tool_logs|business_unit_ids|'["bu-migration-test-1"]'|id = 'mcp-log-migration-001'
+mcp_tool_logs|business_unit_names|'["Migration Test BU"]'|id = 'mcp-log-migration-001'
+mcp_tool_logs|budget_ids|'["budget-migration-test-1"]'|id = 'mcp-log-migration-001'
+mcp_tool_logs|rate_limit_ids|'["ratelimit-migration-test-1"]'|id = 'mcp-log-migration-001'
 mcp_tool_logs|source|'migration-test'|id = 'mcp-log-migration-001'
 V200_COLUMNS
 

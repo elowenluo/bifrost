@@ -9,7 +9,41 @@ import (
 	"testing"
 
 	"github.com/capsohq/bifrost/core/schemas"
+	"github.com/valyala/fasthttp"
 )
+
+func TestRealtimeWebRTCUpstreamErrorPreservesProviderResponse(t *testing.T) {
+	t.Parallel()
+
+	provider := &AzureProvider{}
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	var resp fasthttp.Response
+	resp.SetStatusCode(fasthttp.StatusTooManyRequests)
+	resp.SetBodyString(`{"error":{"message":"Quota exceeded","type":"insufficient_quota","code":"insufficient_quota","param":"model"}}`)
+
+	bifrostErr := provider.realtimeWebRTCUpstreamError(ctx, &resp)
+	if bifrostErr.StatusCode == nil || *bifrostErr.StatusCode != fasthttp.StatusTooManyRequests {
+		t.Fatalf("status = %v, want %d", bifrostErr.StatusCode, fasthttp.StatusTooManyRequests)
+	}
+	if bifrostErr.Error == nil || bifrostErr.Error.Message != "Quota exceeded" {
+		t.Fatalf("error = %#v", bifrostErr.Error)
+	}
+	if bifrostErr.Error.Type == nil || *bifrostErr.Error.Type != "insufficient_quota" {
+		t.Fatalf("error type = %v", bifrostErr.Error.Type)
+	}
+	if bifrostErr.Error.Code == nil || *bifrostErr.Error.Code != "insufficient_quota" {
+		t.Fatalf("error code = %v", bifrostErr.Error.Code)
+	}
+	if bifrostErr.ExtraFields.RoutingInfo.Provider != schemas.Azure || bifrostErr.ExtraFields.RequestType != schemas.RealtimeRequest {
+		t.Fatalf("extra fields = %#v", bifrostErr.ExtraFields)
+	}
+	if bifrostErr.ExtraFields.Provider != schemas.Azure { //nolint:staticcheck // deprecated field must stay in sync for backward compatibility
+		t.Fatalf("deprecated provider = %v, want %v", bifrostErr.ExtraFields.Provider, schemas.Azure)
+	}
+	if bifrostErr.ExtraFields.RawResponse != nil {
+		t.Fatalf("raw response = %#v, want nil", bifrostErr.ExtraFields.RawResponse)
+	}
+}
 
 func TestRealtimeWebSocketURL(t *testing.T) {
 	t.Parallel()
@@ -116,5 +150,23 @@ func TestExchangeRealtimeWebRTCSDPUsesIntentForTranscription(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// TestRealtimeRefusesKeyWithoutEndpoint pins that a value-only key, which is what an
+// ephemeral client secret Bifrost did not mint becomes on the realtime paths, is refused
+// with a 400 instead of dereferencing the missing Azure key config.
+func TestRealtimeRefusesKeyWithoutEndpoint(t *testing.T) {
+	t.Parallel()
+
+	provider := &AzureProvider{}
+	key := schemas.Key{Value: *schemas.NewSecretVar("ek_unmapped")}
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+
+	if _, bifrostErr := provider.ExchangeRealtimeWebRTCSDP(ctx, key, "gpt-realtime", "v=0", nil); bifrostErr == nil || bifrostErr.StatusCode == nil || *bifrostErr.StatusCode != 400 {
+		t.Fatalf("ExchangeRealtimeWebRTCSDP error = %+v, want a 400", bifrostErr)
+	}
+	if _, bifrostErr := provider.RealtimeWebSocketURL(key, "gpt-realtime", ""); bifrostErr == nil || bifrostErr.StatusCode == nil || *bifrostErr.StatusCode != 400 {
+		t.Fatalf("RealtimeWebSocketURL error = %+v, want a 400", bifrostErr)
 	}
 }

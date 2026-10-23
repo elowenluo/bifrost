@@ -391,6 +391,24 @@ func TestMarshalConfigForStorageKeepsToggles(t *testing.T) {
 	if v, ok := out["metrics_enabled"].(bool); !ok || v {
 		t.Errorf("metrics_enabled = %v, want false to survive storage round-trip", out["metrics_enabled"])
 	}
+
+	// user_labels_enabled (upstream #7267): true and false survive, omitted stays omitted.
+	for _, want := range []bool{true, false} {
+		out, err := p.MarshalConfigForStorage(map[string]any{"user_labels_enabled": want})
+		if err != nil {
+			t.Fatalf("MarshalConfigForStorage(user_labels_enabled=%v): %v", want, err)
+		}
+		if v, ok := out["user_labels_enabled"].(bool); !ok || v != want {
+			t.Errorf("user_labels_enabled = %v (%T), want %v to survive storage", out["user_labels_enabled"], out["user_labels_enabled"], want)
+		}
+	}
+	out, err = p.MarshalConfigForStorage(map[string]any{"metrics_enabled": true})
+	if err != nil {
+		t.Fatalf("MarshalConfigForStorage: %v", err)
+	}
+	if v, ok := out["user_labels_enabled"]; ok {
+		t.Errorf("user_labels_enabled = %v, want it omitted when never set", v)
+	}
 }
 
 // TestCleanupIdempotent guards the shutdown crash: the plugin is registered under several

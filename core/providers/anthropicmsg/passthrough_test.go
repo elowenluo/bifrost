@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -120,6 +121,69 @@ func TestPassthroughStreamRelaysAnthropicSSEVerbatimAndMergesUsage(t *testing.T)
 	}
 	if usage.LLMUsage.PromptTokens != 4928 || usage.LLMUsage.CompletionTokens != 12 || usage.LLMUsage.TotalTokens != 4940 {
 		t.Fatalf("stream usage = %+v", usage.LLMUsage)
+	}
+}
+
+// A caller OAuth bearer forwarded in SafeHeaders (Claude Code's sk-ant-oat token) reaches a
+// loopback or TLS upstream but never a cleartext remote one, on both the buffered and the
+// streaming path (upstream #7325, ported because the fork's Anthropic and xAI passthroughs
+// share this client).
+func TestPassthroughForwardsCallerAuthOnlyToSecureUpstreams(t *testing.T) {
+	const callerAuth = "Bearer sk-ant-oat01-caller-token"
+	for name, tc := range map[string]struct {
+		endpoint string
+		stream   bool
+		wantAuth string
+	}{
+		"loopback kept":               {endpoint: "", wantAuth: callerAuth},
+		"remote http stripped":        {endpoint: "http://anthropic.internal.example", wantAuth: ""},
+		"remote http stream stripped": {endpoint: "http://anthropic.internal.example", stream: true, wantAuth: ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gotAuth := make(chan string, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotAuth <- r.Header.Get("Authorization")
+				if got := r.Header.Get("x-api-key"); got != "" {
+					t.Errorf("x-api-key = %q, want none when key selection was skipped", got)
+				}
+				if got := r.Header.Get("anthropic-beta"); got != "context-1m" {
+					t.Errorf("anthropic-beta = %q, non-auth safe headers must survive", got)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"type":"message","usage":{"input_tokens":1,"output_tokens":1}}`))
+			}))
+			defer server.Close()
+			endpoint := tc.endpoint
+			if endpoint == "" {
+				endpoint = server.URL
+			}
+			// Route every dial to the test server so a non-loopback URL can be exercised.
+			client := &fasthttp.Client{Dial: func(string) (net.Conn, error) {
+				return net.Dial("tcp", server.Listener.Addr().String())
+			}}
+			req := &schemas.BifrostPassthroughRequest{
+				Method: http.MethodPost, Path: "/v1/messages", Body: []byte(`{"model":"claude"}`),
+				SafeHeaders: map[string]string{"authorization": callerAuth, "anthropic-beta": "context-1m"},
+			}
+			cfg := Config{Provider: schemas.Anthropic, Endpoint: endpoint}
+			ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+			if tc.stream {
+				postHook := func(_ *schemas.BifrostContext, response *schemas.BifrostResponse, err *schemas.BifrostError) (*schemas.BifrostResponse, *schemas.BifrostError) {
+					return response, err
+				}
+				stream, bifrostErr := PassthroughStream(ctx, postHook, nil, client, testKey(""), req, cfg)
+				if bifrostErr != nil {
+					t.Fatalf("PassthroughStream error: %+v", bifrostErr)
+				}
+				for range stream {
+				}
+			} else if _, bifrostErr := Passthrough(ctx, client, testKey(""), req, cfg); bifrostErr != nil {
+				t.Fatalf("Passthrough error: %+v", bifrostErr)
+			}
+			if got := <-gotAuth; got != tc.wantAuth {
+				t.Fatalf("upstream Authorization = %q, want %q", got, tc.wantAuth)
+			}
+		})
 	}
 }
 

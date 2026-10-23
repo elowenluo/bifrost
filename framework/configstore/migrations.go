@@ -494,6 +494,7 @@ var configstoreMigrationSteps = []migrationStep{
 	{IDs: []string{"add_hidden_request_types_json_column"}, run: migrationAddHiddenRequestTypesJSONColumn},
 	{IDs: []string{"add_use_openai_endpoints_column"}, run: migrationAddUseOpenAIEndpointsColumn},
 	{IDs: []string{"add_time_of_day_pricing_columns"}, run: migrationAddTimeOfDayPricingColumns},
+	{IDs: []string{"migrate_vk_standalone_limits_to_model_configs"}, run: migrationMigrateVKStandaloneLimitsToModelConfigs},
 }
 
 // videoResolutionPricingColumns are the resolution-banded video output rate columns.
@@ -13562,3 +13563,295 @@ func migrationAddTimeOfDayPricingColumns(ctx context.Context, db *gorm.DB, logge
 	}
 	return nil
 }
+
+// equalPtr reports whether two optional values are both unset or both set to the same value.
+func equalPtr[T comparable](a, b *T) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// migrationMigrateVKStandaloneLimitsToModelConfigs cleans up the bad state
+// produced by the config.json standalone-limits flow when combined with UI edits:
+//
+//  1. Standalone budgets (virtual_key_id set, model_config_id nil) owned by a VK
+//     are re-pointed into the VK's top-level model config (scope=virtual_key,
+//     model_name=*), creating that model config if it doesn't exist yet. Usage
+//     (current_usage, last_reset) is preserved — only the ownership FK moves.
+//
+//  2. Orphaned duplicate rate limit rows created by the UI (UUID IDs, referenced
+//     by a VK-scoped model config) are deleted and the model config is re-pointed
+//     to the original config.json-created rate limit (the one still on vk.rate_limit_id),
+//     preserving its usage counters. The VK's rate_limit_id column is then cleared
+//     since ownership now lives on the model config. Both limits are enforced until
+//     then, so only a row with the same token and request limits, usage counters and
+//     reset times is a duplicate; any other pair is left as it is, still enforcing
+//     both, and logged.
+func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
+	migrationName := "migrate_vk_standalone_limits_to_model_configs"
+	logger.Info("[configstore] starting migration %s", migrationName)
+	defer logger.Info("[configstore] finished migration %s", migrationName)
+
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: migrationName,
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+
+			// --- Part 1: adopt standalone VK budgets into VK-scoped model configs ---
+
+			// Find all budgets owned directly by a VK (old config.json flow).
+			type standaloneVKBudget struct {
+				ID           string
+				VirtualKeyID string
+				MaxLimit     float64
+				ResetDuration string
+				CurrentUsage float64
+				LastReset    time.Time
+				ConfigHash   string
+			}
+			var standaloneBudgets []standaloneVKBudget
+			if err := tx.Raw(`
+				SELECT id, virtual_key_id, max_limit, reset_duration, current_usage, last_reset, config_hash
+				FROM governance_budgets
+				WHERE virtual_key_id IS NOT NULL AND model_config_id IS NULL
+			`).Scan(&standaloneBudgets).Error; err != nil {
+				return fmt.Errorf("failed to query standalone VK budgets: %w", err)
+			}
+
+			// Group by VK ID.
+			budgetsByVK := make(map[string][]standaloneVKBudget)
+			for _, b := range standaloneBudgets {
+				budgetsByVK[b.VirtualKeyID] = append(budgetsByVK[b.VirtualKeyID], b)
+			}
+
+			for vkID, budgets := range budgetsByVK {
+				// Look up whether this VK has a direct rate_limit_id that also needs moving, and
+				// the calendar alignment its limits reset by.
+				var vkRow struct {
+					RateLimitID     *string
+					CalendarAligned bool
+				}
+				if err := tx.Raw(`SELECT rate_limit_id, calendar_aligned FROM governance_virtual_keys WHERE id = ?`, vkID).Scan(&vkRow).Error; err != nil {
+					return fmt.Errorf("failed to query VK %s rate_limit_id: %w", vkID, err)
+				}
+				vkRateLimitID := vkRow.RateLimitID
+
+				// Find or create the VK's top-level model config (scope=virtual_key, model_name=*).
+				var mcRow struct {
+					ID              string
+					CalendarAligned bool
+				}
+				err := tx.Raw(`
+					SELECT id, calendar_aligned FROM governance_model_configs
+					WHERE scope = 'virtual_key' AND scope_id = ? AND model_name = '*' AND provider IS NULL
+					LIMIT 1
+				`, vkID).Scan(&mcRow).Error
+				if err != nil {
+					return fmt.Errorf("failed to query model config for VK %s: %w", vkID, err)
+				}
+				mcID := mcRow.ID
+
+				// A limit resets by its owner's calendar alignment, so moving it under an owner
+				// aligned differently would move its reset boundary: an exhausted daily budget
+				// could clear hours early, or a fresh one stay blocked. Such a VK keeps its
+				// standalone limits.
+				if mcID != "" && mcRow.CalendarAligned != vkRow.CalendarAligned {
+					logger.Warn("[configstore] %s: VK %s keeps its standalone budgets and rate limit: model config %s resets by a different calendar alignment", migrationName, vkID, mcID)
+					continue
+				}
+
+				if mcID == "" {
+					mcID = uuid.NewString()
+					now := time.Now()
+					if err := tx.Exec(`
+						INSERT INTO governance_model_configs (id, model_name, scope, scope_id, calendar_aligned, created_at, updated_at)
+						VALUES (?, '*', 'virtual_key', ?, ?, ?, ?)
+					`, mcID, vkID, vkRow.CalendarAligned, now, now).Error; err != nil {
+						return fmt.Errorf("failed to create model config for VK %s: %w", vkID, err)
+					}
+					logger.Info("[configstore] %s: created model config %s for VK %s", migrationName, mcID, vkID)
+				}
+
+				// If the VK has a rate limit not yet on the MC, move it now so Part 3's
+				// NOT EXISTS doesn't skip this VK (Part 3 excludes VKs that already have an MC).
+				if vkRateLimitID != nil {
+					res := tx.Exec(`
+						UPDATE governance_model_configs SET rate_limit_id = ? WHERE id = ? AND rate_limit_id IS NULL
+					`, *vkRateLimitID, mcID)
+					if res.Error != nil {
+						return fmt.Errorf("failed to set rate_limit_id on model config %s: %w", mcID, res.Error)
+					}
+					// Only drop the VK reference when the model config took ownership.
+					// Otherwise leave it so Part 2 can pick the canonical row and delete the duplicate.
+					if res.RowsAffected > 0 {
+						if err := tx.Exec(`UPDATE governance_virtual_keys SET rate_limit_id = NULL WHERE id = ?`, vkID).Error; err != nil {
+							return fmt.Errorf("failed to clear VK %s rate_limit_id: %w", vkID, err)
+						}
+						logger.Info("[configstore] %s: moved rate limit %s from VK %s onto model config %s", migrationName, *vkRateLimitID, vkID, mcID)
+					}
+				}
+
+				// Re-point each budget's ownership from virtual_key_id to model_config_id.
+				ids := make([]string, len(budgets))
+				for i, b := range budgets {
+					ids[i] = b.ID
+				}
+				if err := tx.Exec(`
+					UPDATE governance_budgets
+					SET model_config_id = ?, virtual_key_id = NULL
+					WHERE id IN ? AND virtual_key_id = ?
+				`, mcID, ids, vkID).Error; err != nil {
+					return fmt.Errorf("failed to re-point budgets for VK %s: %w", vkID, err)
+				}
+				logger.Info("[configstore] %s: re-pointed %d budget(s) for VK %s into model config %s", migrationName, len(ids), vkID, mcID)
+			}
+
+			// --- Part 2: deduplicate rate limit rows ---
+			// Find VK-scoped model configs that have a rate_limit_id, where the owning
+			// VK also has a different rate_limit_id set directly (the config.json row).
+			type dupRateLimit struct {
+				MCID          string
+				MCRateLimitID string
+				VKID          string
+				VKRateLimitID string
+
+				MCTokenMaxLimit        *int64
+				MCTokenResetDuration   *string
+				MCRequestMaxLimit      *int64
+				MCRequestResetDuration *string
+				VKTokenMaxLimit        *int64
+				VKTokenResetDuration   *string
+				VKRequestMaxLimit      *int64
+				VKRequestResetDuration *string
+
+				MCTokenCurrentUsage   int64
+				MCTokenLastReset      time.Time
+				MCRequestCurrentUsage int64
+				MCRequestLastReset    time.Time
+				VKTokenCurrentUsage   int64
+				VKTokenLastReset      time.Time
+				VKRequestCurrentUsage int64
+				VKRequestLastReset    time.Time
+
+				MCCreatedAt       time.Time
+				VKCreatedAt       time.Time
+				MCCalendarAligned bool
+				VKCalendarAligned bool
+			}
+			var dups []dupRateLimit
+			if err := tx.Raw(`
+				SELECT mc.id AS mc_id, mc.rate_limit_id AS mc_rate_limit_id,
+				       vk.id AS vk_id, vk.rate_limit_id AS vk_rate_limit_id,
+				       mrl.token_max_limit AS mc_token_max_limit, mrl.token_reset_duration AS mc_token_reset_duration,
+				       mrl.request_max_limit AS mc_request_max_limit, mrl.request_reset_duration AS mc_request_reset_duration,
+				       vrl.token_max_limit AS vk_token_max_limit, vrl.token_reset_duration AS vk_token_reset_duration,
+				       vrl.request_max_limit AS vk_request_max_limit, vrl.request_reset_duration AS vk_request_reset_duration,
+				       mrl.token_current_usage AS mc_token_current_usage, mrl.token_last_reset AS mc_token_last_reset,
+				       mrl.request_current_usage AS mc_request_current_usage, mrl.request_last_reset AS mc_request_last_reset,
+				       vrl.token_current_usage AS vk_token_current_usage, vrl.token_last_reset AS vk_token_last_reset,
+				       vrl.request_current_usage AS vk_request_current_usage, vrl.request_last_reset AS vk_request_last_reset,
+				       mrl.created_at AS mc_created_at, vrl.created_at AS vk_created_at,
+				       mc.calendar_aligned AS mc_calendar_aligned, vk.calendar_aligned AS vk_calendar_aligned
+				FROM governance_model_configs mc
+				JOIN governance_virtual_keys vk ON vk.id = mc.scope_id
+				JOIN governance_rate_limits mrl ON mrl.id = mc.rate_limit_id
+				JOIN governance_rate_limits vrl ON vrl.id = vk.rate_limit_id
+				WHERE mc.scope = 'virtual_key'
+				  AND mc.model_name = '*'
+				  AND mc.provider IS NULL
+				  AND mc.rate_limit_id IS NOT NULL
+				  AND vk.rate_limit_id IS NOT NULL
+				  AND mc.rate_limit_id != vk.rate_limit_id
+			`).Scan(&dups).Error; err != nil {
+				return fmt.Errorf("failed to query duplicate rate limits: %w", err)
+			}
+
+			for _, d := range dups {
+				// Until now both rows were enforced. Dropping one that sets different limits
+				// would lift whichever is stricter, and so would dropping one whose window is
+				// further along or aligned differently: two enforced windows that disagree
+				// are stricter together than either alone. Only a row identical to the
+				// canonical one in limits and live state is a duplicate; any other pair keeps
+				// both limits for an operator to settle.
+				if !equalPtr(d.MCTokenMaxLimit, d.VKTokenMaxLimit) || !equalPtr(d.MCTokenResetDuration, d.VKTokenResetDuration) ||
+					!equalPtr(d.MCRequestMaxLimit, d.VKRequestMaxLimit) || !equalPtr(d.MCRequestResetDuration, d.VKRequestResetDuration) {
+					logger.Warn("[configstore] %s: VK %s keeps both rate limits %s (model config %s) and %s (virtual key): their limits differ, so neither is a duplicate", migrationName, d.VKID, d.MCRateLimitID, d.MCID, d.VKRateLimitID)
+					continue
+				}
+				if d.MCTokenCurrentUsage != d.VKTokenCurrentUsage || !d.MCTokenLastReset.Equal(d.VKTokenLastReset) ||
+					d.MCRequestCurrentUsage != d.VKRequestCurrentUsage || !d.MCRequestLastReset.Equal(d.VKRequestLastReset) ||
+					!d.MCCreatedAt.Equal(d.VKCreatedAt) || d.MCCalendarAligned != d.VKCalendarAligned {
+					logger.Warn("[configstore] %s: VK %s keeps both rate limits %s (model config %s) and %s (virtual key): their usage windows differ, so neither is a duplicate", migrationName, d.VKID, d.MCRateLimitID, d.MCID, d.VKRateLimitID)
+					continue
+				}
+
+				// Re-point the model config to the canonical config.json row (vk.rate_limit_id),
+				// preserving its usage. The UUID row (mc.rate_limit_id) is the orphan to delete.
+				orphanID := d.MCRateLimitID
+				canonicalID := d.VKRateLimitID
+
+				if err := tx.Exec(`
+					UPDATE governance_model_configs SET rate_limit_id = ? WHERE id = ?
+				`, canonicalID, d.MCID).Error; err != nil {
+					return fmt.Errorf("failed to re-point model config %s to canonical rate limit: %w", d.MCID, err)
+				}
+
+				// Delete the orphaned UUID rate limit row.
+				if err := tx.Exec(`DELETE FROM governance_rate_limits WHERE id = ?`, orphanID).Error; err != nil {
+					return fmt.Errorf("failed to delete orphaned rate limit %s: %w", orphanID, err)
+				}
+				logger.Info("[configstore] %s: VK %s — replaced orphan rate limit %s with canonical %s", migrationName, d.VKID, orphanID, canonicalID)
+
+				// Clear vk.rate_limit_id — ownership now lives on the model config.
+				if err := tx.Exec(`UPDATE governance_virtual_keys SET rate_limit_id = NULL WHERE id = ?`, d.VKID).Error; err != nil {
+					return fmt.Errorf("failed to clear VK %s rate_limit_id: %w", d.VKID, err)
+				}
+			}
+
+			// For VKs that only have rate_limit_id set directly (no model config yet
+			// and no duplicate), move the reference onto a model config so future UI
+			// edits use the single-row path.
+			type vkOnlyRL struct {
+				VKID            string
+				VKRateLimitID   string
+				CalendarAligned bool
+			}
+			var vkOnlyRLs []vkOnlyRL
+			if err := tx.Raw(`
+				SELECT vk.id AS vk_id, vk.rate_limit_id AS vk_rate_limit_id, vk.calendar_aligned AS calendar_aligned
+				FROM governance_virtual_keys vk
+				WHERE vk.rate_limit_id IS NOT NULL
+				  AND NOT EXISTS (
+					SELECT 1 FROM governance_model_configs mc
+					WHERE mc.scope = 'virtual_key' AND mc.scope_id = vk.id
+					  AND mc.model_name = '*' AND mc.provider IS NULL
+				  )
+			`).Scan(&vkOnlyRLs).Error; err != nil {
+				return fmt.Errorf("failed to query VKs with standalone rate limits: %w", err)
+			}
+
+			for _, v := range vkOnlyRLs {
+				mcID := uuid.NewString()
+				now := time.Now()
+				if err := tx.Exec(`
+					INSERT INTO governance_model_configs (id, model_name, scope, scope_id, rate_limit_id, calendar_aligned, created_at, updated_at)
+					VALUES (?, '*', 'virtual_key', ?, ?, ?, ?, ?)
+				`, mcID, v.VKID, v.VKRateLimitID, v.CalendarAligned, now, now).Error; err != nil {
+					return fmt.Errorf("failed to create model config for VK %s: %w", v.VKID, err)
+				}
+				if err := tx.Exec(`UPDATE governance_virtual_keys SET rate_limit_id = NULL WHERE id = ?`, v.VKID).Error; err != nil {
+					return fmt.Errorf("failed to clear VK %s rate_limit_id: %w", v.VKID, err)
+				}
+				logger.Info("[configstore] %s: moved rate limit %s from VK %s into new model config %s", migrationName, v.VKRateLimitID, v.VKID, mcID)
+			}
+
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running %s migration: %w", migrationName, err)
+	}
+	return nil
+}
+

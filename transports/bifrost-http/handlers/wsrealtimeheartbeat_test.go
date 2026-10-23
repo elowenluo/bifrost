@@ -446,7 +446,9 @@ func TestPinRealtimeTranscriptionModelCoversEveryShape(t *testing.T) {
 // model, so it must be admitted (and counted against MaxConnections, and reachable
 // by CloseAll) before the bootstrap read, not after it.
 func TestTranscriptionUpgradeCountsAgainstMaxConnectionsDuringBootstrap(t *testing.T) {
-	h := &WSRealtimeHandler{sessions: bfws.NewSessionManager(1)}
+	// Upstream #7317's credential check reads the handler's config and store.
+	h := newRealtimeUpgradeHandler(false)
+	h.sessions = bfws.NewSessionManager(1)
 	r := router.New()
 	r.GET("/v1/realtime", func(ctx *fasthttp.RequestCtx) {
 		preReqCtx, cancel := schemas.NewBifrostContextWithCancel(context.Background())
@@ -511,7 +513,8 @@ func TestTranscriptionUpgradeWithQueryModelSkipsTheBootstrap(t *testing.T) {
 		t.Fatalf("init bifrost: %v", err)
 	}
 	defer client.Shutdown()
-	h := &WSRealtimeHandler{client: client, sessions: bfws.NewSessionManager(0)}
+	h := newRealtimeUpgradeHandler(false)
+	h.client, h.sessions = client, bfws.NewSessionManager(0)
 	r := router.New()
 	r.GET("/v1/realtime", func(ctx *fasthttp.RequestCtx) {
 		preReqCtx, cancel := schemas.NewBifrostContextWithCancel(context.Background())

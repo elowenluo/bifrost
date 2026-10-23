@@ -1266,6 +1266,116 @@ func TestGetVirtualKeysPaginated_AssignmentFilters(t *testing.T) {
 	}
 }
 
+// TestGetVirtualKeysPaginated_Search covers the fields a search term matches. The
+// search box is the only free-text affordance on the virtual keys page, so it
+// matches everything the "Assigned To" column can display - the key's own name,
+// its team, and its customer - rather than the name alone. (The assigned user is
+// the enterprise store's addition; the link table does not exist here.)
+// TestGetVirtualKeysPaginated_BudgetSpentCountsWildcardModelConfigBudgets pins the
+// budget_spent ordering across both owners of a VK's key-wide budgets: the VK itself and
+// its provider-independent wildcard model config, where the standalone-limits migration
+// (upstream #7291) moves them. A provider-specific budget is not key-wide and does not count.
+func TestGetVirtualKeysPaginated_BudgetSpentCountsWildcardModelConfigBudgets(t *testing.T) {
+	store := setupRDBTestStore(t)
+	ctx := context.Background()
+	db := store.DB()
+
+	for _, id := range []string{"vk-direct", "vk-mc", "vk-provider", "vk-none"} {
+		require.NoError(t, store.CreateVirtualKey(ctx, &tables.TableVirtualKey{ID: id, Name: id, Value: *schemas.NewSecretVar(id + "-val"), IsActive: schemas.Ptr(true)}))
+	}
+	mcVK, providerVK, openai := "vk-mc", "vk-provider", "openai"
+	require.NoError(t, db.Create(&tables.TableModelConfig{ID: "mc-wild", ModelName: tables.ModelConfigAllModels, Scope: tables.ModelConfigScopeVirtualKey, ScopeID: &mcVK}).Error)
+	require.NoError(t, db.Create(&tables.TableModelConfig{ID: "mc-openai", ModelName: tables.ModelConfigAllModels, Scope: tables.ModelConfigScopeVirtualKey, ScopeID: &providerVK, Provider: &openai}).Error)
+	for _, b := range []tables.TableBudget{
+		{ID: "b-direct", MaxLimit: 1000, ResetDuration: "1M", CurrentUsage: 50, VirtualKeyID: schemas.Ptr("vk-direct")},
+		{ID: "b-wild", MaxLimit: 1000, ResetDuration: "1M", CurrentUsage: 900, ModelConfigID: schemas.Ptr("mc-wild")},
+		{ID: "b-openai", MaxLimit: 1000, ResetDuration: "1M", CurrentUsage: 999, ModelConfigID: schemas.Ptr("mc-openai")},
+	} {
+		require.NoError(t, db.Create(&b).Error)
+	}
+
+	vks, _, err := store.GetVirtualKeysPaginated(ctx, VirtualKeyQueryParams{SortBy: "budget_spent", Order: "desc"})
+	require.NoError(t, err)
+	ids := make([]string, len(vks))
+	for i, vk := range vks {
+		ids[i] = vk.ID
+	}
+	assert.Equal(t, []string{"vk-mc", "vk-direct", "vk-none", "vk-provider"}, ids)
+}
+
+func TestGetVirtualKeysPaginated_Search(t *testing.T) {
+	store := setupRDBTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateCustomer(ctx, &tables.TableCustomer{ID: "cust-1", Name: "Acme Corp"}))
+	require.NoError(t, store.CreateTeam(ctx, &tables.TableTeam{ID: "team-1", Name: "Platform Squad"}))
+
+	custID, teamID := "cust-1", "team-1"
+	seed := []*tables.TableVirtualKey{
+		{ID: "vk-cust", Name: "billing key", Value: *schemas.NewSecretVar("vk-cust-val"), IsActive: schemas.Ptr(true), CustomerID: &custID},
+		{ID: "vk-team", Name: "ingest key", Value: *schemas.NewSecretVar("vk-team-val"), IsActive: schemas.Ptr(true), TeamID: &teamID},
+		{ID: "vk-none", Name: "Platform scratch", Value: *schemas.NewSecretVar("vk-none-val"), IsActive: schemas.Ptr(true)},
+	}
+	for _, vk := range seed {
+		require.NoError(t, store.CreateVirtualKey(ctx, vk))
+	}
+
+	tests := []struct {
+		name    string
+		search  string
+		wantIDs []string
+	}{
+		{name: "matches the key name", search: "billing", wantIDs: []string{"vk-cust"}},
+		{name: "matches the key name case-insensitively", search: "BILLING", wantIDs: []string{"vk-cust"}},
+		{name: "matches the customer name", search: "acme", wantIDs: []string{"vk-cust"}},
+		{name: "matches the team name", search: "squad", wantIDs: []string{"vk-team"}},
+		{
+			// One term can hit a key by its own name and another by its team, and
+			// both belong in the results.
+			name:    "unions matches across fields",
+			search:  "platform",
+			wantIDs: []string{"vk-none", "vk-team"},
+		},
+		{name: "matches nothing when no field contains the term", search: "nonexistent", wantIDs: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vks, totalCount, err := store.GetVirtualKeysPaginated(ctx, VirtualKeyQueryParams{Search: tt.search})
+			require.NoError(t, err)
+
+			gotIDs := make([]string, 0, len(vks))
+			for _, vk := range vks {
+				gotIDs = append(gotIDs, vk.ID)
+			}
+			sort.Strings(gotIDs)
+			assert.Equal(t, tt.wantIDs, nonEmptyIDs(gotIDs))
+			assert.Equal(t, int64(len(tt.wantIDs)), totalCount)
+		})
+	}
+}
+
+// A search must not widen an assignment filter: the two narrow together.
+func TestGetVirtualKeysPaginated_SearchWithAssignmentFilter(t *testing.T) {
+	store := setupRDBTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.CreateTeam(ctx, &tables.TableTeam{ID: "team-1", Name: "Platform Squad"}))
+	teamID := "team-1"
+	require.NoError(t, store.CreateVirtualKey(ctx, &tables.TableVirtualKey{
+		ID: "vk-team", Name: "ingest key", Value: *schemas.NewSecretVar("vk-team-val"), IsActive: schemas.Ptr(true), TeamID: &teamID,
+	}))
+	require.NoError(t, store.CreateVirtualKey(ctx, &tables.TableVirtualKey{
+		ID: "vk-none", Name: "ingest scratch", Value: *schemas.NewSecretVar("vk-none-val"), IsActive: schemas.Ptr(true),
+	}))
+
+	vks, totalCount, err := store.GetVirtualKeysPaginated(ctx, VirtualKeyQueryParams{Search: "ingest", TeamID: "team-1"})
+	require.NoError(t, err)
+	require.Len(t, vks, 1)
+	assert.Equal(t, "vk-team", vks[0].ID)
+	assert.Equal(t, int64(1), totalCount)
+}
+
 // nonEmptyIDs normalizes an empty slice to nil so table cases can express
 // "matches nothing" as a nil wantIDs.
 func nonEmptyIDs(ids []string) []string {
@@ -1412,6 +1522,38 @@ func TestUpdateVirtualKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Updated Name", result.Name)
 	assert.False(t, result.IsActiveValue())
+}
+
+// TestUpdateVirtualKey_KeepsDistinctIncomingRateLimit pins upstream #7291's config-sync
+// guard to the limit the migration actually moved. A VK whose wildcard model config owns
+// limit A drops an incoming direct reference to A, which would otherwise undo the
+// migration, but keeps a reference to a different limit B the config file now declares.
+// Dropping B would silently lose that limit and record the file's hash as applied.
+func TestUpdateVirtualKey_KeepsDistinctIncomingRateLimit(t *testing.T) {
+	store := setupRDBTestStore(t)
+	ctx := context.Background()
+
+	for _, id := range []string{"rl-a", "rl-b"} {
+		require.NoError(t, store.CreateRateLimit(ctx, &tables.TableRateLimit{ID: id, RequestMaxLimit: schemas.Ptr(int64(10)), RequestResetDuration: schemas.Ptr("1m")}))
+	}
+	vk := &tables.TableVirtualKey{ID: "vk-sync", Name: "vk-sync", Value: *schemas.NewSecretVar("vk-sync-value"), IsActive: schemas.Ptr(true)}
+	require.NoError(t, store.CreateVirtualKey(ctx, vk))
+	vkID := "vk-sync"
+	require.NoError(t, store.DB().Create(&tables.TableModelConfig{ID: "mc-sync", ModelName: tables.ModelConfigAllModels,
+		Scope: tables.ModelConfigScopeVirtualKey, ScopeID: &vkID, RateLimitID: schemas.Ptr("rl-a")}).Error)
+
+	vk.RateLimitID = schemas.Ptr("rl-a")
+	require.NoError(t, store.UpdateVirtualKey(ctx, vk))
+	result, err := store.GetVirtualKey(ctx, "vk-sync")
+	require.NoError(t, err)
+	assert.Nil(t, result.RateLimitID, "the limit the model config owns is not referenced again from the VK")
+
+	vk.RateLimitID = schemas.Ptr("rl-b")
+	require.NoError(t, store.UpdateVirtualKey(ctx, vk))
+	result, err = store.GetVirtualKey(ctx, "vk-sync")
+	require.NoError(t, err)
+	require.NotNil(t, result.RateLimitID, "a distinct incoming limit is kept")
+	assert.Equal(t, "rl-b", *result.RateLimitID)
 }
 
 func TestUpdateVirtualKey_PreservesRotationStateOnPlainUpdate(t *testing.T) {
