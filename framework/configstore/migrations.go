@@ -13585,8 +13585,9 @@ func equalPtr[T comparable](a, b *T) bool {
 //     to the original config.json-created rate limit (the one still on vk.rate_limit_id),
 //     preserving its usage counters. The VK's rate_limit_id column is then cleared
 //     since ownership now lives on the model config. Both limits are enforced until
-//     then, so only a row with the same token and request limits is a duplicate; a
-//     pair that differs is left as it is, still enforcing both, and logged.
+//     then, so only a row with the same token and request limits, usage counters and
+//     reset times is a duplicate; any other pair is left as it is, still enforcing
+//     both, and logged.
 func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
 	migrationName := "migrate_vk_standalone_limits_to_model_configs"
 	logger.Info("[configstore] starting migration %s", migrationName)
@@ -13705,6 +13706,15 @@ func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *g
 				VKTokenResetDuration   *string
 				VKRequestMaxLimit      *int64
 				VKRequestResetDuration *string
+
+				MCTokenCurrentUsage   int64
+				MCTokenLastReset      time.Time
+				MCRequestCurrentUsage int64
+				MCRequestLastReset    time.Time
+				VKTokenCurrentUsage   int64
+				VKTokenLastReset      time.Time
+				VKRequestCurrentUsage int64
+				VKRequestLastReset    time.Time
 			}
 			var dups []dupRateLimit
 			if err := tx.Raw(`
@@ -13713,7 +13723,11 @@ func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *g
 				       mrl.token_max_limit AS mc_token_max_limit, mrl.token_reset_duration AS mc_token_reset_duration,
 				       mrl.request_max_limit AS mc_request_max_limit, mrl.request_reset_duration AS mc_request_reset_duration,
 				       vrl.token_max_limit AS vk_token_max_limit, vrl.token_reset_duration AS vk_token_reset_duration,
-				       vrl.request_max_limit AS vk_request_max_limit, vrl.request_reset_duration AS vk_request_reset_duration
+				       vrl.request_max_limit AS vk_request_max_limit, vrl.request_reset_duration AS vk_request_reset_duration,
+				       mrl.token_current_usage AS mc_token_current_usage, mrl.token_last_reset AS mc_token_last_reset,
+				       mrl.request_current_usage AS mc_request_current_usage, mrl.request_last_reset AS mc_request_last_reset,
+				       vrl.token_current_usage AS vk_token_current_usage, vrl.token_last_reset AS vk_token_last_reset,
+				       vrl.request_current_usage AS vk_request_current_usage, vrl.request_last_reset AS vk_request_last_reset
 				FROM governance_model_configs mc
 				JOIN governance_virtual_keys vk ON vk.id = mc.scope_id
 				JOIN governance_rate_limits mrl ON mrl.id = mc.rate_limit_id
@@ -13730,11 +13744,19 @@ func migrationMigrateVKStandaloneLimitsToModelConfigs(ctx context.Context, db *g
 
 			for _, d := range dups {
 				// Until now both rows were enforced. Dropping one that sets different limits
-				// would lift whichever is stricter, so only a row identical to the canonical
-				// one is a duplicate; any other pair keeps both limits for an operator to settle.
+				// would lift whichever is stricter, and so would dropping one whose window is
+				// further along or aligned differently: two enforced windows that disagree
+				// are stricter together than either alone. Only a row identical to the
+				// canonical one in limits and live state is a duplicate; any other pair keeps
+				// both limits for an operator to settle.
 				if !equalPtr(d.MCTokenMaxLimit, d.VKTokenMaxLimit) || !equalPtr(d.MCTokenResetDuration, d.VKTokenResetDuration) ||
 					!equalPtr(d.MCRequestMaxLimit, d.VKRequestMaxLimit) || !equalPtr(d.MCRequestResetDuration, d.VKRequestResetDuration) {
 					logger.Warn("[configstore] %s: VK %s keeps both rate limits %s (model config %s) and %s (virtual key): their limits differ, so neither is a duplicate", migrationName, d.VKID, d.MCRateLimitID, d.MCID, d.VKRateLimitID)
+					continue
+				}
+				if d.MCTokenCurrentUsage != d.VKTokenCurrentUsage || !d.MCTokenLastReset.Equal(d.VKTokenLastReset) ||
+					d.MCRequestCurrentUsage != d.VKRequestCurrentUsage || !d.MCRequestLastReset.Equal(d.VKRequestLastReset) {
+					logger.Warn("[configstore] %s: VK %s keeps both rate limits %s (model config %s) and %s (virtual key): their usage windows differ, so neither is a duplicate", migrationName, d.VKID, d.MCRateLimitID, d.MCID, d.VKRateLimitID)
 					continue
 				}
 

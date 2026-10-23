@@ -3931,16 +3931,18 @@ func TestMigrationAddGithubCopilotConfigColumns_NonRollbackable(t *testing.T) {
 
 // TestMigrationMigrateVKStandaloneLimitsKeepsDifferingRateLimits pins that the
 // standalone-limits migration (upstream #7291) only drops a VK-scoped model config's
-// rate limit when it duplicates the VK's own config.json row. Before the migration both
-// rows are enforced, so deleting a stricter UI-made limit (10 req/min) in favour of a
-// looser config.json one (1000 req/hour) would admit traffic that was being refused.
+// rate limit when it duplicates the VK's own config.json row in both limits and live
+// window. Before the migration both rows are enforced, so deleting a stricter UI-made
+// limit (10 req/min against 1000 req/hour), or an identical one whose window is
+// exhausted or aligned differently, would admit traffic that was being refused.
 func TestMigrationMigrateVKStandaloneLimitsKeepsDifferingRateLimits(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	for _, ddl := range []string{
 		`CREATE TABLE governance_virtual_keys (id TEXT PRIMARY KEY, rate_limit_id TEXT)`,
 		`CREATE TABLE governance_rate_limits (id TEXT PRIMARY KEY, token_max_limit INTEGER, token_reset_duration TEXT,
-			request_max_limit INTEGER, request_reset_duration TEXT, request_current_usage INTEGER DEFAULT 0)`,
+			token_current_usage INTEGER DEFAULT 0, token_last_reset DATETIME,
+			request_max_limit INTEGER, request_reset_duration TEXT, request_current_usage INTEGER DEFAULT 0, request_last_reset DATETIME)`,
 		`CREATE TABLE governance_model_configs (id TEXT PRIMARY KEY, model_name TEXT NOT NULL, scope TEXT NOT NULL,
 			scope_id TEXT, provider TEXT, rate_limit_id TEXT, created_at DATETIME, updated_at DATETIME)`,
 		`CREATE TABLE governance_budgets (id TEXT PRIMARY KEY, virtual_key_id TEXT, model_config_id TEXT, max_limit REAL,
@@ -3948,16 +3950,30 @@ func TestMigrationMigrateVKStandaloneLimitsKeepsDifferingRateLimits(t *testing.T
 	} {
 		require.NoError(t, db.Exec(ddl).Error)
 	}
-	seed := func(vkID, cfgRL, uiRL string, cfgRequests, uiRequests int64, cfgReset, uiReset string) {
-		require.NoError(t, db.Exec(`INSERT INTO governance_rate_limits (id, request_max_limit, request_reset_duration, request_current_usage) VALUES (?, ?, ?, 7)`, cfgRL, cfgRequests, cfgReset).Error)
-		require.NoError(t, db.Exec(`INSERT INTO governance_rate_limits (id, request_max_limit, request_reset_duration, request_current_usage) VALUES (?, ?, ?, 9)`, uiRL, uiRequests, uiReset).Error)
-		require.NoError(t, db.Exec(`INSERT INTO governance_virtual_keys (id, rate_limit_id) VALUES (?, ?)`, vkID, cfgRL).Error)
-		require.NoError(t, db.Exec(`INSERT INTO governance_model_configs (id, model_name, scope, scope_id, rate_limit_id) VALUES (?, '*', 'virtual_key', ?, ?)`, "mc-"+vkID, vkID, uiRL).Error)
+	type window struct {
+		requests int64
+		reset    string
+		usage    int64
+		lastSet  time.Time
 	}
-	// vk-same: the UI copy repeats the config.json limit, so it is a true duplicate.
-	seed("vk-same", "rl-cfg-same", "rl-ui-same", 100, 100, "1m", "1m")
+	epoch := time.Date(2026, 10, 23, 10, 0, 0, 0, time.UTC)
+	seed := func(vkID string, cfg, ui window) {
+		for id, w := range map[string]window{"rl-cfg-" + vkID: cfg, "rl-ui-" + vkID: ui} {
+			require.NoError(t, db.Exec(`INSERT INTO governance_rate_limits (id, request_max_limit, request_reset_duration, request_current_usage,
+				request_last_reset, token_current_usage, token_last_reset) VALUES (?, ?, ?, ?, ?, 0, ?)`,
+				id, w.requests, w.reset, w.usage, w.lastSet, epoch).Error)
+		}
+		require.NoError(t, db.Exec(`INSERT INTO governance_virtual_keys (id, rate_limit_id) VALUES (?, ?)`, vkID, "rl-cfg-"+vkID).Error)
+		require.NoError(t, db.Exec(`INSERT INTO governance_model_configs (id, model_name, scope, scope_id, rate_limit_id) VALUES (?, '*', 'virtual_key', ?, ?)`, "mc-"+vkID, vkID, "rl-ui-"+vkID).Error)
+	}
+	// vk-same: the UI copy repeats the config.json limit and has counted the same window.
+	seed("vk-same", window{100, "1m", 7, epoch}, window{100, "1m", 7, epoch})
 	// vk-differ: the UI limit is stricter than the config.json one.
-	seed("vk-differ", "rl-cfg-differ", "rl-ui-differ", 1000, 10, "1h", "1m")
+	seed("vk-differ", window{1000, "1h", 7, epoch}, window{10, "1m", 7, epoch})
+	// vk-exhausted: same limit, but the UI row is spent while the canonical one has just reset.
+	seed("vk-exhausted", window{10, "1m", 0, epoch.Add(50 * time.Second)}, window{10, "1m", 10, epoch})
+	// vk-aligned: same limit and usage, windows reset at different moments.
+	seed("vk-aligned", window{10, "1m", 3, epoch}, window{10, "1m", 3, epoch.Add(30 * time.Second)})
 
 	require.NoError(t, migrationMigrateVKStandaloneLimitsToModelConfigs(context.Background(), db, testMigrationLogger))
 
@@ -3975,15 +3991,17 @@ func TestMigrationMigrateVKStandaloneLimitsKeepsDifferingRateLimits(t *testing.T
 	vkRL, mcRL := refs("vk-same")
 	require.Nil(t, vkRL, "the duplicate's VK reference moves onto the model config")
 	require.NotNil(t, mcRL)
-	require.Equal(t, "rl-cfg-same", *mcRL, "the model config takes the canonical config.json row")
-	require.False(t, exists("rl-ui-same"), "the identical UI copy is removed")
-	require.True(t, exists("rl-cfg-same"))
+	require.Equal(t, "rl-cfg-vk-same", *mcRL, "the model config takes the canonical config.json row")
+	require.False(t, exists("rl-ui-vk-same"), "the identical UI copy is removed")
+	require.True(t, exists("rl-cfg-vk-same"))
 
-	vkRL, mcRL = refs("vk-differ")
-	require.NotNil(t, vkRL)
-	require.Equal(t, "rl-cfg-differ", *vkRL, "a differing pair keeps the VK's own limit")
-	require.NotNil(t, mcRL)
-	require.Equal(t, "rl-ui-differ", *mcRL, "a differing pair keeps the stricter model-config limit")
-	require.True(t, exists("rl-cfg-differ"))
-	require.True(t, exists("rl-ui-differ"), "a limit that is not a duplicate is never deleted")
+	for _, vkID := range []string{"vk-differ", "vk-exhausted", "vk-aligned"} {
+		vkRL, mcRL = refs(vkID)
+		require.NotNil(t, vkRL, vkID)
+		require.Equal(t, "rl-cfg-"+vkID, *vkRL, "%s: a pair that is not a duplicate keeps the VK's own limit", vkID)
+		require.NotNil(t, mcRL, vkID)
+		require.Equal(t, "rl-ui-"+vkID, *mcRL, "%s: a pair that is not a duplicate keeps the model-config limit", vkID)
+		require.True(t, exists("rl-cfg-"+vkID), vkID)
+		require.True(t, exists("rl-ui-"+vkID), "%s: a limit that is not a duplicate is never deleted", vkID)
+	}
 }
