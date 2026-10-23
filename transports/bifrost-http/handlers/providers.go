@@ -108,6 +108,7 @@ type ProviderResponse struct {
 	Status                   string                           `json:"status,omitempty"`                 // Operational status (e.g., list_models_failed)
 	Description              string                           `json:"description,omitempty"`            // Error/status description
 	ConfigHash               string                           `json:"config_hash,omitempty"`            // Hash of config.json version, used for change detection
+	SupportedBaseProviders   []schemas.ModelProvider          `json:"supported_base_providers,omitempty"`
 }
 
 // ListProvidersResponse represents the response for listing all providers
@@ -298,6 +299,7 @@ func (h *ProviderHandler) getProvider(ctx *fasthttp.RequestCtx) {
 	}
 
 	response := h.getProviderResponseFromConfig(provider, *redactedConfig, providerStatus)
+	response.SupportedBaseProviders = slices.Clone(schemas.SupportedBaseProviders)
 
 	SendJSON(ctx, response)
 }
