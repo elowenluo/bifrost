@@ -3,6 +3,7 @@ package schemas
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -874,4 +875,42 @@ func TestSecretVar_RedactedIfSecret(t *testing.T) {
 			t.Errorf("original Val mutated to %q", e.Val)
 		}
 	})
+}
+
+// TestRedactedServiceURL: a literal service URL is shown, a URL carrying
+// userinfo is masked as a credential, and a secret reference stays redacted.
+func TestRedactedServiceURL(t *testing.T) {
+	cases := []struct {
+		name, val string
+		masked    bool
+	}{
+		{"plain URL", "http://vllm.internal:8000/v1", false},
+		{"user and password", "http://admin:s3cret@vllm.internal:8000", true},
+		{"token as user", "https://tok_abcdef123456@ollama.example.com", true},
+		{"unparsable with at sign", "admin:s3cret@vllm.internal:8000", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NewSecretVar(tc.val).RedactedServiceURL()
+			if tc.masked {
+				if strings.Contains(got.Val, "s3cret") || strings.Contains(got.Val, "abcdef") || !got.IsMaskedPlaceholder() {
+					t.Fatalf("RedactedServiceURL(%q) = %q, want the masked placeholder", tc.val, got.Val)
+				}
+				return
+			}
+			if got.Val != tc.val {
+				t.Fatalf("RedactedServiceURL(%q) = %q, want it unchanged", tc.val, got.Val)
+			}
+		})
+	}
+
+	t.Setenv("BIFROST_TEST_SERVICE_URL", "http://vllm.internal:8000")
+	ref := NewSecretVar("env.BIFROST_TEST_SERVICE_URL")
+	if got := ref.RedactedServiceURL(); got.Val == "http://vllm.internal:8000" {
+		t.Fatalf("env-backed URL leaked its resolved value %q", got.Val)
+	}
+	var nilVar *SecretVar
+	if nilVar.RedactedServiceURL() != nil {
+		t.Fatal("nil SecretVar must stay nil")
+	}
 }

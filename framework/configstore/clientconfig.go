@@ -585,7 +585,7 @@ func (p *ProviderConfig) Redacted() *ProviderConfig {
 		if key.AzureKeyConfig != nil {
 			azureConfig := &schemas.AzureKeyConfig{}
 			// The endpoint is a hostname, not a credential — surface it in plaintext.
-			azureConfig.Endpoint = *key.AzureKeyConfig.Endpoint.RedactedIfSecret()
+			azureConfig.Endpoint = *key.AzureKeyConfig.Endpoint.RedactedServiceURL()
 			if key.AzureKeyConfig.ClientID != nil {
 				azureConfig.ClientID = key.AzureKeyConfig.ClientID.Redacted()
 			}
@@ -692,7 +692,7 @@ func (p *ProviderConfig) Redacted() *ProviderConfig {
 				ModelName: key.VLLMKeyConfig.ModelName,
 			}
 			// The URL is a service address, not a credential — surface it in plaintext.
-			vllmConfig.URL = *key.VLLMKeyConfig.URL.RedactedIfSecret()
+			vllmConfig.URL = *key.VLLMKeyConfig.URL.RedactedServiceURL()
 			redactedConfig.Keys[i].VLLMKeyConfig = vllmConfig
 		}
 
@@ -706,14 +706,14 @@ func (p *ProviderConfig) Redacted() *ProviderConfig {
 		if key.OllamaKeyConfig != nil {
 			ollamaConfig := &schemas.OllamaKeyConfig{}
 			// The URL is a service address, not a credential — surface it in plaintext.
-			ollamaConfig.URL = *key.OllamaKeyConfig.URL.RedactedIfSecret()
+			ollamaConfig.URL = *key.OllamaKeyConfig.URL.RedactedServiceURL()
 			redactedConfig.Keys[i].OllamaKeyConfig = ollamaConfig
 		}
 
 		if key.SGLKeyConfig != nil {
 			sglConfig := &schemas.SGLKeyConfig{}
 			// The URL is a service address, not a credential — surface it in plaintext.
-			sglConfig.URL = *key.SGLKeyConfig.URL.RedactedIfSecret()
+			sglConfig.URL = *key.SGLKeyConfig.URL.RedactedServiceURL()
 			redactedConfig.Keys[i].SGLKeyConfig = sglConfig
 		}
 
@@ -725,7 +725,7 @@ func (p *ProviderConfig) Redacted() *ProviderConfig {
 			}
 			// The workspace URL is a hostname, not a credential — surface it in
 			// plaintext so the UI can round-trip it, mirroring the Azure endpoint.
-			databricksConfig.WorkspaceURL = *key.DatabricksKeyConfig.WorkspaceURL.RedactedIfSecret()
+			databricksConfig.WorkspaceURL = *key.DatabricksKeyConfig.WorkspaceURL.RedactedServiceURL()
 			if key.DatabricksKeyConfig.ClientID != nil {
 				databricksConfig.ClientID = key.DatabricksKeyConfig.ClientID.Redacted()
 			}

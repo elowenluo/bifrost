@@ -6920,7 +6920,7 @@ func (c *Config) GetAllKeys() ([]configstoreTables.TableKey, error) {
 			if key.AzureKeyConfig != nil {
 				cfg := *key.AzureKeyConfig // safe copy
 				// The endpoint is a hostname, not a credential — surface it in plaintext.
-				cfg.Endpoint = *cfg.Endpoint.RedactedIfSecret()
+				cfg.Endpoint = *cfg.Endpoint.RedactedServiceURL()
 				cfg.ClientID = cfg.ClientID.Redacted()
 				cfg.ClientSecret = cfg.ClientSecret.Redacted()
 				cfg.TenantID = cfg.TenantID.Redacted()
@@ -6966,26 +6966,26 @@ func (c *Config) GetAllKeys() ([]configstoreTables.TableKey, error) {
 			if key.VLLMKeyConfig != nil {
 				cfg := *key.VLLMKeyConfig // safe copy
 				// The URL is a service address, not a credential — surface it in plaintext.
-				cfg.URL = *cfg.URL.RedactedIfSecret()
+				cfg.URL = *cfg.URL.RedactedServiceURL()
 				configStoreKey.VLLMKeyConfig = &cfg
 			}
 			if key.OllamaKeyConfig != nil {
 				cfg := *key.OllamaKeyConfig // safe copy
 				// The URL is a service address, not a credential — surface it in plaintext.
-				cfg.URL = *cfg.URL.RedactedIfSecret()
+				cfg.URL = *cfg.URL.RedactedServiceURL()
 				configStoreKey.OllamaKeyConfig = &cfg
 			}
 			if key.SGLKeyConfig != nil {
 				cfg := *key.SGLKeyConfig // safe copy
 				// The URL is a service address, not a credential — surface it in plaintext.
-				cfg.URL = *cfg.URL.RedactedIfSecret()
+				cfg.URL = *cfg.URL.RedactedServiceURL()
 				configStoreKey.SGLKeyConfig = &cfg
 			}
 
 			if key.DatabricksKeyConfig != nil {
 				cfg := *key.DatabricksKeyConfig // safe copy
 				// The workspace URL is a hostname, not a credential — surface it in plaintext.
-				cfg.WorkspaceURL = *cfg.WorkspaceURL.RedactedIfSecret()
+				cfg.WorkspaceURL = *cfg.WorkspaceURL.RedactedServiceURL()
 				cfg.ClientID = cfg.ClientID.Redacted()
 				cfg.ClientSecret = cfg.ClientSecret.Redacted()
 				configStoreKey.DatabricksKeyConfig = &cfg
@@ -7381,11 +7381,11 @@ func (c *Config) RedactMCPClientConfig(config *schemas.MCPClientConfig) *schemas
 	configCopy := *config
 
 	// The connection string is a server address, not a credential — surface it
-	// in plaintext so operators can see which host a client points at. Anything
-	// secret about the connection lives in Headers or the OAuth block below,
-	// which stay redacted.
+	// in plaintext so operators can see which host a client points at, unless it
+	// carries userinfo, which is a credential. Anything else secret about the
+	// connection lives in Headers or the OAuth block below, which stay redacted.
 	if config.ConnectionString != nil {
-		configCopy.ConnectionString = config.ConnectionString.RedactedIfSecret()
+		configCopy.ConnectionString = config.ConnectionString.RedactedServiceURL()
 	}
 
 	// Redact Header values if present
