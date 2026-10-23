@@ -10,13 +10,16 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	bifrost "github.com/capsohq/bifrost/core"
 	"github.com/capsohq/bifrost/core/schemas"
 	"github.com/capsohq/bifrost/framework/configstore"
 	"github.com/capsohq/bifrost/framework/kvstore"
 	"github.com/capsohq/bifrost/transports/bifrost-http/lib"
+	bfws "github.com/capsohq/bifrost/transports/bifrost-http/websocket"
 	"github.com/fasthttp/router"
+	ws "github.com/fasthttp/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/valyala/fasthttp"
 )
@@ -226,4 +229,81 @@ func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 	requireMintedSecret(out["value"], "GA route")
 	require.Equal(t, float64(4102444800), out["expires_at"], "the GA route keeps the GA shape")
 	require.NotContains(t, out, "client_secret")
+}
+
+// TestLegacyRealtimeSessionSecretOpensUpstreamThroughBifrost is the end-to-end contract
+// for a beta-session client after upstream #7317: the client_secret.value it receives
+// is Bifrost-minted, and presenting it to Bifrost's realtime WebSocket opens the
+// upstream session with the provider's own ephemeral token, never the minted one.
+func TestLegacyRealtimeSessionSecretOpensUpstreamThroughBifrost(t *testing.T) {
+	SetLogger(&mockLogger{})
+	upstreamAuth := make(chan string, 1)
+	upgrader := ws.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/realtime" {
+			upstreamAuth <- r.Header.Get("Authorization")
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			_ = conn.WriteMessage(ws.TextMessage, []byte(`{"type":"session.created","session":{"id":"sess_9"}}`))
+			_, _, _ = conn.ReadMessage()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"value":"ek_abc","expires_at":4102444800,"session":{"type":"realtime","object":"realtime.session","id":"sess_9","model":"gpt-realtime"}}`))
+	}))
+	defer upstream.Close()
+
+	client, err := bifrost.Init(context.Background(), schemas.BifrostConfig{
+		Account: legacySessionAccount{baseURL: upstream.URL},
+		Logger:  bifrost.NewDefaultLogger(schemas.LogLevelError),
+	})
+	require.NoError(t, err)
+	defer client.Shutdown()
+
+	kv, err := kvstore.New(kvstore.Config{})
+	require.NoError(t, err)
+	defer kv.Close()
+	cfg := &lib.Config{ClientConfig: &configstore.ClientConfig{}, KVStore: kv, WebSocketConfig: &schemas.WebSocketConfig{}}
+	r := router.New()
+	NewRealtimeClientSecretsHandler(client, cfg).RegisterRoutes(r)
+	wsHandler := NewWSRealtimeHandler(client, cfg, bfws.NewPool(nil))
+	defer wsHandler.Close()
+	wsHandler.RegisterRoutes(r)
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	srv := &fasthttp.Server{Handler: r.Handler}
+	go func() { _ = srv.Serve(ln) }()
+	defer srv.Shutdown() //nolint:errcheck
+
+	resp, err := http.Post("http://"+ln.Addr().String()+"/v1/realtime/sessions", "application/json", strings.NewReader(`{"model":"openai/gpt-realtime"}`))
+	require.NoError(t, err)
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	require.Equal(t, 200, resp.StatusCode, string(raw))
+	var session struct {
+		ClientSecret struct {
+			Value string `json:"value"`
+		} `json:"client_secret"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &session))
+	require.True(t, strings.HasPrefix(session.ClientSecret.Value, "ek_bf_"), "minted secret %q", session.ClientSecret.Value)
+
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+session.ClientSecret.Value)
+	conn, _, err := ws.DefaultDialer.Dial("ws://"+ln.Addr().String()+"/v1/realtime?model=openai/gpt-realtime", header)
+	require.NoError(t, err)
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, msg, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.Contains(t, string(msg), "session.created", "the upstream session reaches the client")
+	select {
+	case got := <-upstreamAuth:
+		require.Equal(t, "Bearer ek_abc", got, "Bifrost presents the provider's token upstream")
+	case <-time.After(5 * time.Second):
+		t.Fatal("no upstream realtime connection")
+	}
 }
