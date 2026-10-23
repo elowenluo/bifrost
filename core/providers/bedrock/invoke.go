@@ -2,6 +2,7 @@ package bedrock
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -1652,22 +1653,33 @@ var bedrockInvokeStreamStateKey = bedrockInvokeStreamStateKeyType{}
 // egress keeps the same bookkeeping for the same reason (blockIndexFor / allocBlockIndex
 // in providers/anthropic/responses.go).
 //
-// Only the pointer lives on the context: the map is bounded by the number of content
-// blocks in the stream rather than by its content, and it is released with the request.
+// The map grows with the stream's content blocks, so it lives in bedrockInvokeStreamStates
+// rather than on the context (AGENTS.md: never store stream-sized data in BifrostContext).
+// The context carries only the state's id. The entry is released on the stream's terminal
+// event, and when the request context ends for a stream that never sends one.
 type bedrockInvokeStreamState struct {
 	mu           sync.Mutex
 	openedBlocks map[string]int // item key -> content index its content_block_start used
 }
 
+// bedrockInvokeStreamStates owns every live bedrockInvokeStreamState, keyed by the id
+// stored under bedrockInvokeStreamStateKey.
+var bedrockInvokeStreamStates sync.Map // string -> *bedrockInvokeStreamState
+
 func getOrCreateBedrockInvokeStreamState(ctx *schemas.BifrostContext) *bedrockInvokeStreamState {
 	if ctx == nil {
 		return nil
 	}
-	if state, ok := ctx.Value(bedrockInvokeStreamStateKey).(*bedrockInvokeStreamState); ok && state != nil {
+	if state := lookupBedrockInvokeStreamState(ctx); state != nil {
 		return state
 	}
+	id := uuid.NewString()
 	state := &bedrockInvokeStreamState{openedBlocks: make(map[string]int)}
-	ctx.SetValue(bedrockInvokeStreamStateKey, state)
+	bedrockInvokeStreamStates.Store(id, state)
+	ctx.SetValue(bedrockInvokeStreamStateKey, id)
+	if ctx.Done() != nil {
+		context.AfterFunc(ctx, func() { bedrockInvokeStreamStates.Delete(id) })
+	}
 	return state
 }
 
@@ -1677,8 +1689,24 @@ func lookupBedrockInvokeStreamState(ctx *schemas.BifrostContext) *bedrockInvokeS
 	if ctx == nil {
 		return nil
 	}
-	state, _ := ctx.Value(bedrockInvokeStreamStateKey).(*bedrockInvokeStreamState)
-	return state
+	id, _ := ctx.Value(bedrockInvokeStreamStateKey).(string)
+	if id == "" {
+		return nil
+	}
+	state, _ := bedrockInvokeStreamStates.Load(id)
+	s, _ := state.(*bedrockInvokeStreamState)
+	return s
+}
+
+// releaseBedrockInvokeStreamState drops the stream's state once its terminal event is
+// written. Safe to call when none was created.
+func releaseBedrockInvokeStreamState(ctx *schemas.BifrostContext) {
+	if ctx == nil {
+		return
+	}
+	if id, _ := ctx.Value(bedrockInvokeStreamStateKey).(string); id != "" {
+		bedrockInvokeStreamStates.Delete(id)
+	}
 }
 
 func (s *bedrockInvokeStreamState) rememberBlockIndex(key string, index int) {
@@ -1952,6 +1980,8 @@ func toAnthropicInvokeStreamBytes(ctx *schemas.BifrostContext, resp *schemas.Bif
 		return nil, nil
 
 	case schemas.ResponsesStreamResponseTypeCompleted:
+		// The terminal event: no block can open or close after it.
+		releaseBedrockInvokeStreamState(ctx)
 		// Emit message_delta + message_stop as two separate events
 		stopReason := "end_turn"
 		if resp.Response != nil && resp.Response.IncompleteDetails != nil {
