@@ -16,15 +16,18 @@ import (
 	"github.com/valyala/fasthttp"
 )
 
-func TestRealtimeSessionRoutesOnlyExposeGAClientSecrets(t *testing.T) {
+func TestRealtimeSessionRoutesExposeGAAndLegacySessionPaths(t *testing.T) {
 	handler := &RealtimeClientSecretsHandler{}
 	routes := handler.realtimeSessionRoutes()
 	want := map[string]bool{
 		"/v1/realtime/client_secrets":        true,
 		"/openai/v1/realtime/client_secrets": true,
+		// Retired beta routes, kept as an adapter onto client_secrets.
+		"/v1/realtime/sessions":        true,
+		"/openai/v1/realtime/sessions": true,
 	}
 	if len(routes) != len(want) {
-		t.Fatalf("routes = %v, want exactly %d GA routes", routes, len(want))
+		t.Fatalf("routes = %v, want exactly %d routes", routes, len(want))
 	}
 	for _, route := range routes {
 		if !want[route.Path] {
