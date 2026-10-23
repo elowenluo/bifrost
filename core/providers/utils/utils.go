@@ -364,6 +364,37 @@ func SetErrorLatency(bifrostErr *schemas.BifrostError, latency time.Duration) *s
 // response objects. On the normal path it is a no-op. On the context-cancellation path it
 // blocks until the background goroutine finishes, preventing a data race between the
 // still-running goroutine and the caller's release of req/resp.
+// contextDoneError is the error for a call ended by its context: 504
+// RequestTimedOut when the deadline passed, otherwise 499 RequestCancelled.
+func contextDoneError(ctxErr error, latency time.Duration) *schemas.BifrostError {
+	if errors.Is(ctxErr, context.DeadlineExceeded) {
+		statusCode := 504
+		errorType := schemas.RequestTimedOut
+		return &schemas.BifrostError{
+			IsBifrostError: true,
+			StatusCode:     &statusCode,
+			Error: &schemas.ErrorField{
+				Type:    &errorType,
+				Message: fmt.Sprintf("Request timed out by context: %v", ctxErr),
+				Error:   ctxErr,
+			},
+			ExtraFields: schemas.BifrostErrorExtraFields{Latency: latency.Milliseconds()},
+		}
+	}
+	statusCode := 499
+	errorType := schemas.RequestCancelled
+	return &schemas.BifrostError{
+		IsBifrostError: true,
+		StatusCode:     &statusCode,
+		Error: &schemas.ErrorField{
+			Type:    &errorType,
+			Message: fmt.Sprintf("Request cancelled by context: %v", ctxErr),
+			Error:   ctxErr,
+		},
+		ExtraFields: schemas.BifrostErrorExtraFields{Latency: latency.Milliseconds()},
+	}
+}
+
 func makeRequestWithDoFunc(ctx context.Context, do func() error) (time.Duration, *schemas.BifrostError, func()) {
 	startTime := time.Now()
 	errChan := make(chan error, 1)
@@ -384,32 +415,7 @@ func makeRequestWithDoFunc(ctx context.Context, do func() error) (time.Duration,
 		// Return a wait function that blocks until the background goroutine finishes.
 		// The caller MUST invoke this (via defer) before releasing req/resp to avoid
 		// a data race with the still-running goroutine.
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			statusCode := 504
-			errorType := schemas.RequestTimedOut
-			return latency, &schemas.BifrostError{
-				IsBifrostError: true,
-				StatusCode:     &statusCode,
-				Error: &schemas.ErrorField{
-					Type:    &errorType,
-					Message: fmt.Sprintf("Request timed out by context: %v", ctx.Err()),
-					Error:   ctx.Err(),
-				},
-				ExtraFields: schemas.BifrostErrorExtraFields{Latency: latency.Milliseconds()},
-			}, func() { <-errChan }
-		}
-		statusCode := 499
-		errorType := schemas.RequestCancelled
-		return latency, &schemas.BifrostError{
-			IsBifrostError: true,
-			StatusCode:     &statusCode,
-			Error: &schemas.ErrorField{
-				Type:    &errorType,
-				Message: fmt.Sprintf("Request cancelled by context: %v", ctx.Err()),
-				Error:   ctx.Err(),
-			},
-			ExtraFields: schemas.BifrostErrorExtraFields{Latency: latency.Milliseconds()},
-		}, func() { <-errChan }
+		return latency, contextDoneError(ctx.Err(), latency), func() { <-errChan }
 	case err := <-errChan:
 		// The do() call completed.
 		// Calculate latency for both successful and failed requests.
@@ -417,16 +423,15 @@ func makeRequestWithDoFunc(ctx context.Context, do func() error) (time.Duration,
 		// Single accumulation point for every unary provider call.
 		schemas.AddUpstreamLatency(ctx, latency)
 		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				return latency, &schemas.BifrostError{
-					IsBifrostError: false,
-					Error: &schemas.ErrorField{
-						Type:    schemas.Ptr(schemas.RequestCancelled),
-						Message: schemas.ErrRequestCancelled,
-						Error:   err,
-					},
-					ExtraFields: schemas.BifrostErrorExtraFields{Latency: latency.Milliseconds()},
-				}, noop
+			// The transport watches ctx too and returns its error when the cancellation
+			// lands during the call, so this branch and ctx.Done() above race for the
+			// same event. Both must report it identically.
+			if errors.Is(err, context.Canceled) || (errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil) {
+				ctxErr := ctx.Err()
+				if ctxErr == nil {
+					ctxErr = err
+				}
+				return latency, contextDoneError(ctxErr, latency), noop
 			}
 			// Check for timeout errors first before checking net.OpError to avoid misclassification.
 			if errors.Is(err, fasthttp.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {

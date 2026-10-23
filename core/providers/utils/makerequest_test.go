@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/capsohq/bifrost/core/schemas"
+	"github.com/stretchr/testify/require"
 	"github.com/valyala/fasthttp"
 	"github.com/valyala/fasthttp/fasthttputil"
 )
@@ -1145,4 +1146,75 @@ func TestContextTransport_CancelWhileWaitingForAConnection(t *testing.T) {
 	if runtime.NumGoroutine() >= before {
 		t.Fatalf("goroutines = %d after the slot freed, want fewer than %d: the abandoned acquisition is still running", runtime.NumGoroutine(), before)
 	}
+}
+
+// TestMakeRequestWithDoFunc_TransportCancellationMatchesContextBranch: when the
+// transport returns the context's cancellation itself, the completed-call branch
+// wins the select instead of ctx.Done(). Both describe the same event, so both
+// must return the same 499 RequestCancelled Bifrost error.
+func TestMakeRequestWithDoFunc_TransportCancellationMatchesContextBranch(t *testing.T) {
+	_, viaTransport, wait := makeRequestWithDoFunc(context.Background(), func() error { return context.Canceled })
+	wait()
+	require.NotNil(t, viaTransport)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	block := make(chan struct{})
+	_, viaContext, waitCtx := makeRequestWithDoFunc(ctx, func() error { <-block; return context.Canceled })
+	close(block)
+	waitCtx()
+	require.NotNil(t, viaContext)
+
+	for name, e := range map[string]*schemas.BifrostError{"transport": viaTransport, "context": viaContext} {
+		require.True(t, e.IsBifrostError, name)
+		require.NotNil(t, e.StatusCode, name)
+		require.Equal(t, 499, *e.StatusCode, name)
+		require.Equal(t, schemas.RequestCancelled, *e.Error.Type, name)
+	}
+}
+
+// TestContextTransport_AbandonedConnectionCloseAcquisitionIsClosed: a connection
+// acquired for a Connection: close request whose caller had already gone must be
+// closed, not pooled: fasthttp starts no idle cleaner for it, so pooled it would be
+// retained indefinitely.
+func TestContextTransport_AbandonedConnectionCloseAcquisitionIsClosed(t *testing.T) {
+	upstream := newSilentUpstream(t)
+	client := &fasthttp.Client{ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second}
+	ConfigureDialer(client, true)
+	client.MaxConnsPerHost = 1
+	client.MaxConnWaitTimeout = 10 * time.Second
+
+	busyCtx, cancelBusy := context.WithCancel(context.Background())
+	defer cancelBusy()
+	busyReq, busyResp := newSilentStreamingRequest(upstream.URL())
+	busyDone := make(chan struct{})
+	go func() {
+		_, _, wait := MakeRequestWithContext(busyCtx, client, busyReq, busyResp)
+		wait()
+		close(busyDone)
+	}()
+	upstream.waitRequest(t)
+
+	req, resp := newSilentStreamingRequest(upstream.URL())
+	req.SetConnectionClose()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	_, bifrostErr, wait := MakeRequestWithContext(ctx, client, req, resp)
+	wait()
+	require.NotNil(t, bifrostErr, "the waiting request must return on cancellation")
+
+	// Freeing the slot hands the abandoned acquisition a fresh connection.
+	cancelBusy()
+	<-busyDone
+	for i := 0; i < 2; i++ { // the busy request's hang-up, then the abandoned connection's
+		select {
+		case <-upstream.hangups:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("hang-up %d never arrived: the abandoned Connection: close acquisition was pooled", i+1)
+		}
+	}
+	fasthttp.ReleaseRequest(req)
+	fasthttp.ReleaseResponse(resp)
+	fasthttp.ReleaseRequest(busyReq)
+	fasthttp.ReleaseResponse(busyResp)
 }

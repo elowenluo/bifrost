@@ -121,7 +121,14 @@ func (t *contextTransport) RoundTrip(hc *fasthttp.HostClient, req *fasthttp.Requ
 
 	customSkipBody := resp.SkipBody
 
-	cc, err := acquireWithContext(ctx, hc.AcquireConn, req.ConnectionClose(), hc.ReleaseConn)
+	// An unused connection whose acquisition was abandoned normally goes back to
+	// the pool. One acquired for a Connection: close request must not: fasthttp
+	// starts no idle cleaner for it, so pooled it would be retained indefinitely.
+	releaseAbandoned := hc.ReleaseConn
+	if req.ConnectionClose() {
+		releaseAbandoned = hc.CloseConn
+	}
+	cc, err := acquireWithContext(ctx, hc.AcquireConn, req.ConnectionClose(), releaseAbandoned)
 	if err != nil {
 		return false, err
 	}
