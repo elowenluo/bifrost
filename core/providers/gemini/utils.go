@@ -215,6 +215,7 @@ var geminiThinkingLevelSupport = []struct {
 	levels []string
 }{
 	{"gemini-3.1-flash-lite-image", []string{"minimal", "high"}},
+	{"gemini-3.1-flash-lite", []string{"minimal", "low", "medium", "high"}},
 	{"gemini-3.7-flash", []string{"low", "medium", "high"}},
 	{"gemini-3.6-flash", []string{"minimal", "low", "medium", "high"}},
 	{"gemini-3.5-flash-lite", []string{"minimal", "low", "medium", "high"}},

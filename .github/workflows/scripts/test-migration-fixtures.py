@@ -34,6 +34,10 @@ MISSING["governance_virtual_keys"] = "allow_all_providers previous_value previou
 MISSING["logs"] += " served_model tool_call_names complexity_tier complexity_mechanism complexity_score session_id project_id project_name routing_metadata video_debug"
 MISSING["mcp_tool_logs"] += " project_id project_name"
 NEW_TABLES.update({"enterprise_mcp_tool_groups", "enterprise_mcp_tool_group_virtual_keys"})
+# v2.2.0 columns (upstream append_v220_fixtures, folded into append_v200_fixtures).
+MISSING["config_keys"] += " use_openai_endpoints"
+MISSING["governance_model_pricing"] += " off_peak_cost_multiplier peak_hours"
+MISSING["mcp_tool_logs"] += " user_name team_name customer_name business_unit_name team_ids team_names customer_ids customer_names business_unit_ids business_unit_names budget_ids rate_limit_ids"
 
 
 def generate(backend, present=True):
