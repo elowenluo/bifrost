@@ -657,7 +657,10 @@ func (sa *StreamAccumulator) GateSend(chunk *schemas.BifrostStreamChunk, isFinal
 		if sa.gateReplayBufBytes+size > gateReplayBufMaxBytes {
 			// Overflow: force-end the gate with a synthetic error so the
 			// consumer is notified and memory is released. Drops this chunk
-			// and any further chunks for this stream.
+			// and any further chunks for this stream, and every held chunk
+			// past the approved prefix: those were never approved, so ending
+			// the gate must not release them.
+			sa.truncateReplayToApprovedPrefixLocked()
 			sa.gateState = StreamStateEnded
 			// Replay cannot continue after overflow forces the gate to end.
 			sa.gateReplayEventInterval = 0
@@ -732,6 +735,26 @@ func (sa *StreamAccumulator) GateSend(chunk *schemas.BifrostStreamChunk, isFinal
 	}
 	sa.mu.Unlock()
 	return sendOrCancel(ctx, ch, chunk)
+}
+
+// truncateReplayToApprovedPrefixLocked drops the held chunks past the approved
+// prefix, keeping only what a decision released for delivery. Caller holds sa.mu.
+func (sa *StreamAccumulator) truncateReplayToApprovedPrefixLocked() {
+	keep := min(max(sa.gateApprovedPrefix, 0), len(sa.gateReplayBuf))
+	for _, entry := range sa.gateReplayBuf[keep:] {
+		sa.gateReplayBufBytes -= entry.size
+	}
+	if sa.gateReplayBufBytes < 0 || keep == 0 {
+		sa.gateReplayBufBytes = 0
+	}
+	if keep == 0 {
+		sa.gateReplayBuf = nil
+	} else {
+		sa.gateReplayBuf = sa.gateReplayBuf[:keep:keep]
+	}
+	sa.gateTransformStart = min(sa.gateTransformStart, keep)
+	// A terminal chunk among the dropped ones is gone with them.
+	sa.gatePendingTerminal = false
 }
 
 // drainBufferLocked drains gateReplayBuf to gateFlusherCh in order. MUST be

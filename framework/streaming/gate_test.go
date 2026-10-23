@@ -2191,9 +2191,8 @@ func TestGate_OverflowCapWithSSEPayloads(t *testing.T) {
 	}
 	sa := mustGet(t, a, traceID)
 	sa.WaitForFlusher()
-	// On overflow the flusher drains the already-buffered chunks first and
-	// delivers the synthetic terminal last, so poll until it lands rather than
-	// snapshotting after the first chunk (the recorder appends asynchronously).
+	// On overflow the flusher delivers only an approved prefix (none here) and
+	// then the synthetic terminal, asynchronously, so poll until it lands.
 	sawOverflow := false
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && !sawOverflow {
@@ -2273,4 +2272,45 @@ func TestGate_TransformInPlaceMutationIsRepriced(t *testing.T) {
 	}
 	a.EndStream(traceID, nil)
 	sa.WaitForFlusher()
+}
+
+// TestGate_OverflowNeverReleasesUnapprovedChunks: chunks held while a stream is
+// paused for approval were never approved, so when the replay cap forces the gate
+// to end, the client gets the overflow error and none of the held content.
+func TestGate_OverflowNeverReleasesUnapprovedChunks(t *testing.T) {
+	a := newTestAccumulator(t)
+	traceID := "trace-overflow-unapproved"
+	ctx := schemas.NewBifrostContext(context.Background(), time.Time{})
+	r := newRecorder(64)
+	defer r.close()
+
+	a.PauseStream(traceID)
+	big := strings.Repeat("x", 5*1024*1024)
+	for i := 0; i < 40; i++ {
+		if !a.GateSend(traceID, ssePassthroughChunk("content_block_delta", big), false, false, r.ch, ctx) {
+			break
+		}
+	}
+	sa := mustGet(t, a, traceID)
+	sa.WaitForFlusher()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, _ := r.snapshot()
+		sawOverflow := false
+		for _, c := range got {
+			if c.BifrostError == nil {
+				t.Fatal("a chunk held for approval was released by the overflow")
+			}
+			if c.BifrostError.Error != nil && c.BifrostError.Error.Type != nil && *c.BifrostError.Error.Type == "paused_replay_buffer_overflow" {
+				sawOverflow = true
+			}
+		}
+		if sawOverflow {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("client never received paused_replay_buffer_overflow")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
