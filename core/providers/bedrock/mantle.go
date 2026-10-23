@@ -147,6 +147,22 @@ func signOpenAIV4Headers(
 	return headers, nil
 }
 
+// bedrockChatRequestWithoutRegion returns a shallow copy of request with any
+// region/ prefix removed from Model, leaving request itself untouched.
+func bedrockChatRequestWithoutRegion(request *schemas.BifrostChatRequest) *schemas.BifrostChatRequest {
+	stripped := *request
+	_, stripped.Model = parseBedrockRegionAndModel(request.Model)
+	return &stripped
+}
+
+// bedrockResponsesRequestWithoutRegion is bedrockChatRequestWithoutRegion for
+// Responses requests.
+func bedrockResponsesRequestWithoutRegion(request *schemas.BifrostResponsesRequest) *schemas.BifrostResponsesRequest {
+	stripped := *request
+	_, stripped.Model = parseBedrockRegionAndModel(request.Model)
+	return &stripped
+}
+
 // mantleChatCompletions handles non-streaming chat completions for mantle models (gpt-*
 // and Gemma 4) via the Bedrock Mantle OpenAI-compatible endpoint.
 func (provider *BedrockProvider) mantleChatCompletions(
@@ -156,7 +172,9 @@ func (provider *BedrockProvider) mantleChatCompletions(
 ) (*schemas.BifrostChatResponse, *schemas.BifrostError) {
 	region := resolveBedrockRegion(ctx, key, request.Model)
 	url := mantleOpenAIURL(bedrockEndpoints(key.BedrockKeyConfig), region, schemas.ResolveCanonicalModel(ctx, request.Model), "chat/completions")
-	_, request.Model = parseBedrockRegionAndModel(request.Model)
+	// Strip the region on a copy: the caller's request is reused by
+	// executeRequestWithRetries, and a retry must still see region/model.
+	request = bedrockChatRequestWithoutRegion(request)
 
 	// SigV4 (empty key value): sign the exact body the handler builds via a signer closure.
 	// Bearer (key has a value): no signer; auth flows through the Authorization header.
@@ -195,7 +213,9 @@ func (provider *BedrockProvider) mantleChatCompletionsStream(
 ) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
 	region := resolveBedrockRegion(ctx, key, request.Model)
 	url := mantleOpenAIURL(bedrockEndpoints(key.BedrockKeyConfig), region, schemas.ResolveCanonicalModel(ctx, request.Model), "chat/completions")
-	_, request.Model = parseBedrockRegionAndModel(request.Model)
+	// Strip the region on a copy: the caller's request is reused by
+	// executeRequestWithRetries, and a retry must still see region/model.
+	request = bedrockChatRequestWithoutRegion(request)
 
 	// SigV4 (empty key value): sign the exact body the handler builds via a signer closure.
 	// Bearer (key has a value): no signer; auth flows through the Authorization header.
@@ -242,7 +262,9 @@ func (provider *BedrockProvider) mantleResponses(
 
 	region := resolveBedrockRegion(ctx, key, request.Model)
 	url := mantleOpenAIURL(bedrockEndpoints(key.BedrockKeyConfig), region, canonicalModel, "responses")
-	_, request.Model = parseBedrockRegionAndModel(request.Model)
+	// Strip the region on a copy: the caller's request is reused by
+	// executeRequestWithRetries, and a retry must still see region/model.
+	request = bedrockResponsesRequestWithoutRegion(request)
 
 	// SigV4 (empty key value): sign the exact body the handler builds via a signer closure.
 	// Bearer (key has a value): no signer; auth flows through the Authorization header.
@@ -287,7 +309,9 @@ func (provider *BedrockProvider) mantleResponsesStream(
 
 	region := resolveBedrockRegion(ctx, key, request.Model)
 	url := mantleOpenAIURL(bedrockEndpoints(key.BedrockKeyConfig), region, canonicalModel, "responses")
-	_, request.Model = parseBedrockRegionAndModel(request.Model)
+	// Strip the region on a copy: the caller's request is reused by
+	// executeRequestWithRetries, and a retry must still see region/model.
+	request = bedrockResponsesRequestWithoutRegion(request)
 
 	// SigV4 (empty key value): sign the exact body the handler builds via a signer closure.
 	// Bearer (key has a value): no signer; auth flows through the Authorization header.

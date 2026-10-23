@@ -83,7 +83,9 @@ func (provider *BedrockProvider) runtimeResponses(
 ) (*schemas.BifrostResponsesResponse, *schemas.BifrostError) {
 	region := resolveBedrockRegion(ctx, key, request.Model)
 	url := runtimeOpenAIURL(bedrockEndpoints(key.BedrockKeyConfig), region, "responses")
-	_, request.Model = parseBedrockRegionAndModel(request.Model)
+	// Strip the region on a copy: the caller's request is reused by
+	// executeRequestWithRetries, and a retry must still see region/model.
+	request = bedrockResponsesRequestWithoutRegion(request)
 	extraHeaders := provider.networkConfig.ExtraHeaders
 	if request.Params != nil {
 		extraHeaders = withGuardrailHeaders(extraHeaders, request.Params.ExtraParams)
@@ -127,7 +129,9 @@ func (provider *BedrockProvider) runtimeResponsesStream(
 ) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
 	region := resolveBedrockRegion(ctx, key, request.Model)
 	url := runtimeOpenAIURL(bedrockEndpoints(key.BedrockKeyConfig), region, "responses")
-	_, request.Model = parseBedrockRegionAndModel(request.Model)
+	// Strip the region on a copy: the caller's request is reused by
+	// executeRequestWithRetries, and a retry must still see region/model.
+	request = bedrockResponsesRequestWithoutRegion(request)
 	extraHeaders := provider.networkConfig.ExtraHeaders
 	if request.Params != nil {
 		extraHeaders = withGuardrailHeaders(extraHeaders, request.Params.ExtraParams)
@@ -166,7 +170,9 @@ func (provider *BedrockProvider) runtimeChatCompletions(
 ) (*schemas.BifrostChatResponse, *schemas.BifrostError) {
 	region := resolveBedrockRegion(ctx, key, request.Model)
 	url := runtimeOpenAIURL(bedrockEndpoints(key.BedrockKeyConfig), region, "chat/completions")
-	_, request.Model = parseBedrockRegionAndModel(request.Model)
+	// Strip the region on a copy: the caller's request is reused by
+	// executeRequestWithRetries, and a retry must still see region/model.
+	request = bedrockChatRequestWithoutRegion(request)
 	extraHeaders := provider.networkConfig.ExtraHeaders
 	if request.Params != nil {
 		extraHeaders = withGuardrailHeaders(extraHeaders, request.Params.ExtraParams)
@@ -207,7 +213,9 @@ func (provider *BedrockProvider) runtimeChatCompletionsStream(
 ) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
 	region := resolveBedrockRegion(ctx, key, request.Model)
 	url := runtimeOpenAIURL(bedrockEndpoints(key.BedrockKeyConfig), region, "chat/completions")
-	_, request.Model = parseBedrockRegionAndModel(request.Model)
+	// Strip the region on a copy: the caller's request is reused by
+	// executeRequestWithRetries, and a retry must still see region/model.
+	request = bedrockChatRequestWithoutRegion(request)
 	extraHeaders := provider.networkConfig.ExtraHeaders
 	if request.Params != nil {
 		extraHeaders = withGuardrailHeaders(extraHeaders, request.Params.ExtraParams)
