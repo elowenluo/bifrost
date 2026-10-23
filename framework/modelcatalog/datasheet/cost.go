@@ -154,6 +154,10 @@ func (s *Store) RoutingCallCost(call schemas.BifrostRoutingCall, scopes *LookupS
 		usage.CompletionTokens = *call.OutputTokens
 		breakdown = computeTextCost(pricing, usage, serviceTier{})
 	}
+	// computeCostFromInput is bypassed here, so apply its off-peak discount.
+	if m, ok := offPeakMultiplier(pricing, lookupScopes.BilledAt); ok {
+		scaleUsageCost(breakdown, m)
+	}
 	var cost float64
 	if breakdown != nil {
 		cost = breakdown.TotalCost
@@ -450,6 +454,10 @@ func (s *Store) computeCacheEmbeddingCost(cacheMetadata *schemas.BifrostCacheMet
 		return 0
 	}
 	cost := float64(*cacheMetadata.InputTokens) * tieredInputRate(pricing, *cacheMetadata.InputTokens, serviceTier{})
+	// Off-peak discount on the usage charge, as computeCostFromInput applies it.
+	if m, ok := offPeakMultiplier(pricing, scopes.BilledAt); ok {
+		cost *= m
+	}
 	// The lookup is a separate embedding call, so the embedding model's flat
 	// per-request fee applies once, mirroring the synchronous/batch paths.
 	if pricing.CostPerRequest != nil {

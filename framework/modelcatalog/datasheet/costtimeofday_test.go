@@ -565,3 +565,39 @@ func TestOffPeak_EndToEndFromDatasheetFile(t *testing.T) {
 	assert.InDelta(t, peakCost/2,
 		s.CalculateCost(resp(), &LookupScopes{BilledAt: utc(t, "2026-08-17T05:00:00Z")}), 1e-12)
 }
+
+// TestOffPeak_RoutingAndCacheCalls: the routing classification calls and the
+// semantic-cache embedding lookup price outside computeCostFromInput, so they
+// must apply the off-peak discount themselves. The flat per-request fee stays
+// at full price.
+func TestOffPeak_RoutingAndCacheCalls(t *testing.T) {
+	embedPricing := configstoreTables.TableModelPricing{
+		Model: "embed-model", Provider: "deepseek", Mode: "embedding",
+		InputCostPerToken:     bifrost.Ptr(0.00000002),
+		CostPerRequest:        bifrost.Ptr(0.01),
+		OffPeakCostMultiplier: bifrost.Ptr(0.5),
+		PeakHours:             deepSeekPeakHours(),
+	}
+	chatPricing := deepSeekPricing()
+	chatPricing.CostPerRequest = bifrost.Ptr(0.02)
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey("embed-model", "deepseek", "embedding"):  embedPricing,
+		makeKey("deepseek-v4-flash", "deepseek", "chat"): chatPricing,
+	})
+	off := &LookupScopes{BilledAt: utc(t, "2026-08-17T05:00:00Z")}
+	peak := &LookupScopes{BilledAt: utc(t, "2026-08-17T02:00:00Z")}
+
+	provider, embedModel, chatModel := "deepseek", "embed-model", "deepseek-v4-flash"
+	in, out := 1000, 1000
+	embedCall := schemas.BifrostRoutingCall{ProviderUsed: &provider, ModelUsed: &embedModel, InputTokens: &in}
+	llmCall := schemas.BifrostRoutingCall{ProviderUsed: &provider, ModelUsed: &chatModel, InputTokens: &in, OutputTokens: &out}
+
+	assert.InDelta(t, 0.01+1000*0.00000002, s.RoutingCallCost(embedCall, peak), 1e-15, "routing embed at peak")
+	assert.InDelta(t, 0.01+1000*0.00000002/2, s.RoutingCallCost(embedCall, off), 1e-15, "routing embed off-peak")
+	assert.InDelta(t, 0.02+0.00176, s.RoutingCallCost(llmCall, peak), 1e-15, "routing llm at peak")
+	assert.InDelta(t, 0.02+0.00176/2, s.RoutingCallCost(llmCall, off), 1e-15, "routing llm off-peak")
+
+	cache := &schemas.BifrostCacheMetadata{ProviderUsed: &provider, ModelUsed: &embedModel, InputTokens: &in}
+	assert.InDelta(t, 0.01+1000*0.00000002, s.CalculateCacheEmbeddingCost(cache, peak), 1e-15, "cache lookup at peak")
+	assert.InDelta(t, 0.01+1000*0.00000002/2, s.CalculateCacheEmbeddingCost(cache, off), 1e-15, "cache lookup off-peak")
+}
