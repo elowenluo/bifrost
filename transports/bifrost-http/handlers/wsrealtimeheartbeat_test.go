@@ -81,6 +81,21 @@ func TestDiscoverRealtimeTranscriptionModel(t *testing.T) {
 			message: `{"type":"session.update","session":{"audio":{"input":{"transcription":{"model":" openai/gpt-4o-transcribe "}}}}}`,
 			want:    "openai/gpt-4o-transcribe",
 		},
+		{
+			name:    "beta transcription_session.update, legacy shape",
+			message: `{"type":"transcription_session.update","session":{"input_audio_transcription":{"model":"openai/whisper-1"}}}`,
+			want:    "openai/whisper-1",
+		},
+		{
+			name:    "session.update, legacy shape",
+			message: `{"type":"session.update","session":{"input_audio_transcription":{"model":"gpt-4o-mini-transcribe"}}}`,
+			want:    "gpt-4o-mini-transcribe",
+		},
+		{
+			name:    "GA shape wins when both are present",
+			message: `{"type":"transcription_session.update","session":{"audio":{"input":{"transcription":{"model":"gpt-4o-transcribe"}}},"input_audio_transcription":{"model":"whisper-1"}}}`,
+			want:    "gpt-4o-transcribe",
+		},
 		{name: "wrong event type", message: `{"type":"input_audio_buffer.append","session":{"audio":{"input":{"transcription":{"model":"openai/gpt-4o-transcribe"}}}}}`},
 		{name: "top-level model", message: `{"type":"session.update","model":"openai/gpt-4o-transcribe"}`},
 		{name: "invalid JSON", message: `{`},

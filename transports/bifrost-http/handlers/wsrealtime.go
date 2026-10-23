@@ -329,9 +329,14 @@ func bufferRealtimeTranscriptionBootstrap(clientConn *realtimeClientConn) ([]rea
 	return nil, "", errors.New("transcription bootstrap exceeded 16 frames before session.update supplied a model")
 }
 
+// discoverRealtimeTranscriptionModel reads the model a transcription session asks
+// for from its bootstrap update. It accepts the same events and shapes that
+// pinRealtimeTranscriptionModel holds the session to afterwards: session.update or
+// transcription_session.update, through the GA audio.input.transcription shape
+// (preferred) or the legacy input_audio_transcription shape.
 func discoverRealtimeTranscriptionModel(message []byte) string {
 	var event struct {
-		Type    string `json:"type"`
+		Type    schemas.RealtimeEventType `json:"type"`
 		Session struct {
 			Audio struct {
 				Input struct {
@@ -340,12 +345,21 @@ func discoverRealtimeTranscriptionModel(message []byte) string {
 					} `json:"transcription"`
 				} `json:"input"`
 			} `json:"audio"`
+			InputAudioTranscription struct {
+				Model string `json:"model"`
+			} `json:"input_audio_transcription"`
 		} `json:"session"`
 	}
-	if json.Unmarshal(message, &event) != nil || event.Type != string(schemas.RTEventSessionUpdate) {
+	if json.Unmarshal(message, &event) != nil {
 		return ""
 	}
-	return strings.TrimSpace(event.Session.Audio.Input.Transcription.Model)
+	if event.Type != schemas.RTEventSessionUpdate && event.Type != realtimeTranscriptionSessionUpdate {
+		return ""
+	}
+	if model := strings.TrimSpace(event.Session.Audio.Input.Transcription.Model); model != "" {
+		return model
+	}
+	return strings.TrimSpace(event.Session.InputAudioTranscription.Model)
 }
 
 func (h *WSRealtimeHandler) websocketUpgrader(subprotocol string) ws.FastHTTPUpgrader {
