@@ -677,6 +677,15 @@ func (s *Store) computeCostFromInput(input costInput, routingInfo schemas.Routin
 	// inference_geo multiplier, so the two compose multiplicatively.
 	if m, ok := offPeakMultiplier(pricing, scopes.BilledAt); ok {
 		scaleUsageCost(cost, m)
+		// OCR's page and annotation charges are usage, but totalOnlyCost files them
+		// as RequestCost, which scaleUsageCost leaves alone because that is where
+		// flat fees live. No flat fee has been added yet, so scale it here.
+		if requestType == schemas.OCRRequest && cost != nil && cost.InputCostDetails != nil {
+			usage := cost.InputCostDetails.RequestCost
+			cost.InputCostDetails.RequestCost = usage * m
+			cost.InputCost += usage*m - usage
+			cost.TotalCost += usage*m - usage
+		}
 	}
 
 	// Flat per-request surcharge, billed once on top of usage-based cost whenever

@@ -629,3 +629,36 @@ func TestOffPeak_BatchSettlement(t *testing.T) {
 	assert.InDelta(t, 0.0000001, *off.InputCostPerTokenBatches, 1e-18, "reported off-peak input rate")
 	assert.InDelta(t, 0.0000006, *peak.OutputCostPerTokenBatches, 1e-18, "peak rate is unchanged")
 }
+
+// TestOffPeak_OCRPageCharges: OCR is priced per page (plus an annotation charge per
+// page), and those usage charges take the off-peak multiplier like any other, while
+// the flat per-request fee does not.
+func TestOffPeak_OCRPageCharges(t *testing.T) {
+	pricing := configstoreTables.TableModelPricing{
+		Model: "mistral-ocr-latest", Provider: "mistral", Mode: "ocr",
+		OCRCostPerPage:        bifrost.Ptr(0.01),
+		AnnotationCostPerPage: bifrost.Ptr(0.002),
+		CostPerRequest:        bifrost.Ptr(0.05),
+		OffPeakCostMultiplier: bifrost.Ptr(0.5),
+		PeakHours:             deepSeekPeakHours(),
+	}
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey("mistral-ocr-latest", "mistral", "ocr"): pricing,
+	})
+	annotation := `{"title":"x"}`
+	resp := &schemas.BifrostResponse{OCRResponse: &schemas.BifrostOCRResponse{
+		Model:              "mistral-ocr-latest",
+		UsageInfo:          &schemas.OCRUsageInfo{PagesProcessed: 10},
+		DocumentAnnotation: &annotation,
+		ExtraFields: schemas.BifrostResponseExtraFields{
+			RequestType: schemas.OCRRequest,
+			RoutingInfo: routingInfoFor(schemas.Mistral, "mistral-ocr-latest"),
+		},
+	}}
+	pages := 10 * (0.01 + 0.002)
+	assert.InDelta(t, 0.05+pages, s.CalculateCost(resp, &LookupScopes{BilledAt: utc(t, "2026-08-17T02:00:00Z")}), 1e-12, "OCR at peak")
+	off := s.CalculateCostBreakdown(resp, &LookupScopes{BilledAt: utc(t, "2026-08-17T05:00:00Z")})
+	require.NotNil(t, off)
+	assert.InDelta(t, 0.05+pages/2, off.TotalCost, 1e-12, "OCR off-peak halves page and annotation charges, not the per-request fee")
+	assert.InDelta(t, off.TotalCost, off.InputCost+off.OutputCost+off.AdditionalCost, 1e-12, "breakdown stays consistent")
+}
