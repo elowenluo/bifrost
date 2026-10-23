@@ -1271,6 +1271,38 @@ func TestGetVirtualKeysPaginated_AssignmentFilters(t *testing.T) {
 // matches everything the "Assigned To" column can display - the key's own name,
 // its team, and its customer - rather than the name alone. (The assigned user is
 // the enterprise store's addition; the link table does not exist here.)
+// TestGetVirtualKeysPaginated_BudgetSpentCountsWildcardModelConfigBudgets pins the
+// budget_spent ordering across both owners of a VK's key-wide budgets: the VK itself and
+// its provider-independent wildcard model config, where the standalone-limits migration
+// (upstream #7291) moves them. A provider-specific budget is not key-wide and does not count.
+func TestGetVirtualKeysPaginated_BudgetSpentCountsWildcardModelConfigBudgets(t *testing.T) {
+	store := setupRDBTestStore(t)
+	ctx := context.Background()
+	db := store.DB()
+
+	for _, id := range []string{"vk-direct", "vk-mc", "vk-provider", "vk-none"} {
+		require.NoError(t, store.CreateVirtualKey(ctx, &tables.TableVirtualKey{ID: id, Name: id, Value: *schemas.NewSecretVar(id + "-val"), IsActive: schemas.Ptr(true)}))
+	}
+	mcVK, providerVK, openai := "vk-mc", "vk-provider", "openai"
+	require.NoError(t, db.Create(&tables.TableModelConfig{ID: "mc-wild", ModelName: tables.ModelConfigAllModels, Scope: tables.ModelConfigScopeVirtualKey, ScopeID: &mcVK}).Error)
+	require.NoError(t, db.Create(&tables.TableModelConfig{ID: "mc-openai", ModelName: tables.ModelConfigAllModels, Scope: tables.ModelConfigScopeVirtualKey, ScopeID: &providerVK, Provider: &openai}).Error)
+	for _, b := range []tables.TableBudget{
+		{ID: "b-direct", MaxLimit: 1000, ResetDuration: "1M", CurrentUsage: 50, VirtualKeyID: schemas.Ptr("vk-direct")},
+		{ID: "b-wild", MaxLimit: 1000, ResetDuration: "1M", CurrentUsage: 900, ModelConfigID: schemas.Ptr("mc-wild")},
+		{ID: "b-openai", MaxLimit: 1000, ResetDuration: "1M", CurrentUsage: 999, ModelConfigID: schemas.Ptr("mc-openai")},
+	} {
+		require.NoError(t, db.Create(&b).Error)
+	}
+
+	vks, _, err := store.GetVirtualKeysPaginated(ctx, VirtualKeyQueryParams{SortBy: "budget_spent", Order: "desc"})
+	require.NoError(t, err)
+	ids := make([]string, len(vks))
+	for i, vk := range vks {
+		ids[i] = vk.ID
+	}
+	assert.Equal(t, []string{"vk-mc", "vk-direct", "vk-none", "vk-provider"}, ids)
+}
+
 func TestGetVirtualKeysPaginated_Search(t *testing.T) {
 	store := setupRDBTestStore(t)
 	ctx := context.Background()

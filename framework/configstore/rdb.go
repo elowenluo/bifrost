@@ -3772,12 +3772,22 @@ func (s *RDBConfigStore) GetVirtualKeysPaginated(ctx context.Context, params Vir
 	query := preloadVirtualKeyBaseRelations(baseQuery)
 	if params.SortBy == "budget_spent" {
 		// A virtual key can have multiple budgets (different reset intervals); take MAX so the
-		// highest-spending budget drives the sort without duplicating rows.
+		// highest-spending budget drives the sort without duplicating rows. Its key-wide budgets
+		// are owned either by the VK directly or by its provider-independent wildcard model
+		// config (where migrate_vk_standalone_limits_to_model_configs moves them), so both count.
 		query = query.Joins(`LEFT JOIN (
-			SELECT virtual_key_id, MAX(current_usage) AS total_usage
-			FROM governance_budgets
-			WHERE virtual_key_id IS NOT NULL
-			GROUP BY virtual_key_id
+			SELECT owner_vk_id AS virtual_key_id, MAX(current_usage) AS total_usage
+			FROM (
+				SELECT virtual_key_id AS owner_vk_id, current_usage
+				FROM governance_budgets
+				WHERE virtual_key_id IS NOT NULL
+				UNION ALL
+				SELECT mc.scope_id AS owner_vk_id, b.current_usage
+				FROM governance_budgets b
+				JOIN governance_model_configs mc ON mc.id = b.model_config_id
+				WHERE mc.scope = 'virtual_key' AND mc.model_name = '*' AND mc.provider IS NULL
+			) AS vk_owned_budgets
+			GROUP BY owner_vk_id
 		) AS vk_budget_totals ON vk_budget_totals.virtual_key_id = governance_virtual_keys.id`)
 	}
 	var virtualKeys []tables.TableVirtualKey
