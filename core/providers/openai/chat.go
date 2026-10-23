@@ -109,6 +109,12 @@ func ToOpenAIChatRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.Bifros
 		return openaiReq
 	case schemas.DeepSeek:
 		openaiReq.filterOpenAISpecificParametersInternal(caps, false)
+		// DeepSeek's chat-completions endpoint still uses the legacy max_tokens
+		// field and ignores max_completion_tokens.
+		if openaiReq.MaxCompletionTokens != nil {
+			openaiReq.MaxTokens = openaiReq.MaxCompletionTokens
+			openaiReq.MaxCompletionTokens = nil
+		}
 		openaiReq.applyDeepseekCompatibility()
 		// DeepSeek rejects reasoning_content on ordinary assistant turns but
 		// requires it on assistant tool-call turns.

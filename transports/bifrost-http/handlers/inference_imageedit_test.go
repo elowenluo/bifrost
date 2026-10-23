@@ -274,3 +274,20 @@ func TestPrepareImageEditRequest_Stream(t *testing.T) {
 		t.Fatalf("stream = %v, want true from the multipart form", req.Stream)
 	}
 }
+
+// aspect_ratio is a known image-edit field, so it is kept out of ExtraParams; the multipart
+// parser must therefore carry it on the typed parameter or providers never see it.
+func TestPrepareImageEditRequest_MultipartAspectRatio(t *testing.T) {
+	_, req, err := prepareImageEditRequest(multipartImageEditCtx(t, map[string]string{
+		"model":        "gemini/gemini-2.5-flash-image",
+		"prompt":       "widen the scene",
+		"image_url":    "https://example.com/teapot.jpg",
+		"aspect_ratio": "16:9",
+	}, nil), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.Params.AspectRatio == nil || *req.Params.AspectRatio != "16:9" {
+		t.Fatalf("aspect_ratio = %v, want 16:9", req.Params.AspectRatio)
+	}
+}

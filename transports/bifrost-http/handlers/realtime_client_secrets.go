@@ -81,14 +81,38 @@ func (h *RealtimeClientSecretsHandler) handleRequest(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
+	// The retired beta /realtime/sessions routes: translate the beta request into a
+	// GA client-secret request and mint through the path below (see
+	// realtimelegacysessions.go).
+	legacy := isLegacyRealtimeSessionPath(route.Path)
+	if legacy {
+		converted, convErr := legacyRealtimeSessionToClientSecretBody(body)
+		if convErr != nil {
+			SendBifrostError(ctx, convErr)
+			return
+		}
+		body = converted
+	}
+
 	providerKey, model, normalizedBody, err := resolveRealtimeClientSecretTarget(ctx, h.config, route, body)
 	if err != nil {
 		SendBifrostError(ctx, err)
 		return
 	}
 
-	logger.Info("[realtime-client-secrets] request: path=%s provider=%s model=%s endpoint_type=%s",
-		string(ctx.Path()), providerKey, model, route.EndpointType)
+	logger.Info("[realtime-client-secrets] request: path=%s provider=%s model=%s",
+		string(ctx.Path()), providerKey, model)
+	if legacy && providerKey != schemas.OpenAI {
+		// Only OpenAI ever served the beta session object; Azure rejected these
+		// routes before they were retired, and so do other providers.
+		SendBifrostError(ctx, newRealtimeClientSecretHandlerError(
+			fasthttp.StatusBadRequest,
+			"invalid_request_error",
+			"the legacy /realtime/sessions endpoint is supported for OpenAI only; use /v1/realtime/client_secrets",
+			nil,
+		))
+		return
+	}
 
 	bifrostCtx, cancel := lib.ConvertToBifrostContext(ctx, h.handlerStore)
 	defer cancel()
@@ -152,7 +176,7 @@ func (h *RealtimeClientSecretsHandler) handleRequest(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	resp, bifrostErr := sessionProvider.CreateRealtimeClientSecret(bifrostCtx, key, route.EndpointType, normalizedBody)
+	resp, bifrostErr := sessionProvider.CreateRealtimeClientSecret(bifrostCtx, key, normalizedBody)
 	if bifrostErr != nil {
 		logger.Error("[realtime-client-secrets] upstream error: provider=%s model=%s error=%s",
 			providerKey, model, bifrostErr.Error)
@@ -169,6 +193,14 @@ func (h *RealtimeClientSecretsHandler) handleRequest(ctx *fasthttp.RequestCtx) {
 		bifrost.GetStringFromContext(bifrostCtx, schemas.BifrostContextKeyVirtualKey),
 	)
 
+	if legacy && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		resp.Body = clientSecretToLegacyRealtimeSession(resp.Body)
+		for name := range resp.Headers {
+			if strings.EqualFold(name, "Content-Length") {
+				delete(resp.Headers, name)
+			}
+		}
+	}
 	writeRealtimeClientSecretResponse(ctx, resp)
 }
 
@@ -194,24 +226,14 @@ func (h *RealtimeClientSecretsHandler) evaluateMintingGovernance(
 
 func (h *RealtimeClientSecretsHandler) realtimeSessionRoutes() []schemas.RealtimeSessionRoute {
 	routes := []schemas.RealtimeSessionRoute{
-		{
-			Path:         "/v1/realtime/client_secrets",
-			EndpointType: schemas.RealtimeSessionEndpointClientSecrets,
-		},
-		{
-			Path:         "/v1/realtime/sessions",
-			EndpointType: schemas.RealtimeSessionEndpointSessions,
-		},
+		{Path: "/v1/realtime/client_secrets"},
+		// Retired beta route, served by translation to client_secrets.
+		{Path: "/v1/realtime/sessions"},
 	}
 
-	for _, path := range integrations.OpenAIRealtimeClientSecretPaths("/openai") {
-		endpointType := schemas.RealtimeSessionEndpointClientSecrets
-		if strings.HasSuffix(path, "/realtime/sessions") {
-			endpointType = schemas.RealtimeSessionEndpointSessions
-		}
+	for _, path := range append(integrations.OpenAIRealtimeClientSecretPaths("/openai"), "/openai/v1/realtime/sessions") {
 		routes = append(routes, schemas.RealtimeSessionRoute{
 			Path:            path,
-			EndpointType:    endpointType,
 			DefaultProvider: schemas.OpenAI,
 		})
 	}

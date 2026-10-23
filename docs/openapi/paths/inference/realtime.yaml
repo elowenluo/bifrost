@@ -163,11 +163,17 @@ realtime-sessions:
   post:
     operationId: createRealtimeSession
     summary: Mint a realtime session (legacy alias)
+    deprecated: true
     description: |
-      Legacy alias for the realtime client-secret minting endpoint. Behaves
-      identically to `createRealtimeClientSecret` but uses the `sessions` route
-      shape; provided for compatibility with older OpenAI Realtime client
-      libraries.
+      Deprecated: OpenAI retired the beta realtime session API. Bifrost keeps this
+      route for existing clients by translating the beta request (flat `model`,
+      `voice`, `modalities`, `pcm16`/`g711_ulaw`/`g711_alaw` formats,
+      `input_audio_transcription`, `turn_detection`, `client_secret.expires_after`)
+      into a GA `POST /v1/realtime/client_secrets` request and the response back
+      into the beta `realtime.session` object with `client_secret.value` and
+      `client_secret.expires_at`. OpenAI only. GA has no `temperature`, so a
+      non-default value is rejected with 400 rather than ignored. New integrations should call
+      `client_secrets` with `{"session": {...}}` directly.
     tags:
     - Realtime
     requestBody:

@@ -3,6 +3,7 @@ package schemas
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -809,5 +810,110 @@ func TestSecretVar_MarshalJSON(t *testing.T) {
 				t.Errorf("MarshalJSON() = %s, want %s", b, tt.want)
 			}
 		})
+	}
+}
+
+func TestSecretVar_RedactedIfSecret(t *testing.T) {
+	t.Run("nil receiver", func(t *testing.T) {
+		var ev *SecretVar
+		if got := ev.RedactedIfSecret(); got != nil {
+			t.Fatalf("expected nil, got %+v", got)
+		}
+	})
+
+	t.Run("literal value is surfaced in plaintext", func(t *testing.T) {
+		for _, val := range []string{"", "us-east-1", "https://vllm.internal.example.com:8000"} {
+			e := &SecretVar{Val: val, SecretType: SecretTypePlainText}
+			got := e.RedactedIfSecret()
+			if got.GetValue() != val {
+				t.Errorf("RedactedIfSecret().GetValue() = %q, want %q", got.GetValue(), val)
+			}
+		}
+	})
+
+	t.Run("env-backed value is masked and keeps its reference", func(t *testing.T) {
+		e := &SecretVar{Val: "us-east-1", ref: "env.AWS_REGION", SecretType: SecretTypeEnv}
+		got := e.RedactedIfSecret()
+		if got.GetValue() == "us-east-1" {
+			t.Error("RedactedIfSecret() surfaced the resolved value of an env reference")
+		}
+		if !got.IsRedacted() {
+			t.Errorf("RedactedIfSecret().IsRedacted() = false for %q", got.GetValue())
+		}
+		if got.GetRawRef() != "env.AWS_REGION" {
+			t.Errorf("RedactedIfSecret().GetRawRef() = %q, want %q", got.GetRawRef(), "env.AWS_REGION")
+		}
+	})
+
+	t.Run("vault-backed value is masked and keeps its reference", func(t *testing.T) {
+		e := &SecretVar{Val: "https://mcp.internal.example.com/mcp", ref: "vault.bifrost/mcp-url", SecretType: SecretTypeVault}
+		got := e.RedactedIfSecret()
+		if got.GetValue() == e.Val {
+			t.Error("RedactedIfSecret() surfaced the resolved value of a vault reference")
+		}
+		if got.GetRawRef() != "vault.bifrost/mcp-url" {
+			t.Errorf("RedactedIfSecret().GetRawRef() = %q, want %q", got.GetRawRef(), "vault.bifrost/mcp-url")
+		}
+	})
+
+	t.Run("returns a fresh pointer so callers cannot reach the original", func(t *testing.T) {
+		e := &SecretVar{Val: "us-east-1", SecretType: SecretTypePlainText}
+		got := e.RedactedIfSecret()
+		if got == e {
+			t.Fatal("RedactedIfSecret() aliased the original SecretVar")
+		}
+		got.Val = "eu-west-1"
+		if e.Val != "us-east-1" {
+			t.Errorf("mutating the copy changed the original to %q", e.Val)
+		}
+	})
+
+	t.Run("does not mutate the original", func(t *testing.T) {
+		e := &SecretVar{Val: "actual-secret-value", ref: "env.SOME_URL", SecretType: SecretTypeEnv}
+		_ = e.RedactedIfSecret()
+		if e.Val != "actual-secret-value" {
+			t.Errorf("original Val mutated to %q", e.Val)
+		}
+	})
+}
+
+// TestRedactedServiceURL: a literal service URL is shown, a URL carrying
+// userinfo is masked as a credential, and a secret reference stays redacted.
+func TestRedactedServiceURL(t *testing.T) {
+	cases := []struct {
+		name, val string
+		masked    bool
+	}{
+		{"plain URL", "http://vllm.internal:8000/v1", false},
+		{"user and password", "http://admin:s3cret@vllm.internal:8000", true},
+		{"token as user", "https://tok_abcdef123456@ollama.example.com", true},
+		{"unparsable with at sign", "admin:s3cret@vllm.internal:8000", true},
+		{"query credential", "https://service.example/mcp?api_key=s3cret-value", true},
+		{"query with any parameter name", "https://service.example/mcp?x=abcdef123456", true},
+		{"fragment", "https://service.example/mcp#token=s3cret", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NewSecretVar(tc.val).RedactedServiceURL()
+			if tc.masked {
+				if strings.Contains(got.Val, "s3cret") || strings.Contains(got.Val, "abcdef") || !got.IsMaskedPlaceholder() {
+					t.Fatalf("RedactedServiceURL(%q) = %q, want the masked placeholder", tc.val, got.Val)
+				}
+				return
+			}
+			if got.Val != tc.val {
+				t.Fatalf("RedactedServiceURL(%q) = %q, want it unchanged", tc.val, got.Val)
+			}
+		})
+	}
+
+	t.Setenv("BIFROST_TEST_SERVICE_URL", "http://vllm.internal:8000")
+	ref := NewSecretVar("env.BIFROST_TEST_SERVICE_URL")
+	if got := ref.RedactedServiceURL(); got.Val == "http://vllm.internal:8000" {
+		t.Fatalf("env-backed URL leaked its resolved value %q", got.Val)
+	}
+	var nilVar *SecretVar
+	if nilVar.RedactedServiceURL() != nil {
+		t.Fatal("nil SecretVar must stay nil")
 	}
 }

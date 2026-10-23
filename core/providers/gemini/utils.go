@@ -2012,6 +2012,48 @@ func addSpeechConfigToGenerationConfig(config *GenerationConfig, voiceConfig *sc
 	config.SpeechConfig = &speechConfig
 }
 
+// inlineGeminiChatSystemReminder is the Chat Completions twin of inlineGeminiSystemReminder: a
+// mid-conversation role:"system" chat message rendered as a user turn, each text wrapped in the
+// <system-reminder> envelope, kept at its original position. Text-only, like the systemInstruction
+// branch it replaces for these messages. Returns nil when the message yields no text.
+func inlineGeminiChatSystemReminder(message schemas.ChatMessage) *Content {
+	if message.Content == nil {
+		return nil
+	}
+	wrap := func(text string) *Part {
+		return &Part{Text: "<system-reminder>\n" + text + "\n</system-reminder>\n"}
+	}
+	content := &Content{Role: "user"}
+	if message.Content.ContentStr != nil {
+		if *message.Content.ContentStr != "" {
+			content.Parts = append(content.Parts, wrap(*message.Content.ContentStr))
+		}
+	} else if message.Content.ContentBlocks != nil {
+		for _, block := range message.Content.ContentBlocks {
+			if block.Text != nil && *block.Text != "" {
+				content.Parts = append(content.Parts, wrap(*block.Text))
+			}
+		}
+	}
+	if len(content.Parts) == 0 {
+		return nil
+	}
+	return content
+}
+
+// geminiChatToolResponseFollows reports whether the first message after index i that is not
+// a system/developer message is a tool response, i.e. whether a reminder at i sits inside a
+// tool response group.
+func geminiChatToolResponseFollows(messages []schemas.ChatMessage, i int) bool {
+	for _, next := range messages[i+1:] {
+		if next.Role == schemas.ChatMessageRoleSystem || next.Role == schemas.ChatMessageRoleDeveloper {
+			continue
+		}
+		return next.Role == schemas.ChatMessageRoleTool && next.ChatToolMessage != nil
+	}
+	return false
+}
+
 // convertBifrostMessagesToGemini converts Bifrost messages to Gemini format
 func convertBifrostMessagesToGemini(messages []schemas.ChatMessage, allowedImageURLSchemes ...string) ([]Content, *Content, error) {
 	if len(allowedImageURLSchemes) == 0 {
@@ -2035,10 +2077,48 @@ func convertBifrostMessagesToGemini(messages []schemas.ChatMessage, allowedImage
 	// Map callID to function name for correlating tool responses with function declarations
 	callIDToFunctionName := make(map[string]string)
 
+	// Set once the leading system prompt ends (first non-system message). A system/developer
+	// message after that point is a mid-conversation reminder and is inlined in place as a
+	// user turn (see inlineGeminiChatSystemReminder) rather than hoisted into systemInstruction,
+	// which renders ahead of every message and, when it grows by one reminder per turn,
+	// invalidates Gemini's prefix-based implicit cache for the whole conversation behind it.
+	// Same rule as the Responses path (inlineGeminiSystemReminder).
+	seenNonSystemMessage := false
+	// Reminders that arrived inside a tool response group, held until the group is flushed:
+	// Gemini needs every function response of a parallel call in one content, so a reminder
+	// between two of them cannot be emitted in place without splitting the group.
+	var deferredReminders []Content
+
 	for i, message := range messages {
+		isSystemMessage := message.Role == schemas.ChatMessageRoleSystem || message.Role == schemas.ChatMessageRoleDeveloper
+		if !isSystemMessage {
+			seenNonSystemMessage = true
+		}
+		if isSystemMessage && seenNonSystemMessage {
+			inlined := inlineGeminiChatSystemReminder(message)
+			if inlined == nil {
+				continue
+			}
+			if geminiChatToolResponseFollows(messages, i) {
+				deferredReminders = append(deferredReminders, *inlined)
+				continue
+			}
+			// Flush first: the reminder is a user turn of its own and must not be filed
+			// behind function responses that precede it.
+			if len(pendingToolResponseParts) > 0 {
+				contents = append(contents, Content{Parts: pendingToolResponseParts, Role: "user"})
+				pendingToolResponseParts = nil
+			}
+			// Reminders deferred inside that group came first, so they go first: a
+			// newer instruction must not be followed by the one it replaces.
+			contents = append(contents, deferredReminders...)
+			deferredReminders = nil
+			contents = append(contents, *inlined)
+			continue
+		}
 		// Handle system messages separately - Gemini requires them in SystemInstruction field
 		// Gemini has no support for role "developer", so we treat it as "system"
-		if message.Role == schemas.ChatMessageRoleSystem || message.Role == schemas.ChatMessageRoleDeveloper {
+		if isSystemMessage {
 			if systemInstruction == nil {
 				systemInstruction = &Content{}
 			}
@@ -2073,6 +2153,10 @@ func convertBifrostMessagesToGemini(messages []schemas.ChatMessage, allowedImage
 				Role:  "user", // Function responses use "user" role in Gemini
 			})
 			pendingToolResponseParts = nil
+		}
+		if !isToolResponse && len(deferredReminders) > 0 {
+			contents = append(contents, deferredReminders...)
+			deferredReminders = nil
 		}
 
 		// Handle tool response messages - collect them for grouping
@@ -2147,6 +2231,8 @@ func convertBifrostMessagesToGemini(messages []schemas.ChatMessage, allowedImage
 					Role:  "user",
 				})
 				pendingToolResponseParts = nil
+				contents = append(contents, deferredReminders...)
+				deferredReminders = nil
 			}
 
 			continue // Skip the normal content handling below
@@ -2371,6 +2457,8 @@ func convertBifrostMessagesToGemini(messages []schemas.ChatMessage, allowedImage
 			contents = append(contents, content)
 		}
 	}
+	// A group that was never flushed still releases the reminders held for it.
+	contents = append(contents, deferredReminders...)
 
 	return contents, systemInstruction, nil
 }

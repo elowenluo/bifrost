@@ -22,6 +22,7 @@ const (
 // WhiteList is a list of values that are allowed to be used.
 // Semantics:
 //   - "*" (alone) means all values are allowed.
+//   - "regex:<pattern>" entries match any value the RE2 pattern fully matches (see MatchEntry).
 //   - Empty list means nothing is allowed.
 //   - Non-empty list (without "*") means only the listed values are allowed.
 //
@@ -33,7 +34,7 @@ type WhiteList []string
 // Returns true if value is in the list.
 func (wl WhiteList) Contains(value string) bool {
 	return slices.ContainsFunc(wl, func(s string) bool {
-		return strings.EqualFold(s, value)
+		return MatchEntry(s, value)
 	})
 }
 
@@ -61,14 +62,18 @@ func (wl WhiteList) IsRestricted() bool {
 }
 
 // Validate checks that the whitelist is well-formed.
-// Returns an error if "*" is present alongside other values, or if there are duplicate entries.
+// Returns an error if "*" is present alongside other values, if there are duplicate entries,
+// or if a regex: entry does not compile.
 func (wl WhiteList) Validate() error {
-	if wl.Contains("*") && len(wl) > 1 {
+	if err := ValidateRegexEntries(wl); err != nil {
+		return err
+	}
+	if slices.Contains(wl, "*") && len(wl) > 1 {
 		return fmt.Errorf("wildcard '*' cannot be used with other values in the whitelist")
 	}
 	seen := make(map[string]struct{}, len(wl))
 	for _, v := range wl {
-		normalized := strings.ToLower(v)
+		normalized := listEntryDedupKey(v)
 		if _, ok := seen[normalized]; ok {
 			return fmt.Errorf("duplicate value '%s' in whitelist", v)
 		}
@@ -77,16 +82,29 @@ func (wl WhiteList) Validate() error {
 	return nil
 }
 
+// listEntryDedupKey is the duplicate-detection key for a list entry. Plain
+// entries match case-insensitively, so they dedupe case-insensitively. A regex:
+// entry keeps its exact spelling: case can change what a pattern matches even
+// under the case-insensitive wrapper, through escapes (\d vs \D) and scoped flags
+// ((?-i:GPT) vs (?-i:gpt)), so only identically spelled patterns are duplicates.
+func listEntryDedupKey(entry string) string {
+	if IsRegexEntry(entry) {
+		return entry
+	}
+	return strings.ToLower(entry)
+}
+
 // BlackList is a list of values that are denied.
 // Semantics:
 //   - "*" (alone) means all values are blocked.
+//   - "regex:<pattern>" entries block any value the RE2 pattern fully matches (see MatchEntry).
 //   - Empty list means nothing is blocked.
 //   - Non-empty list (without "*") means only the listed values are blocked.
 type BlackList []string
 
 func (bl BlackList) Contains(value string) bool {
 	return slices.ContainsFunc(bl, func(s string) bool {
-		return strings.EqualFold(s, value)
+		return MatchEntry(s, value)
 	})
 }
 
@@ -107,12 +125,15 @@ func (bl BlackList) IsBlockAll() bool {
 
 // Validate checks that the blacklist is well-formed.
 func (bl BlackList) Validate() error {
-	if bl.Contains("*") && len(bl) > 1 {
+	if err := ValidateRegexEntries(bl); err != nil {
+		return err
+	}
+	if slices.Contains(bl, "*") && len(bl) > 1 {
 		return fmt.Errorf("wildcard '*' cannot be used with other values in the blacklist")
 	}
 	seen := make(map[string]struct{}, len(bl))
 	for _, v := range bl {
-		normalized := strings.ToLower(v)
+		normalized := listEntryDedupKey(v)
 		if _, ok := seen[normalized]; ok {
 			return fmt.Errorf("duplicate value '%s' in blacklist", v)
 		}
@@ -144,6 +165,7 @@ type Key struct {
 	Enabled                *bool                   `json:"enabled,omitempty"`                   // Whether the key is active (default:true)
 	UseForBatchAPI         *bool                   `json:"use_for_batch_api,omitempty"`         // Whether this key can be used for batch API operations (default:false for new keys, migrated keys default to true)
 	UseAnthropicEndpoints  *bool                   `json:"use_anthropic_endpoints,omitempty"`   // Whether to use anthropic endpoints for this key
+	UseOpenAIEndpoints     *bool                   `json:"use_openai_endpoints,omitempty"`      // Whether to use OpenAI-compatible endpoints for this key
 	ConfigHash             string                  `json:"config_hash,omitempty"`               // Hash of config.json version, used for change detection
 	Status                 KeyStatusType           `json:"status,omitempty"`                    // Status of key
 	Description            string                  `json:"description,omitempty"`               // Description of key
@@ -234,6 +256,7 @@ type AliasConfig struct {
 	// a field name shared by multiple same-depth anonymous structs.
 	ProjectID             *SecretVar `json:"project_id,omitempty"`
 	UseAnthropicEndpoints *bool      `json:"use_anthropic_endpoints,omitempty"` // Whether to use anthropic endpoints for this alias
+	UseOpenAIEndpoints    *bool      `json:"use_openai_endpoints,omitempty"`    // Whether to use OpenAI-compatible endpoints for this alias
 
 	*AzureAliasCfg
 	*VertexAliasCfg
@@ -252,6 +275,7 @@ func (ac AliasConfig) isLegacyShape() bool {
 		ac.Region == nil &&
 		ac.ProjectID == nil &&
 		ac.UseAnthropicEndpoints == nil &&
+		ac.UseOpenAIEndpoints == nil &&
 		ac.AzureAliasCfg == nil &&
 		ac.VertexAliasCfg == nil &&
 		ac.BedrockAliasCfg == nil &&

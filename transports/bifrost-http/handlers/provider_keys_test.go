@@ -14,6 +14,7 @@ import (
 	"github.com/capsohq/bifrost/core/schemas"
 	"github.com/capsohq/bifrost/framework/configstore"
 	"github.com/capsohq/bifrost/transports/bifrost-http/lib"
+	"github.com/stretchr/testify/require"
 	"github.com/valyala/fasthttp"
 )
 
@@ -792,4 +793,25 @@ func ecTestPEM(t *testing.T) string {
 		t.Fatalf("marshal ec: %v", err)
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}))
+}
+
+// TestMergeUpdatedKey_MaskedQueryURLRestoresStoredURL: a service URL carrying a
+// query credential is shown masked; sending that masked value back on update must
+// keep the stored URL, credential included, rather than store the mask.
+func TestMergeUpdatedKey_MaskedQueryURLRestoresStoredURL(t *testing.T) {
+	h := &ProviderHandler{}
+	stored := schemas.Key{
+		ID: "k", Name: "vllm", Value: *schemas.NewSecretVar(""),
+		VLLMKeyConfig: &schemas.VLLMKeyConfig{URL: *schemas.NewSecretVar("https://vllm.example/v1?token=sentinel-7f3a"), ModelName: "m"},
+	}
+	masked := stored.VLLMKeyConfig.URL.RedactedServiceURL()
+	require.True(t, masked.IsMaskedPlaceholder())
+	require.NotContains(t, masked.GetValue(), "sentinel-7f3a")
+	update := stored
+	cfg := *stored.VLLMKeyConfig
+	cfg.URL = *masked
+	update.VLLMKeyConfig = &cfg
+	merged, err := h.mergeUpdatedKey(stored, update)
+	require.NoError(t, err)
+	require.Equal(t, "https://vllm.example/v1?token=sentinel-7f3a", merged.VLLMKeyConfig.URL.GetValue())
 }

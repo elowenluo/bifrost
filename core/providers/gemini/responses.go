@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strconv"
@@ -150,7 +151,7 @@ func ToGeminiResponsesRequestWithImageURLSchemes(ctx *schemas.BifrostContext, bi
 		if err != nil {
 			return nil, err
 		}
-		geminiReq.ExtraParams = bifrostReq.Params.ExtraParams
+		geminiReq.ExtraParams = responsesExtraParamsWithoutGenerationConfigKeys(bifrostReq.Params.ExtraParams)
 		includeServerSideToolInvocations := bifrostReq.Params.IncludeServerSideToolInvocations != nil && *bifrostReq.Params.IncludeServerSideToolInvocations
 		// Handle tool-related parameters
 		if len(bifrostReq.Params.Tools) > 0 {
@@ -2710,6 +2711,7 @@ func convertGeminiContentsToResponsesMessages(contents []Content) []schemas.Resp
 						case p.FileData != nil:
 							block = convertGeminiFileDataToContentBlock(p.FileData)
 						}
+						applyGeminiPartMediaResolution(block, p.MediaResolution)
 						if block != nil {
 							blocks = append(blocks, *block)
 						}
@@ -2780,6 +2782,7 @@ func convertGeminiContentsToResponsesMessages(contents []Content) []schemas.Resp
 			case part.InlineData != nil:
 				// Handle inline data (images, audio, files)
 				block := convertGeminiInlineDataToContentBlock(part.InlineData)
+				applyGeminiPartMediaResolution(block, part.MediaResolution)
 				if block != nil {
 					msg := schemas.ResponsesMessage{
 						Role: role,
@@ -2794,6 +2797,7 @@ func convertGeminiContentsToResponsesMessages(contents []Content) []schemas.Resp
 			case part.FileData != nil:
 				// Handle file data (URI-based)
 				block := convertGeminiFileDataToContentBlock(part.FileData)
+				applyGeminiPartMediaResolution(block, part.MediaResolution)
 				if block != nil {
 					msg := schemas.ResponsesMessage{
 						Role: role,
@@ -2809,6 +2813,21 @@ func convertGeminiContentsToResponsesMessages(contents []Content) []schemas.Resp
 	}
 
 	return messages
+}
+
+// applyGeminiPartMediaResolution copies a part's per-part media resolution onto the content
+// block that part became. Only inlineData/fileData parts carry one: it describes how the input
+// media is tokenized, so a text, thought or functionCall part has nothing to resolve. Callers
+// therefore stamp only the media branches, mirroring the outbound guard in
+// convertContentBlockToGeminiPart.
+func applyGeminiPartMediaResolution(block *schemas.ResponsesMessageContentBlock, mr *PartMediaResolution) {
+	if block == nil || mr == nil {
+		return
+	}
+	block.MediaResolution = &schemas.MediaResolution{Level: mr.Level}
+	if mr.NumTokens != nil {
+		block.MediaResolution.NumTokens = new(*mr.NumTokens)
+	}
 }
 
 // convertGeminiInlineDataToContentBlock converts Gemini inline data (blob) to content block
@@ -3941,41 +3960,66 @@ func (r *GeminiGenerationRequest) convertParamsToGenerationConfigResponses(param
 		}
 	}
 
+	// Read-only: the request's ExtraParams are shared across retry and fallback
+	// attempts, and this conversion runs once per attempt. Deleting consumed keys
+	// here made the second attempt lose mediaResolution, topK, penalties and stop
+	// sequences. The consumed keys are filtered out when the outbound ExtraParams
+	// are built (see responsesExtraParamsWithoutGenerationConfigKeys).
 	if params.ExtraParams != nil {
 		if topK, ok := params.ExtraParams["top_k"]; ok {
-			delete(params.ExtraParams, "top_k")
 			if val, success := schemas.SafeExtractInt(topK); success {
 				config.TopK = schemas.Ptr(val)
 			}
 		}
 		if frequencyPenalty, ok := params.ExtraParams["frequency_penalty"]; ok {
-			delete(params.ExtraParams, "frequency_penalty")
 			if val, success := schemas.SafeExtractFloat64(frequencyPenalty); success {
 				config.FrequencyPenalty = schemas.Ptr(val)
 			}
 		}
 		if presencePenalty, ok := params.ExtraParams["presence_penalty"]; ok {
-			delete(params.ExtraParams, "presence_penalty")
 			if val, success := schemas.SafeExtractFloat64(presencePenalty); success {
 				config.PresencePenalty = schemas.Ptr(val)
 			}
 		}
 		if stopSequences, ok := params.ExtraParams["stop_sequences"]; ok {
-			delete(params.ExtraParams, "stop_sequences")
 			if val, success := schemas.SafeExtractStringSlice(stopSequences); success {
 				config.StopSequences = val
 			}
 		}
 		if mediaResolution, ok := params.ExtraParams["media_resolution"]; ok {
-			delete(params.ExtraParams, "media_resolution")
 			if val, success := schemas.SafeExtractString(mediaResolution); success {
 				config.MediaResolution = val
 			}
 		}
-
 	}
 
 	return config, nil
+}
+
+// responsesGenerationConfigExtraParamKeys lists the ExtraParams keys that
+// convertParamsToGenerationConfigResponses maps into generationConfig. They must
+// not also be merged verbatim into the wire body: Gemini rejects unknown
+// snake_case top-level fields.
+var responsesGenerationConfigExtraParamKeys = []string{
+	"top_k",
+	"frequency_penalty",
+	"presence_penalty",
+	"stop_sequences",
+	"media_resolution",
+}
+
+// responsesExtraParamsWithoutGenerationConfigKeys returns the ExtraParams to
+// forward on the wire, without the keys already mapped into generationConfig.
+// It always returns a copy (nil stays nil): the caller later removes
+// safety_settings and cached_content from the outbound map, and aliasing the
+// source map would drop those keys from the Bifrost request for the next
+// retry/fallback attempt.
+func responsesExtraParamsWithoutGenerationConfigKeys(extraParams map[string]interface{}) map[string]interface{} {
+	filtered := maps.Clone(extraParams)
+	maps.DeleteFunc(filtered, func(key string, _ interface{}) bool {
+		return slices.Contains(responsesGenerationConfigExtraParamKeys, key)
+	})
+	return filtered
 }
 
 // modelSupportsToolCombination reports whether a model can accept built-in tools (Google
@@ -4379,6 +4423,10 @@ func convertResponsesMessagesToGeminiContents(messages []schemas.ResponsesMessag
 	// hoisted into systemInstruction; a system turn that arrives after the conversation has
 	// started is inlined in place instead -- see inlineGeminiSystemReminder.
 	seenNonSystemMessage := false
+	// Reminders that arrived inside a function response group, held until the group is
+	// flushed: Gemini needs every function response of a parallel call in one content, so a
+	// reminder between two of them cannot be emitted in place without splitting the group.
+	var deferredReminders []Content
 
 	for i, msg := range messages {
 		isSystemMessage := msg.Role != nil &&
@@ -4439,7 +4487,9 @@ func convertResponsesMessagesToGeminiContents(messages []schemas.ResponsesMessag
 			if err != nil {
 				return nil, nil, err
 			}
-			if inlined != nil {
+			if inlined != nil && geminiFunctionOutputFollows(messages, i) {
+				deferredReminders = append(deferredReminders, *inlined)
+			} else if inlined != nil {
 				// Flush first: the reminder is a user turn of its own and must not be filed
 				// behind function responses that precede it.
 				if len(pendingFunctionResponseParts) > 0 {
@@ -4449,6 +4499,10 @@ func convertResponsesMessagesToGeminiContents(messages []schemas.ResponsesMessag
 					})
 					pendingFunctionResponseParts = nil
 				}
+				// Reminders deferred inside that group came first, so they go first: a
+				// newer instruction must not be followed by the one it replaces.
+				contents = append(contents, deferredReminders...)
+				deferredReminders = nil
 				contents = append(contents, *inlined)
 			}
 			continue
@@ -4494,6 +4548,10 @@ func convertResponsesMessagesToGeminiContents(messages []schemas.ResponsesMessag
 				Role:  "user", // Function responses use "user" role in Gemini
 			})
 			pendingFunctionResponseParts = nil
+		}
+		if !isFunctionOutput && len(deferredReminders) > 0 {
+			contents = append(contents, deferredReminders...)
+			deferredReminders = nil
 		}
 
 		// Handle regular messages
@@ -4696,6 +4754,8 @@ func convertResponsesMessagesToGeminiContents(messages []schemas.ResponsesMessag
 							Role:  "user",
 						})
 						pendingFunctionResponseParts = nil
+						contents = append(contents, deferredReminders...)
+						deferredReminders = nil
 					}
 
 					continue // Skip normal content handling
@@ -4731,12 +4791,51 @@ func convertResponsesMessagesToGeminiContents(messages []schemas.ResponsesMessag
 			contents = append(contents, content)
 		}
 	}
+	// A group that was never flushed still releases the reminders held for it.
+	contents = append(contents, deferredReminders...)
 
 	return contents, systemInstruction, nil
 }
 
-// convertContentBlockToGeminiPart converts a content block to Gemini part
+// geminiFunctionOutputFollows reports whether the first message after index i that is not a
+// system/developer turn is a function_call_output, i.e. whether a reminder at i sits inside a
+// function response group.
+func geminiFunctionOutputFollows(messages []schemas.ResponsesMessage, i int) bool {
+	for _, next := range messages[i+1:] {
+		if next.Role != nil &&
+			(*next.Role == schemas.ResponsesInputMessageRoleSystem || *next.Role == schemas.ResponsesInputMessageRoleDeveloper) {
+			continue
+		}
+		return next.Type != nil && *next.Type == schemas.ResponsesMessageTypeFunctionCallOutput && next.ResponsesToolMessage != nil
+	}
+	return false
+}
+
+// convertContentBlockToGeminiPart converts a content block to Gemini part, re-attaching any
+// per-part media resolution the block carries.
 func convertContentBlockToGeminiPart(block schemas.ResponsesMessageContentBlock, allowedImageURLSchemes ...string) (*Part, error) {
+	part, err := buildGeminiPartFromContentBlock(block, allowedImageURLSchemes...)
+	if err != nil || part == nil {
+		return part, err
+	}
+
+	// Only a media part can carry a resolution. The text, reasoning, refusal and compaction
+	// branches below all produce text-only parts, and Gemini rejects mediaResolution there, so
+	// the guard is on what the part became rather than on the block type it came from.
+	// The value is rebuilt rather than aliased: the same Bifrost request is converted once per
+	// retry and per fallback attempt, so no attempt may hand a later one a shared pointer.
+	if block.MediaResolution != nil && (part.InlineData != nil || part.FileData != nil) {
+		part.MediaResolution = &PartMediaResolution{Level: block.MediaResolution.Level}
+		if n := block.MediaResolution.NumTokens; n != nil {
+			part.MediaResolution.NumTokens = new(*n)
+		}
+	}
+
+	return part, nil
+}
+
+// buildGeminiPartFromContentBlock maps a content block onto the matching Gemini part shape.
+func buildGeminiPartFromContentBlock(block schemas.ResponsesMessageContentBlock, allowedImageURLSchemes ...string) (*Part, error) {
 	if len(allowedImageURLSchemes) == 0 {
 		allowedImageURLSchemes = defaultGeminiImageURLSchemes
 	}

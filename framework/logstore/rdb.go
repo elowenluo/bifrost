@@ -331,20 +331,10 @@ func (s *RDBLogStore) applyFilters(baseQuery *gorm.DB, filters SearchFilters) *g
 		baseQuery = baseQuery.Where("routing_rule_id IN ?", filters.RoutingRuleIDs)
 	}
 	if len(filters.TeamIDs) > 0 {
-		if s.db.Dialector.Name() == "postgres" {
-			sql, args := multiValueDimensionFilterSQL("team_id", "team_ids", filters.TeamIDs)
-			baseQuery = baseQuery.Where(sql, args...)
-		} else {
-			baseQuery = baseQuery.Where("team_id IN ?", filters.TeamIDs)
-		}
+		baseQuery = s.whereMultiValueDimension(baseQuery, "team_id", "team_ids", filters.TeamIDs)
 	}
 	if len(filters.CustomerIDs) > 0 {
-		if s.db.Dialector.Name() == "postgres" {
-			sql, args := multiValueDimensionFilterSQL("customer_id", "customer_ids", filters.CustomerIDs)
-			baseQuery = baseQuery.Where(sql, args...)
-		} else {
-			baseQuery = baseQuery.Where("customer_id IN ?", filters.CustomerIDs)
-		}
+		baseQuery = s.whereMultiValueDimension(baseQuery, "customer_id", "customer_ids", filters.CustomerIDs)
 	}
 	if len(filters.UserIDs) > 0 {
 		baseQuery = baseQuery.Where("user_id IN ?", filters.UserIDs)
@@ -355,12 +345,7 @@ func (s *RDBLogStore) applyFilters(baseQuery *gorm.DB, filters SearchFilters) *g
 		baseQuery = baseQuery.Where("project_id IN ?", filters.ProjectIDs)
 	}
 	if len(filters.BusinessUnitIDs) > 0 {
-		if s.db.Dialector.Name() == "postgres" {
-			sql, args := multiValueDimensionFilterSQL("business_unit_id", "business_unit_ids", filters.BusinessUnitIDs)
-			baseQuery = baseQuery.Where(sql, args...)
-		} else {
-			baseQuery = baseQuery.Where("business_unit_id IN ?", filters.BusinessUnitIDs)
-		}
+		baseQuery = s.whereMultiValueDimension(baseQuery, "business_unit_id", "business_unit_ids", filters.BusinessUnitIDs)
 	}
 	if len(filters.UserAgents) > 0 {
 		baseQuery = baseQuery.Where("user_agent IN ?", filters.UserAgents)
@@ -908,6 +893,7 @@ func stripNonBillingPayloadBytes(l *Log) {
 	l.ImageGenerationOutput = ""
 }
 
+// searchLogs runs scoped log searches with the requested projection.
 func (s *RDBLogStore) searchLogs(ctx context.Context, filters SearchFilters, pagination PaginationOptions, selectColumns string) (*SearchResult, error) {
 	// Build order clause up front (needed by the data goroutine).
 	direction := "DESC"
@@ -1184,6 +1170,7 @@ func (s *RDBLogStore) GetSessionSummary(ctx context.Context, sessionID string) (
 	}, nil
 }
 
+// normalizeAggregateTimestamp normalizes driver-specific timestamp values for aggregate responses.
 func normalizeAggregateTimestamp(value any) string {
 	switch v := value.(type) {
 	case nil:
@@ -2460,6 +2447,7 @@ type latencyHistogramBucketData struct {
 	overheads []float64
 }
 
+// toBucket converts accumulated latency values into the response bucket.
 func (bd *latencyHistogramBucketData) toBucket(ts int64) LatencyHistogramBucket {
 	b := LatencyHistogramBucket{
 		Timestamp:     time.Unix(ts, 0).UTC(),
@@ -4589,8 +4577,53 @@ func (s *RDBLogStore) DeleteLogs(ctx context.Context, ids []string) error {
 // MCP Tool Log Methods
 // ============================================================================
 
+// whereMultiValueDimension filters a dimension that has both a scalar id column
+// and a JSON-array column: a row matches through either, on every dialect with
+// a JSON-array predicate (Postgres, SQLite, ClickHouse). Others match through
+// the scalar column only. Shared by applyFilters and applyMCPFilters.
+func (s *RDBLogStore) whereMultiValueDimension(q *gorm.DB, scalarCol, arrayCol string, ids []string) *gorm.DB {
+	switch s.db.Dialector.Name() {
+	case "postgres":
+		sql, args := multiValueDimensionFilterSQL(scalarCol, arrayCol, ids)
+		return q.Where(sql, args...)
+	case "sqlite":
+		// The CASE rewrites NULL/malformed/non-array values to '[]' so json_each
+		// cannot raise "malformed JSON" (see sqliteDimensionFanoutFrom).
+		return q.Where(fmt.Sprintf("(%[1]s IN ? OR EXISTS (SELECT 1 FROM json_each(CASE WHEN %[2]s IS NOT NULL AND json_valid(%[2]s) AND json_type(%[2]s) = 'array' THEN %[2]s ELSE '[]' END) AS mv WHERE mv.value IN ?))",
+			scalarCol, arrayCol), ids, ids)
+	case "clickhouse":
+		// The array column is Nullable(String) JSON text; JSONExtract yields []
+		// for NULL-coalesced, malformed or non-array input.
+		return q.Where(fmt.Sprintf("(%[1]s IN ? OR arrayExists(x -> x IN ?, JSONExtract(ifNull(%[2]s, ''), 'Array(String)')))",
+			scalarCol, arrayCol), ids, ids)
+	}
+	return q.Where(scalarCol+" IN ?", ids)
+}
+
 // applyMCPFilters applies search filters to a GORM query for MCP tool logs
 func (s *RDBLogStore) applyMCPFilters(baseQuery *gorm.DB, filters MCPToolLogSearchFilters) *gorm.DB {
+	if len(filters.UserIDs) > 0 {
+		baseQuery = baseQuery.Where("user_id IN ?", filters.UserIDs)
+	}
+	// Team, customer and business unit match the scalar column or the JSON-array
+	// column, as in applyFilters: the enterprise user/access-profile path records
+	// every membership in the array and may leave the scalar NULL.
+	if len(filters.TeamIDs) > 0 {
+		baseQuery = s.whereMultiValueDimension(baseQuery, "team_id", "team_ids", filters.TeamIDs)
+	}
+	if len(filters.CustomerIDs) > 0 {
+		baseQuery = s.whereMultiValueDimension(baseQuery, "customer_id", "customer_ids", filters.CustomerIDs)
+	}
+	if len(filters.BusinessUnitIDs) > 0 {
+		baseQuery = s.whereMultiValueDimension(baseQuery, "business_unit_id", "business_unit_ids", filters.BusinessUnitIDs)
+	}
+	if len(filters.ProjectIDs) > 0 {
+		baseQuery = baseQuery.Where("project_id IN ?", filters.ProjectIDs)
+	}
+	if len(filters.DeviceIDs) > 0 {
+		baseQuery = baseQuery.Where("device_id IN ?", filters.DeviceIDs)
+	}
+
 	if len(filters.ToolNames) > 0 {
 		baseQuery = baseQuery.Where("tool_name IN ?", filters.ToolNames)
 	}
@@ -4895,6 +4928,7 @@ func (s *RDBLogStore) GetAvailableToolNames(ctx context.Context, limit int, quer
 	return toolNames, nil
 }
 
+// GetAvailableServerLabels lists MCP server labels matching the filter search.
 func (s *RDBLogStore) GetAvailableServerLabels(ctx context.Context, limit int, query string) ([]string, error) {
 	cutoff := time.Now().UTC().AddDate(0, 0, -defaultFilterDataCutoffDays)
 	var serverLabels []string
@@ -4943,6 +4977,7 @@ func (s *RDBLogStore) GetAvailableMCPApps(ctx context.Context, limit int, query 
 	return apps, nil
 }
 
+// GetAvailableMCPVirtualKeys lists virtual keys represented in visible MCP logs.
 func (s *RDBLogStore) GetAvailableMCPVirtualKeys(ctx context.Context, limit int, query string) ([]MCPToolLog, error) {
 	cutoff := time.Now().UTC().AddDate(0, 0, -defaultFilterDataCutoffDays)
 	var logs []MCPToolLog
