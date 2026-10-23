@@ -870,6 +870,13 @@ func TestClickHouseFlushSkipsSupersededProcessingRow(t *testing.T) {
 func TestClickHouseFinalAfterLightweightDelete(t *testing.T) {
 	store := trySetupClickHouseStore(t)
 	ctx := context.Background()
+	// The two-version precondition below holds only until a background merge
+	// collapses the parts, which on a fast host happens before the count. Hold merges
+	// on logs while the versions are created and counted, so the resurrection case
+	// this test pins is actually exercised; they resume before the deletes, whose
+	// mutations need them.
+	require.NoError(t, store.db.Exec("SYSTEM STOP MERGES logs").Error)
+	t.Cleanup(func() { _ = store.db.Exec("SYSTEM START MERGES logs").Error })
 	ts := time.Now().UTC().Truncate(time.Millisecond)
 
 	for _, id := range []string{"ch-final-1", "ch-final-2", "ch-final-3"} {
@@ -882,6 +889,7 @@ func TestClickHouseFinalAfterLightweightDelete(t *testing.T) {
 		require.Equal(t, int64(1), chCountRows(t, store.db, "logs", id), "FINAL collapses them to one logical row")
 	}
 	require.NoError(t, store.BatchCreateMCPToolLogsIfNotExists(ctx, []*MCPToolLog{chTestMCPToolLog("ch-final-mcp", ts)}))
+	require.NoError(t, store.db.Exec("SYSTEM START MERGES logs").Error)
 
 	logsBefore := chMutationIDs(t, store.db, "logs")
 	mcpBefore := chMutationIDs(t, store.db, "mcp_tool_logs")
