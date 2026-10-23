@@ -642,7 +642,8 @@ const realtimeTranscriptionSessionUpdate schemas.RealtimeEventType = "transcript
 // session.update and transcription_session.update alike, through both the GA
 // audio.input.transcription and the legacy input_audio_transcription shapes, and
 // both when an update carries both. A shape that is present but does not parse is
-// refused, so it cannot reach the provider uninspected.
+// refused, so it cannot reach the provider uninspected, and so is an update that
+// sets session.model or a session type other than transcription.
 func pinRealtimeTranscriptionModel(event *schemas.BifrostRealtimeEvent, model string, transcriptionSession bool) error {
 	if !transcriptionSession || event == nil || event.Session == nil || strings.TrimSpace(model) == "" {
 		return nil
@@ -650,8 +651,19 @@ func pinRealtimeTranscriptionModel(event *schemas.BifrostRealtimeEvent, model st
 	if event.Type != schemas.RTEventSessionUpdate && event.Type != realtimeTranscriptionSessionUpdate {
 		return nil
 	}
+	// The session itself cannot be moved off transcription: a session model or a
+	// session type other than transcription would serve a model the pin never sees.
+	if strings.TrimSpace(event.Session.Model) != "" {
+		return fmt.Errorf("%s cannot set session.model on a transcription session", event.Type)
+	}
 	if event.Session.ExtraParams == nil {
 		return nil
+	}
+	if typeRaw, ok := event.Session.ExtraParams["type"]; ok && !isJSONNull(typeRaw) {
+		var sessionType string
+		if err := json.Unmarshal(typeRaw, &sessionType); err != nil || sessionType != "transcription" {
+			return fmt.Errorf("%s cannot change the type of a transcription session", event.Type)
+		}
 	}
 	pinnedModel, err := json.Marshal(model)
 	if err != nil {

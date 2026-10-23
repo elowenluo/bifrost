@@ -333,6 +333,21 @@ func TestPinRealtimeTranscriptionModelCoversEveryShape(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "session.model is refused",
+			message: `{"type":"session.update","session":{"model":"gpt-realtime"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "switching to a realtime session is refused",
+			message: `{"type":"session.update","session":{"type":"realtime","audio":{"input":{"transcription":{"model":"gpt-4o-transcribe"}}}}}`,
+			wantErr: true,
+		},
+		{
+			name:       "transcription session type is accepted",
+			message:    `{"type":"session.update","session":{"type":"transcription","audio":{"input":{"transcription":{"model":"gpt-4o-transcribe"}}}}}`,
+			wantModels: map[string]string{"audio": admitted},
+		},
+		{
 			name:       "transcription disabled with null stays null",
 			message:    `{"type":"session.update","session":{"input_audio_transcription":null}}`,
 			wantModels: map[string]string{},
