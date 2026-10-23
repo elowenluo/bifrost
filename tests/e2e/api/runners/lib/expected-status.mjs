@@ -15,3 +15,13 @@ export const isExpectedStatus = (name, code) => {
   if (m[1] === "4XX") return code >= 400 && code <= 499;
   return code === Number(m[1]);
 };
+
+// The single definition of "this execution failed", shared by the failure analyzer
+// and the harness viewer so the report and the UI never disagree about a row. A
+// passing assertion does not excuse an unexpected status: an HTTP 500 that still
+// served a JSON content type is a failure, and so is a missing or zero-status response.
+export const isFailedExecution = (name, code, assertFailCount, hasResponse) =>
+  assertFailCount > 0 ||
+  code === 0 ||
+  !hasResponse ||
+  (code >= 400 && !isExpectedStatus(name, code));

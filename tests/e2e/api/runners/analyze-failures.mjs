@@ -12,7 +12,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { readReport } from "./lib/read-report.mjs";
-import { isExpectedStatus } from "./lib/expected-status.mjs";
+import { isFailedExecution } from "./lib/expected-status.mjs";
 
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((acc, cur, i, arr) => {
@@ -70,13 +70,9 @@ const truncate = (s, n) => {
 // See lib/expected-status.mjs: rows tagged [EXPECT-400]/[EXPECT-4XX]/[EXPECT-202]
 // assert a non-200 status on purpose, so status alone must not mark them failed.
 
-// Single definition of "this execution failed", shared by the coverage matrix pass
-// and the failure-listing pass so the two can never disagree about a row.
-const isFailedExecution = (name, code, assertFailCount, hasResponse) =>
-  assertFailCount > 0 ||
-  code === 0 ||
-  !hasResponse ||
-  (code >= 400 && !isExpectedStatus(name, code));
+// isFailedExecution (lib/expected-status.mjs) is the single definition of "this
+// execution failed", shared by the coverage matrix pass, the failure-listing pass and
+// the harness viewer so they can never disagree about a row.
 
 const categorize = (code, body, bifrostLines) => {
   // Check body content first - Bifrost's "failed to get config for provider" can manifest as
