@@ -45,6 +45,22 @@ func legacyRealtimeSessionToClientSecretBody(body []byte) ([]byte, *schemas.Bifr
 	if err := json.Unmarshal(body, &legacy); err != nil || legacy == nil {
 		return nil, newRealtimeClientSecretHandlerError(fasthttp.StatusBadRequest, "invalid_request_error", "request body must be a JSON object", err)
 	}
+	// Base accepted the beta fields nested under "session" too, and flattened them
+	// with top-level fields taking precedence; do the same before translating.
+	if nested, ok := legacy["session"]; ok {
+		delete(legacy, "session")
+		if !isJSONNull(nested) {
+			var session map[string]json.RawMessage
+			if err := json.Unmarshal(nested, &session); err != nil {
+				return nil, newRealtimeClientSecretHandlerError(fasthttp.StatusBadRequest, "invalid_request_error", "session must be an object", err)
+			}
+			for field, value := range session {
+				if _, set := legacy[field]; !set {
+					legacy[field] = value
+				}
+			}
+		}
+	}
 	session := map[string]json.RawMessage{"type": json.RawMessage(`"realtime"`)}
 	input := map[string]json.RawMessage{}
 	output := map[string]json.RawMessage{}
@@ -64,7 +80,14 @@ func legacyRealtimeSessionToClientSecretBody(body []byte) ([]byte, *schemas.Bifr
 				out["expires_after"] = secret.ExpiresAfter
 			}
 		case "modalities":
-			session["output_modalities"] = value
+			modalities, err := legacyRealtimeModalitiesToGA(value)
+			if err != nil {
+				return nil, newRealtimeClientSecretHandlerError(fasthttp.StatusBadRequest, "invalid_request_error", "modalities must be an array of strings", err)
+			}
+			session["output_modalities"] = modalities
+		case "temperature":
+			// The GA realtime session has no temperature; forwarding it would make
+			// the upstream reject the whole request.
 		case "max_response_output_tokens":
 			session["max_output_tokens"] = value
 		case "voice", "speed":
@@ -110,6 +133,38 @@ func legacyRealtimeSessionToClientSecretBody(body []byte) ([]byte, *schemas.Bifr
 	return converted, nil
 }
 
+// legacyRealtimeModalitiesToGA maps beta modalities to GA output_modalities. Beta
+// audio sessions always listed text too (the transcript came with the audio), but
+// GA's audio mode already includes the transcript and rejects audio and text
+// together, so any beta list naming audio becomes ["audio"]; text-only stays.
+func legacyRealtimeModalitiesToGA(value json.RawMessage) (json.RawMessage, error) {
+	var modalities []string
+	if err := json.Unmarshal(value, &modalities); err != nil {
+		return nil, err
+	}
+	for _, modality := range modalities {
+		if modality == "audio" {
+			return json.RawMessage(`["audio"]`), nil
+		}
+	}
+	return value, nil
+}
+
+// gaRealtimeModalitiesToLegacy maps GA output_modalities back to the beta form, in
+// which an audio session reports ["audio","text"].
+func gaRealtimeModalitiesToLegacy(value json.RawMessage) json.RawMessage {
+	var modalities []string
+	if json.Unmarshal(value, &modalities) != nil {
+		return value
+	}
+	for _, modality := range modalities {
+		if modality == "audio" {
+			return json.RawMessage(`["audio","text"]`)
+		}
+	}
+	return value
+}
+
 func legacyRealtimeAudioFormat(value json.RawMessage) (json.RawMessage, error) {
 	var name string
 	if err := json.Unmarshal(value, &name); err != nil {
@@ -151,7 +206,7 @@ func clientSecretToLegacyRealtimeSession(body []byte) []byte {
 		case "type", "object":
 			// The beta object has no type, and its object is always realtime.session.
 		case "output_modalities":
-			legacy["modalities"] = value
+			legacy["modalities"] = gaRealtimeModalitiesToLegacy(value)
 		case "max_output_tokens":
 			legacy["max_response_output_tokens"] = value
 		case "audio":

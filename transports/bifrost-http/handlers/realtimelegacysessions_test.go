@@ -24,16 +24,31 @@ func TestLegacyRealtimeSessionRequestTranslatesToGAClientSecret(t *testing.T) {
 	legacy := `{"model":"gpt-realtime","voice":"alloy","speed":1.1,"modalities":["audio","text"],"instructions":"be brief",
 	"input_audio_format":"pcm16","output_audio_format":"g711_ulaw","input_audio_transcription":{"model":"whisper-1"},
 	"turn_detection":{"type":"server_vad"},"input_audio_noise_reduction":{"type":"near_field"},"tools":[{"type":"function","name":"f"}],
-	"tool_choice":"auto","max_response_output_tokens":256,"client_secret":{"expires_after":{"anchor":"created_at","seconds":600}}}`
+	"tool_choice":"auto","max_response_output_tokens":256,"temperature":0.8,"client_secret":{"expires_after":{"anchor":"created_at","seconds":600}}}`
 	got, err := legacyRealtimeSessionToClientSecretBody([]byte(legacy))
 	require.Nil(t, err)
 	require.JSONEq(t, `{
 		"expires_after":{"anchor":"created_at","seconds":600},
-		"session":{"type":"realtime","model":"gpt-realtime","instructions":"be brief","output_modalities":["audio","text"],
+		"session":{"type":"realtime","model":"gpt-realtime","instructions":"be brief","output_modalities":["audio"],
 			"tools":[{"type":"function","name":"f"}],"tool_choice":"auto","max_output_tokens":256,
 			"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"transcription":{"model":"whisper-1"},
 				"turn_detection":{"type":"server_vad"},"noise_reduction":{"type":"near_field"}},
 				"output":{"format":{"type":"audio/pcmu"},"voice":"alloy","speed":1.1}}}}`, string(got))
+
+	// Text-only stays text-only.
+	got, err = legacyRealtimeSessionToClientSecretBody([]byte(`{"model":"gpt-realtime","modalities":["text"]}`))
+	require.Nil(t, err)
+	require.JSONEq(t, `{"session":{"type":"realtime","model":"gpt-realtime","output_modalities":["text"]}}`, string(got))
+
+	// Fields nested under "session" are flattened first, top-level fields winning.
+	got, err = legacyRealtimeSessionToClientSecretBody([]byte(`{"session":{"model":"openai/gpt-realtime","instructions":"Keep answers brief"}}`))
+	require.Nil(t, err)
+	require.JSONEq(t, `{"session":{"type":"realtime","model":"openai/gpt-realtime","instructions":"Keep answers brief"}}`, string(got))
+	got, err = legacyRealtimeSessionToClientSecretBody([]byte(`{"model":"openai/gpt-realtime","voice":"ash","session":{"model":"openai/other","voice":"alloy","instructions":"nested"}}`))
+	require.Nil(t, err)
+	require.JSONEq(t, `{"session":{"type":"realtime","model":"openai/gpt-realtime","instructions":"nested","audio":{"output":{"voice":"ash"}}}}`, string(got))
+	_, err = legacyRealtimeSessionToClientSecretBody([]byte(`{"session":"gpt-realtime"}`))
+	require.NotNil(t, err)
 
 	_, err = legacyRealtimeSessionToClientSecretBody([]byte(`{"model":"gpt-realtime","input_audio_format":"mp3"}`))
 	require.NotNil(t, err, "an unknown beta audio format must be refused, not forwarded")
@@ -46,7 +61,7 @@ func TestGAClientSecretResponseTranslatesToLegacyRealtimeSession(t *testing.T) {
 	"model":"gpt-realtime","output_modalities":["audio"],"instructions":"be brief","max_output_tokens":"inf",
 	"audio":{"input":{"format":{"type":"audio/pcm","rate":24000},"transcription":{"model":"whisper-1"},"turn_detection":{"type":"server_vad"}},
 	"output":{"format":{"type":"audio/pcma"},"voice":"alloy"}}}}`
-	require.JSONEq(t, `{"id":"sess_1","object":"realtime.session","model":"gpt-realtime","modalities":["audio"],"instructions":"be brief",
+	require.JSONEq(t, `{"id":"sess_1","object":"realtime.session","model":"gpt-realtime","modalities":["audio","text"],"instructions":"be brief",
 		"max_response_output_tokens":"inf","input_audio_format":"pcm16","output_audio_format":"g711_alaw",
 		"input_audio_transcription":{"model":"whisper-1"},"turn_detection":{"type":"server_vad"},"voice":"alloy",
 		"client_secret":{"value":"ek_123","expires_at":1760000000}}`, string(clientSecretToLegacyRealtimeSession([]byte(ga))))
@@ -89,6 +104,19 @@ func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 		mu.Lock()
 		gotPath, gotBody, gotBeta = r.URL.Path, string(body), r.Header.Get("OpenAI-Beta")
 		mu.Unlock()
+		// Like GA: audio output already carries its transcript, and audio and text
+		// together is an invalid output_modalities combination.
+		var req struct {
+			Session struct {
+				OutputModalities []string `json:"output_modalities"`
+			} `json:"session"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if len(req.Session.OutputModalities) > 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"invalid output_modalities","type":"invalid_request_error"}}`))
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"value":"ek_abc","expires_at":1760000000,"session":{"type":"realtime","object":"realtime.session","id":"sess_9","model":"gpt-realtime","output_modalities":["audio"],"audio":{"output":{"voice":"alloy"}}}}`))
 	}))
@@ -127,7 +155,7 @@ func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 		if path == "/v1/realtime/sessions" {
 			model = "openai/gpt-realtime"
 		}
-		status, out := post(path, `{"model":"`+model+`","voice":"alloy","modalities":["audio"]}`)
+		status, out := post(path, `{"model":"`+model+`","voice":"alloy","modalities":["audio","text"]}`)
 		require.Equal(t, 200, status, "%s: %v", path, out)
 		mu.Lock()
 		require.Equal(t, "/v1/realtime/client_secrets", gotPath, "%s must mint through GA client_secrets", path)
@@ -136,10 +164,14 @@ func TestLegacyRealtimeSessionRoutesMintThroughClientSecrets(t *testing.T) {
 		mu.Unlock()
 		require.Equal(t, "realtime.session", out["object"], path)
 		require.Equal(t, "sess_9", out["id"], path)
-		require.Equal(t, []any{"audio"}, out["modalities"], path)
+		require.Equal(t, []any{"audio", "text"}, out["modalities"], path)
 		require.Equal(t, "alloy", out["voice"], path)
 		require.Equal(t, map[string]any{"value": "ek_abc", "expires_at": float64(1760000000)}, out["client_secret"], path)
 	}
+
+	status, nested := post("/v1/realtime/sessions", `{"session":{"model":"openai/gpt-realtime","instructions":"Keep answers brief"}}`)
+	require.Equal(t, 200, status, "nested legacy session: %v", nested)
+	require.Equal(t, "realtime.session", nested["object"])
 
 	status, out := post("/v1/realtime/client_secrets", `{"session":{"type":"realtime","model":"openai/gpt-realtime"}}`)
 	require.Equal(t, 200, status, "%v", out)
