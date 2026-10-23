@@ -469,6 +469,16 @@ func TestToGeminiRequest_ReminderInsideParallelResponses(t *testing.T) {
 			[]string{"user:[text]", "model:[call:a,call:b]", "user:[response:a,response:b]", "user:[reminder]", "user:[text]"},
 			convert(user, assistant, result("a"), result("b"), sys, text(schemas.ChatMessageRoleUser, "next")),
 			"a reminder after the group stays in place")
+
+		// A reminder deferred inside the group and a newer one after it keep their order,
+		// so the newer instruction is not followed by the one it replaces.
+		req, err := gemini.ToGeminiChatCompletionRequest(&schemas.BifrostContext{}, &schemas.BifrostChatRequest{
+			Provider: schemas.Gemini, Model: "gemini-2.5-flash",
+			Input: []schemas.ChatMessage{user, assistant, result("a"), text(schemas.ChatMessageRoleSystem, reminder+" #1"), result("b"),
+				text(schemas.ChatMessageRoleSystem, reminder+" #2"), text(schemas.ChatMessageRoleUser, "next")},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"#1", "#2"}, reminderOrder(req.Contents, reminder), "chat reminders out of order")
 	})
 
 	t.Run("responses", func(t *testing.T) {
@@ -508,5 +518,27 @@ func TestToGeminiRequest_ReminderInsideParallelResponses(t *testing.T) {
 		require.NotEmpty(t, got)
 		assert.Equal(t, []string{"user:[response:a,response:b]", "user:[reminder]"}, got[len(got)-2:],
 			"a reminder between parallel responses must follow the group: %v", got)
+
+		req, err := gemini.ToGeminiResponsesRequest(&schemas.BifrostContext{}, &schemas.BifrostResponsesRequest{
+			Provider: schemas.Gemini, Model: "gemini-2.5-flash",
+			Input: []schemas.ResponsesMessage{user, call("a", "get_a"), call("b", "get_b"), output("a"),
+				msg(schemas.ResponsesInputMessageRoleSystem, reminder+" #1"), output("b"),
+				msg(schemas.ResponsesInputMessageRoleSystem, reminder+" #2"), msg(schemas.ResponsesInputMessageRoleUser, "next")},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"#1", "#2"}, reminderOrder(req.Contents, reminder), "responses reminders out of order")
 	})
+}
+
+// reminderOrder lists the "#n" tags of the reminder parts in contents, in order.
+func reminderOrder(contents []gemini.Content, reminder string) []string {
+	var order []string
+	for _, c := range contents {
+		for _, p := range c.Parts {
+			if i := strings.Index(p.Text, reminder+" #"); i >= 0 {
+				order = append(order, strings.TrimSpace(p.Text[i+len(reminder)+1:])[:2])
+			}
+		}
+	}
+	return order
 }

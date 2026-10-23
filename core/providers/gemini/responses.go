@@ -4499,6 +4499,10 @@ func convertResponsesMessagesToGeminiContents(messages []schemas.ResponsesMessag
 					})
 					pendingFunctionResponseParts = nil
 				}
+				// Reminders deferred inside that group came first, so they go first: a
+				// newer instruction must not be followed by the one it replaces.
+				contents = append(contents, deferredReminders...)
+				deferredReminders = nil
 				contents = append(contents, *inlined)
 			}
 			continue
