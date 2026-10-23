@@ -1064,3 +1064,59 @@ func TestContextTransport_BufferedLateCancelDoesNotPoisonPool(t *testing.T) {
 		t.Fatalf("connections accepted = %d, want 1: the pooled connection was closed by a late cancellation", got)
 	}
 }
+
+// TestContextTransport_CancelWhileWaitingForAConnection: with every MaxConns slot
+// busy, acquiring a connection waits up to MaxConnWaitTimeout, and fasthttp does not
+// watch the request context during that wait. A cancelled request must return at
+// once instead of being held, along with its worker, until the wait times out.
+func TestContextTransport_CancelWhileWaitingForAConnection(t *testing.T) {
+	hold := make(chan struct{})
+	srv := newScriptedServer(t, func(conn net.Conn, br *bufio.Reader) {
+		if !readRequest(br) {
+			return
+		}
+		<-hold // never answers: the only connection stays busy
+	})
+	t.Cleanup(func() { close(hold) })
+	client := srv.client(10 * time.Second)
+	client.MaxConnsPerHost = 1
+	client.MaxConnWaitTimeout = 10 * time.Second
+
+	// Occupy the single slot.
+	busyCtx, cancelBusy := context.WithCancel(context.Background())
+	defer cancelBusy()
+	busyReq, busyResp := fasthttp.AcquireRequest(), fasthttp.AcquireResponse()
+	busyReq.SetRequestURI("http://test/busy")
+	busyDone := make(chan struct{})
+	go func() {
+		_, _, wait := MakeRequestWithContext(busyCtx, client, busyReq, busyResp)
+		wait()
+		close(busyDone)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for srv.accepted.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	req, resp := fasthttp.AcquireRequest(), fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseRequest(req)
+	defer fasthttp.ReleaseResponse(resp)
+	req.SetRequestURI("http://test/waiting")
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+
+	start := time.Now()
+	_, bifrostErr, wait := MakeRequestWithContext(ctx, client, req, resp)
+	wait()
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("a request cancelled while waiting for a connection returned after %v, want about 100ms", elapsed)
+	}
+	if bifrostErr == nil || bifrostErr.Error.Type == nil || *bifrostErr.Error.Type != schemas.RequestCancelled {
+		t.Fatalf("error = %+v, want a RequestCancelled error", bifrostErr)
+	}
+
+	cancelBusy()
+	<-busyDone
+	fasthttp.ReleaseRequest(busyReq)
+	fasthttp.ReleaseResponse(busyResp)
+}
