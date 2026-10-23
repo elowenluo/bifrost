@@ -219,14 +219,16 @@ func mapBifrostServiceTierToBedrock(tier schemas.BifrostServiceTier) BedrockServ
 	}
 }
 
-// bedrockServiceTierForModel returns a non-default tier only when the model
-// catalog explicitly advertises it. Omitting default/auto selects Bedrock's
-// Standard tier without requiring capability metadata for every model.
+// bedrockServiceTierForModel returns the requested non-default tier unless the model
+// catalog lists the model's tiers without it. Omitting default/auto selects Bedrock's
+// Standard tier without requiring capability metadata for every model. A model the
+// catalog has no tier data for keeps the explicit tier: dropping it would silently
+// change the caller's priority or Flex request, while Bedrock refuses one it cannot serve.
 func bedrockServiceTierForModel(caps schemas.ModelCaps, tier *schemas.BifrostServiceTier) *BedrockServiceTier {
 	if tier == nil || *tier == schemas.BifrostServiceTierDefault || *tier == schemas.BifrostServiceTierAuto {
 		return nil
 	}
-	if !caps.ServiceTierSupported(*tier, false) {
+	if !caps.ServiceTierSupported(*tier, true) {
 		return nil
 	}
 	return &BedrockServiceTier{Type: mapBifrostServiceTierToBedrock(*tier)}

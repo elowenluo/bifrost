@@ -34,7 +34,7 @@ func TestBedrockConvertersGateServiceTierByModelCapability(t *testing.T) {
 		{name: "alias resolves supported priority", model: "friendly-alias", canonicalModel: "priority-model", tier: schemas.BifrostServiceTierPriority, wantTier: schemas.Ptr(BedrockServiceTierTypePriority)},
 		{name: "supported flex", model: "priority-model", tier: schemas.BifrostServiceTierFlex, wantTier: schemas.Ptr(BedrockServiceTierTypeFlex)},
 		{name: "tier omitted from explicit list", model: "flex-only-model", tier: schemas.BifrostServiceTierPriority},
-		{name: "missing capabilities fail closed", model: "unknown-model", tier: schemas.BifrostServiceTierPriority},
+		{name: "missing capabilities keep the explicit tier", model: "unknown-model", tier: schemas.BifrostServiceTierPriority, wantTier: schemas.Ptr(BedrockServiceTierTypePriority)},
 		{name: "default uses omission", model: "priority-model", tier: schemas.BifrostServiceTierDefault},
 		{name: "auto uses omission", model: "priority-model", tier: schemas.BifrostServiceTierAuto},
 	}
