@@ -632,57 +632,93 @@ func (h *WSRealtimeHandler) processRealtimeClientMessage(
 	return false, nil
 }
 
+// realtimeTranscriptionSessionUpdate is the beta transcription-session event, still
+// accepted alongside session.update.
+const realtimeTranscriptionSessionUpdate schemas.RealtimeEventType = "transcription_session.update"
+
+// pinRealtimeTranscriptionModel holds a transcription session to the model it was
+// admitted (authorized and attributed) for. Every session update the client sends
+// that names a transcription model has that model replaced with the admitted one:
+// session.update and transcription_session.update alike, through both the GA
+// audio.input.transcription and the legacy input_audio_transcription shapes, and
+// both when an update carries both. A shape that is present but does not parse is
+// refused, so it cannot reach the provider uninspected.
 func pinRealtimeTranscriptionModel(event *schemas.BifrostRealtimeEvent, model string, transcriptionSession bool) error {
-	if !transcriptionSession || event == nil || event.Type != schemas.RTEventSessionUpdate || event.Session == nil || strings.TrimSpace(model) == "" {
+	if !transcriptionSession || event == nil || event.Session == nil || strings.TrimSpace(model) == "" {
+		return nil
+	}
+	if event.Type != schemas.RTEventSessionUpdate && event.Type != realtimeTranscriptionSessionUpdate {
 		return nil
 	}
 	if event.Session.ExtraParams == nil {
 		return nil
 	}
-
-	audioRaw, ok := event.Session.ExtraParams["audio"]
-	if !ok {
-		return nil
-	}
-	var audio map[string]json.RawMessage
-	if err := json.Unmarshal(audioRaw, &audio); err != nil {
-		return nil
-	}
-	inputRaw, ok := audio["input"]
-	if !ok {
-		return nil
-	}
-	var input map[string]json.RawMessage
-	if err := json.Unmarshal(inputRaw, &input); err != nil {
-		return nil
-	}
-	transcriptionRaw, ok := input["transcription"]
-	if !ok || string(transcriptionRaw) == "null" {
-		return nil
-	}
-	var transcription map[string]json.RawMessage
-	if err := json.Unmarshal(transcriptionRaw, &transcription); err != nil {
-		return nil
-	}
-	if _, ok := transcription["model"]; !ok {
-		return nil
-	}
-
 	pinnedModel, err := json.Marshal(model)
 	if err != nil {
 		return err
 	}
+
+	if audioRaw, ok := event.Session.ExtraParams["audio"]; ok && !isJSONNull(audioRaw) {
+		var audio map[string]json.RawMessage
+		if err := json.Unmarshal(audioRaw, &audio); err != nil {
+			return fmt.Errorf("invalid %s audio: %w", event.Type, err)
+		}
+		if inputRaw, ok := audio["input"]; ok && !isJSONNull(inputRaw) {
+			var input map[string]json.RawMessage
+			if err := json.Unmarshal(inputRaw, &input); err != nil {
+				return fmt.Errorf("invalid %s audio.input: %w", event.Type, err)
+			}
+			if transcriptionRaw, ok := input["transcription"]; ok && !isJSONNull(transcriptionRaw) {
+				pinned, changed, err := pinTranscriptionModelField(transcriptionRaw, pinnedModel)
+				if err != nil {
+					return fmt.Errorf("invalid %s audio.input.transcription: %w", event.Type, err)
+				}
+				if changed {
+					input["transcription"] = pinned
+					if audio["input"], err = json.Marshal(input); err != nil {
+						return err
+					}
+					if event.Session.ExtraParams["audio"], err = json.Marshal(audio); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+
+	if legacyRaw, ok := event.Session.ExtraParams["input_audio_transcription"]; ok && !isJSONNull(legacyRaw) {
+		pinned, changed, err := pinTranscriptionModelField(legacyRaw, pinnedModel)
+		if err != nil {
+			return fmt.Errorf("invalid %s input_audio_transcription: %w", event.Type, err)
+		}
+		if changed {
+			event.Session.ExtraParams["input_audio_transcription"] = pinned
+		}
+	}
+	return nil
+}
+
+// pinTranscriptionModelField replaces the model of one transcription object. An
+// object that names no model is returned unchanged: the provider keeps the
+// session's model, which was pinned when the session was created.
+func pinTranscriptionModelField(raw json.RawMessage, pinnedModel json.RawMessage) (json.RawMessage, bool, error) {
+	var transcription map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &transcription); err != nil {
+		return nil, false, err
+	}
+	if _, ok := transcription["model"]; !ok {
+		return raw, false, nil
+	}
 	transcription["model"] = pinnedModel
-	input["transcription"], err = json.Marshal(transcription)
+	pinned, err := json.Marshal(transcription)
 	if err != nil {
-		return err
+		return nil, false, err
 	}
-	audio["input"], err = json.Marshal(input)
-	if err != nil {
-		return err
-	}
-	event.Session.ExtraParams["audio"], err = json.Marshal(audio)
-	return err
+	return pinned, true, nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return strings.TrimSpace(string(raw)) == "null"
 }
 
 func realtimeTurnFinalEvent(provider schemas.RealtimeProvider, transcriptionSession bool) schemas.RealtimeEventType {

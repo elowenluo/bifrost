@@ -3,15 +3,18 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
+	openaiProvider "github.com/capsohq/bifrost/core/providers/openai"
 	"github.com/capsohq/bifrost/core/schemas"
 	"github.com/capsohq/bifrost/framework/grant"
 	"github.com/capsohq/bifrost/framework/kvstore"
 	"github.com/capsohq/bifrost/framework/logstore"
 	"github.com/capsohq/bifrost/transports/bifrost-http/lib"
 	bfws "github.com/capsohq/bifrost/transports/bifrost-http/websocket"
+	"github.com/pion/webrtc/v4"
 	"github.com/valyala/fasthttp"
 )
 
@@ -520,5 +523,49 @@ func TestApplyRealtimeEphemeralKeyMapping_RestoresVirtualKeyAndKeyID(t *testing.
 	}
 	if got := bifrostCtx.Value(schemas.BifrostContextKeyAPIKeyID); got != "key_123" {
 		t.Fatalf("api key id context = %#v, want %q", got, "key_123")
+	}
+}
+
+// TestWebRTCTranscriptionUpdatesKeepTheAdmittedModel: a WebRTC transcription
+// session was admitted (authorized and attributed) for one model, so a browser
+// session.update naming another reaches the provider with the admitted model, and
+// an update that cannot be parsed is refused rather than forwarded unchecked.
+func TestWebRTCTranscriptionUpdatesKeepTheAdmittedModel(t *testing.T) {
+	t.Parallel()
+
+	newRelay := func() *webrtcRealtimeRelay {
+		return &webrtcRealtimeRelay{
+			session:              bfws.NewSession(nil),
+			bifrostCtx:           schemas.NewBifrostContext(context.Background(), schemas.NoDeadline),
+			provider:             &openaiProvider.OpenAIProvider{},
+			providerKey:          schemas.OpenAI,
+			model:                "gpt-4o-mini-transcribe",
+			transcriptionSession: true,
+		}
+	}
+
+	relay := newRelay()
+	update := `{"type":"session.update","session":{"type":"transcription","audio":{"input":{"transcription":{"model":"gpt-4o-transcribe"}}}}}`
+	relay.handleDownstreamMessage(webrtc.DataChannelMessage{IsString: true, Data: []byte(update)})
+	if len(relay.pendingToUpstream) != 1 {
+		t.Fatalf("forwarded %d events upstream, want 1", len(relay.pendingToUpstream))
+	}
+	forwarded := string(relay.pendingToUpstream[0].payload)
+	if !strings.Contains(forwarded, `"gpt-4o-mini-transcribe"`) || strings.Contains(forwarded, `"gpt-4o-transcribe"`) {
+		t.Fatalf("forwarded %s, want only the admitted model", forwarded)
+	}
+
+	for _, bad := range []string{
+		`{"type":"session.update","session":{"audio":`,
+		`{"type":"session.update","session":{"audio":{"input":"gpt-4o-transcribe"}}}`,
+	} {
+		relay = newRelay()
+		relay.handleDownstreamMessage(webrtc.DataChannelMessage{IsString: true, Data: []byte(bad)})
+		if len(relay.pendingToUpstream) != 0 {
+			t.Fatalf("%s: forwarded %q upstream, want it refused", bad, relay.pendingToUpstream[0].payload)
+		}
+		if len(relay.pendingToDownstream) != 1 {
+			t.Fatalf("%s: sent %d events to the browser, want 1 refusal", bad, len(relay.pendingToDownstream))
+		}
 	}
 }

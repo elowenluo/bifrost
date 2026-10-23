@@ -286,3 +286,122 @@ func TestRealtimeStopHeartbeatIsIdempotent(t *testing.T) {
 	client.stopHeartbeat()
 	client.stopHeartbeat()
 }
+
+// TestPinRealtimeTranscriptionModelCoversEveryShape: a transcription session is
+// held to its admitted model whichever update event and transcription shape the
+// client uses, including an update carrying both shapes, and a shape that does
+// not parse is refused instead of forwarded.
+func TestPinRealtimeTranscriptionModelCoversEveryShape(t *testing.T) {
+	t.Parallel()
+
+	const admitted = "gpt-4o-mini-transcribe"
+	tests := []struct {
+		name    string
+		message string
+		wantErr bool
+		// wantModels maps each transcription shape the update names to the model it must carry.
+		wantModels map[string]string
+	}{
+		{
+			name:       "beta transcription_session.update, legacy shape",
+			message:    `{"type":"transcription_session.update","session":{"input_audio_transcription":{"model":"gpt-4o-transcribe","language":"en"}}}`,
+			wantModels: map[string]string{"input_audio_transcription": admitted},
+		},
+		{
+			name:       "session.update, legacy shape",
+			message:    `{"type":"session.update","session":{"input_audio_transcription":{"model":"whisper-1"}}}`,
+			wantModels: map[string]string{"input_audio_transcription": admitted},
+		},
+		{
+			name:       "transcription_session.update, GA shape",
+			message:    `{"type":"transcription_session.update","session":{"audio":{"input":{"transcription":{"model":"gpt-4o-transcribe"}}}}}`,
+			wantModels: map[string]string{"audio": admitted},
+		},
+		{
+			name:       "both shapes in one update",
+			message:    `{"type":"session.update","session":{"audio":{"input":{"transcription":{"model":"gpt-4o-transcribe"}}},"input_audio_transcription":{"model":"whisper-1"}}}`,
+			wantModels: map[string]string{"audio": admitted, "input_audio_transcription": admitted},
+		},
+		{
+			name:    "malformed legacy shape is refused",
+			message: `{"type":"transcription_session.update","session":{"input_audio_transcription":"whisper-1"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "malformed GA shape is refused",
+			message: `{"type":"session.update","session":{"audio":{"input":"gpt-4o-transcribe"}}}`,
+			wantErr: true,
+		},
+		{
+			name:       "transcription disabled with null stays null",
+			message:    `{"type":"session.update","session":{"input_audio_transcription":null}}`,
+			wantModels: map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			event, err := schemas.ParseRealtimeEvent([]byte(tt.message))
+			if err != nil {
+				t.Fatalf("ParseRealtimeEvent() error = %v", err)
+			}
+			err = pinRealtimeTranscriptionModel(event, admitted, true)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("pinRealtimeTranscriptionModel() accepted a malformed transcription shape")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("pinRealtimeTranscriptionModel() error = %v", err)
+			}
+			for shape, want := range tt.wantModels {
+				var got string
+				switch shape {
+				case "audio":
+					var audio struct {
+						Input struct {
+							Transcription struct {
+								Model string `json:"model"`
+							} `json:"transcription"`
+						} `json:"input"`
+					}
+					if err := json.Unmarshal(event.Session.ExtraParams["audio"], &audio); err != nil {
+						t.Fatalf("audio: %v", err)
+					}
+					got = audio.Input.Transcription.Model
+				default:
+					var legacy struct {
+						Model    string `json:"model"`
+						Language string `json:"language"`
+					}
+					if err := json.Unmarshal(event.Session.ExtraParams[shape], &legacy); err != nil {
+						t.Fatalf("%s: %v", shape, err)
+					}
+					got = legacy.Model
+				}
+				if got != want {
+					t.Fatalf("%s model = %q, want %q", shape, got, want)
+				}
+			}
+			if raw, ok := event.Session.ExtraParams["input_audio_transcription"]; ok && len(tt.wantModels) == 0 && string(raw) != "null" {
+				t.Fatalf("input_audio_transcription = %s, want null", raw)
+			}
+		})
+	}
+
+	t.Run("normal realtime session is not pinned", func(t *testing.T) {
+		t.Parallel()
+		event, err := schemas.ParseRealtimeEvent([]byte(`{"type":"session.update","session":{"input_audio_transcription":{"model":"whisper-1"}}}`))
+		if err != nil {
+			t.Fatalf("ParseRealtimeEvent() error = %v", err)
+		}
+		if err := pinRealtimeTranscriptionModel(event, admitted, false); err != nil {
+			t.Fatalf("pinRealtimeTranscriptionModel() error = %v", err)
+		}
+		if got := string(event.Session.ExtraParams["input_audio_transcription"]); got != `{"model":"whisper-1"}` {
+			t.Fatalf("input_audio_transcription = %s, want the client's own model", got)
+		}
+	})
+}

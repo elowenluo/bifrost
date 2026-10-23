@@ -850,6 +850,12 @@ func (r *webrtcRealtimeRelay) forwardRTCP(sender *webrtc.RTPSender, target *webr
 func (r *webrtcRealtimeRelay) handleDownstreamMessage(msg webrtc.DataChannelMessage) {
 	event, err := schemas.ParseRealtimeEvent(msg.Data)
 	if err != nil {
+		// A transcription session is held to the model it was admitted for, which
+		// an event nothing could inspect might change.
+		if r.transcriptionSession {
+			r.sendDownstream(newRealtimeTurnErrorEventPayload(newRealtimeWireBifrostError(400, "invalid_request_error", "failed to parse realtime event JSON")), true)
+			return
+		}
 		logger.Warn("failed to parse browser realtime event: %v", err)
 		r.sendUpstream(msg.Data, msg.IsString)
 		return
@@ -874,6 +880,10 @@ func (r *webrtcRealtimeRelay) handleDownstreamMessage(msg webrtc.DataChannelMess
 		}
 	}
 
+	if err := pinRealtimeTranscriptionModel(event, r.model, r.transcriptionSession); err != nil {
+		r.sendDownstream(newRealtimeTurnErrorEventPayload(newRealtimeWireBifrostError(400, "invalid_request_error", err.Error())), true)
+		return
+	}
 	sanitizeRealtimeSessionEventForProvider(event)
 	providerEvent, err := r.provider.ToProviderRealtimeEvent(event)
 	if err != nil {
@@ -893,6 +903,10 @@ func (r *webrtcRealtimeRelay) handleDownstreamMessage(msg webrtc.DataChannelMess
 				return
 			}
 			r.closeWithErrorEvent(newRealtimeTurnErrorEventPayload(newRealtimeWireBifrostError(400, "invalid_request_error", err.Error())))
+			return
+		}
+		if r.transcriptionSession {
+			r.sendDownstream(newRealtimeTurnErrorEventPayload(newRealtimeWireBifrostError(400, "invalid_request_error", err.Error())), true)
 			return
 		}
 		logger.Warn("failed to translate browser realtime event: %v", err)
