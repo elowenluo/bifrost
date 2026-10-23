@@ -3921,11 +3921,12 @@ func (s *RDBConfigStore) UpdateVirtualKey(ctx context.Context, virtualKey *table
 			virtualKey.PreviousValueExpiresAt = existing.PreviousValueExpiresAt
 			virtualKey.RotatedAt = existing.RotatedAt
 		}
-		// Preserve NULL when a VK-scoped MC already owns the rate limit; prevents config sync from reverting migration.
+		// Preserve NULL when the VK-scoped MC already owns this same rate limit; prevents config sync
+		// from reverting the migration. A different incoming limit is a new key-wide limit and is kept.
 		if existing.RateLimitID == nil && virtualKey.RateLimitID != nil {
 			var mcCount int64
 			if err := txDB.WithContext(ctx).Model(&tables.TableModelConfig{}).
-				Where("scope = 'virtual_key' AND scope_id = ? AND model_name = '*' AND provider IS NULL AND rate_limit_id IS NOT NULL", virtualKey.ID).
+				Where("scope = 'virtual_key' AND scope_id = ? AND model_name = '*' AND provider IS NULL AND rate_limit_id = ?", virtualKey.ID, *virtualKey.RateLimitID).
 				Count(&mcCount).Error; err != nil {
 				return s.parseGormError(err)
 			}

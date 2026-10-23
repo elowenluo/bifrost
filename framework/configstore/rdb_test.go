@@ -1492,6 +1492,38 @@ func TestUpdateVirtualKey(t *testing.T) {
 	assert.False(t, result.IsActiveValue())
 }
 
+// TestUpdateVirtualKey_KeepsDistinctIncomingRateLimit pins upstream #7291's config-sync
+// guard to the limit the migration actually moved. A VK whose wildcard model config owns
+// limit A drops an incoming direct reference to A, which would otherwise undo the
+// migration, but keeps a reference to a different limit B the config file now declares.
+// Dropping B would silently lose that limit and record the file's hash as applied.
+func TestUpdateVirtualKey_KeepsDistinctIncomingRateLimit(t *testing.T) {
+	store := setupRDBTestStore(t)
+	ctx := context.Background()
+
+	for _, id := range []string{"rl-a", "rl-b"} {
+		require.NoError(t, store.CreateRateLimit(ctx, &tables.TableRateLimit{ID: id, RequestMaxLimit: schemas.Ptr(int64(10)), RequestResetDuration: schemas.Ptr("1m")}))
+	}
+	vk := &tables.TableVirtualKey{ID: "vk-sync", Name: "vk-sync", Value: *schemas.NewSecretVar("vk-sync-value"), IsActive: schemas.Ptr(true)}
+	require.NoError(t, store.CreateVirtualKey(ctx, vk))
+	vkID := "vk-sync"
+	require.NoError(t, store.DB().Create(&tables.TableModelConfig{ID: "mc-sync", ModelName: tables.ModelConfigAllModels,
+		Scope: tables.ModelConfigScopeVirtualKey, ScopeID: &vkID, RateLimitID: schemas.Ptr("rl-a")}).Error)
+
+	vk.RateLimitID = schemas.Ptr("rl-a")
+	require.NoError(t, store.UpdateVirtualKey(ctx, vk))
+	result, err := store.GetVirtualKey(ctx, "vk-sync")
+	require.NoError(t, err)
+	assert.Nil(t, result.RateLimitID, "the limit the model config owns is not referenced again from the VK")
+
+	vk.RateLimitID = schemas.Ptr("rl-b")
+	require.NoError(t, store.UpdateVirtualKey(ctx, vk))
+	result, err = store.GetVirtualKey(ctx, "vk-sync")
+	require.NoError(t, err)
+	require.NotNil(t, result.RateLimitID, "a distinct incoming limit is kept")
+	assert.Equal(t, "rl-b", *result.RateLimitID)
+}
+
 func TestUpdateVirtualKey_PreservesRotationStateOnPlainUpdate(t *testing.T) {
 	store := setupRDBTestStore(t)
 	ctx := context.Background()
