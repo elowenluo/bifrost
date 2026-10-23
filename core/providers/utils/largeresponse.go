@@ -189,8 +189,12 @@ func FinalizeResponseWithLargeDetection(
 	// SetupStreamingPassthrough does for streamed bodies, so a stalled upstream can
 	// pin neither the provider worker during the prefetch nor the transport writer
 	// draining the LargeResponseReader afterwards. Decompression is set up once so
-	// the prefetched bytes and the streamed remainder share one gzip reader.
-	gz, reader, wasGzip := decompressBodyStreamIfGzip(resp, bodyStream)
+	// the prefetched bytes and the streamed remainder share one gzip reader, and
+	// only after both guards are on the raw stream: creating the gzip reader reads
+	// the gzip header from the socket, which an upstream can stall in too.
+	rawReader, stopIdleTimeout := NewIdleTimeoutReader(bodyStream, bodyStream, GetStreamIdleTimeout(ctx), ctx)
+	stopCancellation := SetupStreamCancellation(ctx, bodyStream, logger)
+	gz, reader, wasGzip := decompressBodyStreamIfGzip(resp, rawReader)
 	if wasGzip {
 		// Content-Length describes the compressed body. Classify by decompressed
 		// size through the bounded unknown-length path below, so a payload that is
@@ -198,8 +202,6 @@ func FinalizeResponseWithLargeDetection(
 		// transport then serves it chunked, as it always did for gzip bodies.
 		contentLength = -1
 	}
-	reader, stopIdleTimeout := NewIdleTimeoutReader(reader, bodyStream, GetStreamIdleTimeout(ctx), ctx)
-	stopCancellation := SetupStreamCancellation(ctx, bodyStream, logger)
 	cleanup := func() {
 		stopCancellation()
 		stopIdleTimeout()

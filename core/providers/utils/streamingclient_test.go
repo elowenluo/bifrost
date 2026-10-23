@@ -755,6 +755,49 @@ func TestFinalizeResponseWithLargeDetection_GzipClassifiedByDecompressedSize(t *
 	}
 }
 
+// TestFinalizeResponseWithLargeDetection_StallInGzipHeaderReturnsError covers a
+// gzip upstream that stalls before its gzip header is complete. Setting up the
+// decompressor reads that header from the socket, so it must already be under the
+// stream idle timeout: otherwise the provider worker is pinned for as long as the
+// upstream holds the connection open.
+func TestFinalizeResponseWithLargeDetection_StallInGzipHeaderReturnsError(t *testing.T) {
+	hold := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Length", fmt.Sprint(64*1024))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte{0x1f, 0x8b, 0x08}) //nolint:errcheck // 3 of the 10 gzip header bytes
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-hold
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(hold) })
+
+	ctx, resp, release := largeResponseRequest(t, srv, 300*time.Millisecond)
+	defer release()
+
+	done := make(chan *schemas.BifrostError, 1)
+	start := time.Now()
+	go func() {
+		_, _, err := FinalizeResponseWithLargeDetection(ctx, resp, nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected an error from the stalled gzip header")
+		}
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Fatalf("gzip header stall took %v to surface, want roughly the 300ms idle timeout", elapsed)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("gzip header read has no idle bound: FinalizeResponseWithLargeDetection did not return within 3s on a stalled upstream")
+	}
+}
+
 // closingUpstream accepts connections, reads the request once, then closes the
 // socket without sending a single response byte: the shape of Failover Bench
 // S05 ("TCP reset before headers") and of any upstream that dies mid-request.
