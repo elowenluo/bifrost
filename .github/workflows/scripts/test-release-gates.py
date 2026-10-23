@@ -223,6 +223,45 @@ class DockerWaitsForTheTransportRelease(unittest.TestCase):
                 self.assertIn("bifrost-http-release", JOBS[publisher]["needs"])
 
 
+class MemoryGate(unittest.TestCase):
+    """test-memory runs for a core or bifrost-http release and gates every job that names
+    it in its condition. A failure passes only with the break-glass approval; a skip passes
+    only under skip-tests or when the gate had nothing to cover, as for an image-only
+    republish, which must not be stranded."""
+
+    # The break-glass job itself reads the result to run on a failure; it is not gated.
+    GATED = [job for job, spec in JOBS.items() if job != "approve-memory-regression" and "needs.test-memory.result" in str(spec.get("if", ""))]
+
+    def test_the_gate_covers_every_image_publisher(self):
+        for publisher in DOCKER_PUBLISHERS:
+            with self.subTest(publisher=publisher):
+                self.assertIn(publisher, self.GATED)
+
+    def test_an_image_only_release_is_not_blocked_by_the_skipped_gate(self):
+        context = transport_only_context({"test-memory": "skipped", "bifrost-http-prep": "skipped", "bifrost-http-release": "skipped"}, transport_release="false")
+        self.assertEqual(evaluate(str(JOBS["test-memory"]["if"]), context), "false")
+        for publisher in DOCKER_PUBLISHERS:
+            with self.subTest(publisher=publisher):
+                self.assertEqual(evaluate(str(JOBS[publisher]["if"]), context), "true")
+
+    def test_a_transport_release_needs_the_gate_to_pass(self):
+        for result in ("skipped", "failure", "cancelled"):
+            context = transport_only_context({"test-memory": result, "approve-memory-regression": "skipped"})
+            self.assertEqual(evaluate(str(JOBS["test-memory"]["if"]), context), "true")
+            for job in self.GATED:
+                with self.subTest(result=result, job=job):
+                    self.assertEqual(evaluate(str(JOBS[job]["if"]), context), "false")
+
+    def test_a_failed_gate_passes_only_with_approval(self):
+        for approval, expected in (("success", "true"), ("skipped", "false"), ("failure", "false")):
+            context = transport_only_context({"test-memory": "failure", "approve-memory-regression": approval})
+            for publisher in PUBLISHERS:
+                if publisher not in self.GATED:
+                    continue
+                with self.subTest(approval=approval, publisher=publisher):
+                    self.assertEqual(evaluate(str(JOBS[publisher]["if"]), context), expected)
+
+
 class ReleaseJobsLeaveMainToReviewedPRs(unittest.TestCase):
     """main requires a reviewed codex-review check, so no release job writes it: generated
     changes leave as patch artifacts, and every artifact is built from the tested commit."""
