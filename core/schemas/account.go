@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/bytedance/sonic"
 )
@@ -73,13 +74,40 @@ func (wl WhiteList) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(wl))
 	for _, v := range wl {
-		normalized := strings.ToLower(v)
+		normalized := listEntryDedupKey(v)
 		if _, ok := seen[normalized]; ok {
 			return fmt.Errorf("duplicate value '%s' in whitelist", v)
 		}
 		seen[normalized] = struct{}{}
 	}
 	return nil
+}
+
+// listEntryDedupKey is the duplicate-detection key for a list entry. Entries match
+// case-insensitively, so they dedupe case-insensitively too, with one exception
+// for regex: entries: the character after a backslash keeps its case, because
+// escapes such as \d and \D (or \w and \W) differ only in case and match different
+// values.
+func listEntryDedupKey(entry string) string {
+	if !IsRegexEntry(entry) {
+		return strings.ToLower(entry)
+	}
+	var b strings.Builder
+	b.Grow(len(entry))
+	escaped := false
+	for _, r := range entry {
+		switch {
+		case escaped:
+			b.WriteRune(r)
+			escaped = false
+		case r == '\\':
+			b.WriteRune(r)
+			escaped = true
+		default:
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return b.String()
 }
 
 // BlackList is a list of values that are denied.
@@ -121,7 +149,7 @@ func (bl BlackList) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(bl))
 	for _, v := range bl {
-		normalized := strings.ToLower(v)
+		normalized := listEntryDedupKey(v)
 		if _, ok := seen[normalized]; ok {
 			return fmt.Errorf("duplicate value '%s' in blacklist", v)
 		}

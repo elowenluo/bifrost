@@ -31,6 +31,13 @@ func compileRegexEntry(entry string) (*regexp.Regexp, error) {
 	if pattern == "*" {
 		return nil, fmt.Errorf("regex entry %q is not a pattern; use a bare \"*\" to allow or block everything", entry)
 	}
+	// Compile the pattern on its own first. Inside the anchoring wrapper an unbalanced
+	// pattern can close the wrapper's group itself and still compile: "gpt)|(?:claude"
+	// becomes "^(?:gpt)|(?:claude)$", whose alternatives are no longer anchored at both
+	// ends, so it would match "gpt-unrelated" and "unrelated-claude".
+	if _, err := regexp.Compile(pattern); err != nil {
+		return nil, fmt.Errorf("regex entry %q does not compile: %v", entry, err)
+	}
 	re, err := regexp.Compile("(?i)^(?:" + pattern + ")$")
 	if err != nil {
 		return nil, fmt.Errorf("regex entry %q does not compile: %v", entry, err)

@@ -92,3 +92,45 @@ func TestValidateRegexEntries(t *testing.T) {
 		t.Fatal("duplicate regex entries are still duplicates")
 	}
 }
+
+// TestRegexEntryRejectsPatternsThatEscapeTheAnchors: a pattern that only compiles
+// because the anchoring wrapper balances it must be rejected, not widened into an
+// unanchored alternation.
+func TestRegexEntryRejectsPatternsThatEscapeTheAnchors(t *testing.T) {
+	entry := "regex:gpt)|(?:claude"
+	if err := ValidateRegexEntries([]string{entry}); err == nil {
+		t.Fatalf("ValidateRegexEntries accepted %q", entry)
+	}
+	for _, model := range []string{"gpt-unrelated", "unrelated-claude", "gpt", "claude"} {
+		if MatchEntry(entry, model) {
+			t.Fatalf("MatchEntry(%q, %q) = true, want no match for an invalid pattern", entry, model)
+		}
+	}
+	if err := (WhiteList{entry}).Validate(); err == nil {
+		t.Fatal("WhiteList.Validate accepted the unbalanced pattern")
+	}
+}
+
+// TestListValidateKeepsDistinctRegexSpellings: regex entries that differ only in the
+// case of an escape (\d vs \D) are different patterns and must not be reported as
+// duplicates, while plain entries still dedupe case-insensitively.
+func TestListValidateKeepsDistinctRegexSpellings(t *testing.T) {
+	if err := (WhiteList{`regex:\d+`, `regex:\D+`}).Validate(); err != nil {
+		t.Fatalf("WhiteList rejected distinct patterns: %v", err)
+	}
+	if err := (BlackList{`regex:\w+`, `regex:\W+`}).Validate(); err != nil {
+		t.Fatalf("BlackList rejected distinct patterns: %v", err)
+	}
+	if err := (WhiteList{"GPT-4o", "gpt-4o"}).Validate(); err == nil {
+		t.Fatal("WhiteList accepted a case-insensitive duplicate plain entry")
+	}
+	if err := (WhiteList{"regex:gpt.*", "regex:gpt.*"}).Validate(); err == nil {
+		t.Fatal("WhiteList accepted an identical duplicate regex entry")
+	}
+}
+
+func TestListValidateTreatsCaseOnlyRegexDifferencesAsDuplicates(t *testing.T) {
+	if err := (BlackList{`regex:^GPT\d+`, `regex:^gpt\d+`}).Validate(); err == nil {
+		t.Fatal("BlackList accepted regex entries that differ only in the case of literal characters")
+	}
+}
