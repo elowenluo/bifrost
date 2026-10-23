@@ -2194,7 +2194,13 @@ func (s *Store) resolvePricing(routingInfo schemas.RoutingInfo, requestType sche
 		}
 		base, exists := s.getBasePricing(candidate, catalogProvider, requestType)
 		if exists && base != nil {
-			result, _ := s.applyPricingOverrides(overrideKey, requestType, *base, scopes)
+			result, matched := s.applyPricingOverrides(overrideKey, requestType, *base, scopes)
+			// A decision priced from a text row was answered by emulation, one Responses
+			// call, so an override written for that call applies when no decision-specific
+			// one does.
+			if !matched && requestType == schemas.DecisionRequest && base.Mode != normalizeRequestType(schemas.DecisionRequest) {
+				result, _ = s.applyPricingOverrides(overrideKey, schemas.ResponsesRequest, *base, scopes)
+			}
 			return &result
 		}
 		s.logger.Debug("pricing not found for %s, trying next candidate", candidate)

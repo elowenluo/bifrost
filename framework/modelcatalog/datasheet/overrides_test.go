@@ -1132,3 +1132,35 @@ func TestPatchPricing_TimeOfDayFields(t *testing.T) {
 		assert.Same(t, baseSchedule, base.PeakHours)
 	})
 }
+
+// An emulated decision is one Responses call priced from the model's text row, so a
+// Responses override for that model applies to it; a decision-specific override still
+// wins when there is one.
+func TestGetPricing_EmulatedDecisionUsesResponsesOverride(t *testing.T) {
+	s := newTestStore()
+	s.pricingData[makeKey("gpt-4o", "openai", "chat")] = configstoreTables.TableModelPricing{
+		Model: "gpt-4o", Provider: "openai", Mode: "chat",
+		InputCostPerToken: bifrost.Ptr(1.0), OutputCostPerToken: bifrost.Ptr(2.0),
+	}
+	providerID := "openai"
+	responsesOverride := configstoreTables.TablePricingOverride{
+		ID: "responses", ScopeKind: string(ScopeKindProvider), ProviderID: &providerID,
+		MatchType: string(MatchTypeExact), Pattern: "gpt-4o",
+		RequestTypes:     []schemas.RequestType{schemas.ResponsesRequest},
+		PricingPatchJSON: `{"input_cost_per_token":7}`,
+	}
+	require.NoError(t, s.SetOverrides([]configstoreTables.TablePricingOverride{responsesOverride}))
+	pricing := s.resolvePricing(schemas.RoutingInfo{Provider: "openai", Model: "gpt-4o"}, schemas.DecisionRequest, LookupScopes{Provider: "openai"})
+	require.NotNil(t, pricing)
+	assert.Equal(t, 7.0, *pricing.InputCostPerToken)
+
+	require.NoError(t, s.SetOverrides([]configstoreTables.TablePricingOverride{responsesOverride, {
+		ID: "decisions", ScopeKind: string(ScopeKindProvider), ProviderID: &providerID,
+		MatchType: string(MatchTypeExact), Pattern: "gpt-4o",
+		RequestTypes:     []schemas.RequestType{schemas.DecisionRequest},
+		PricingPatchJSON: `{"input_cost_per_token":3}`,
+	}}))
+	pricing = s.resolvePricing(schemas.RoutingInfo{Provider: "openai", Model: "gpt-4o"}, schemas.DecisionRequest, LookupScopes{Provider: "openai"})
+	require.NotNil(t, pricing)
+	assert.Equal(t, 3.0, *pricing.InputCostPerToken)
+}
