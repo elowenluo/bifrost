@@ -341,3 +341,84 @@ func equalStringSlices(left, right []string) bool {
 	}
 	return true
 }
+
+// TestNormalizeAnthropicToolInputSchemaResolvesReferencesPerRFC6901 pins how a root
+// alternative's $ref is read: the URI fragment is percent-decoded before it is split,
+// so %2F separates tokens, and ~1 and ~0 are then unescaped inside each token. A
+// reference that names nothing, or is not local, is refused instead of being flattened
+// into an empty branch that drops its properties and requirements.
+func TestNormalizeAnthropicToolInputSchemaResolvesReferencesPerRFC6901(t *testing.T) {
+	var schema schemas.ToolFunctionParameters
+	raw := []byte(`{
+		"type":"object",
+		"properties":{},
+		"$defs":{
+			"a/b":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]},
+			"c~d":{"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"required":["id","name"]},
+			"group":{"child":{"type":"object","properties":{"id":{"type":"string"},"tag":{"type":"string"}},"required":["id"]}}
+		},
+		"oneOf":[{"$ref":"#/$defs/a~1b"},{"$ref":"#/$defs/c~0d"},{"$ref":"#/$defs/group%2Fchild"}]
+	}`)
+	if err := schemas.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unmarshal test schema: %v", err)
+	}
+	normalized, err := normalizeAnthropicToolInputSchema(&schema)
+	if err != nil {
+		t.Fatalf("normalize schema: %v", err)
+	}
+	if got := normalized.Properties.Keys(); !equalStringSlices(got, []string{"id", "name", "tag"}) {
+		t.Fatalf("properties = %v, want every referenced definition's properties", got)
+	}
+	if got := normalized.Required; !equalStringSlices(got, []string{"id"}) {
+		t.Fatalf("required = %v, want the common requirement", got)
+	}
+
+	for _, ref := range []string{"#/$defs/absent", "#/$defs/a%2Fb", "https://example.com/schema.json", "#/$defs/group"} {
+		var refused schemas.ToolFunctionParameters
+		body := `{"type":"object","properties":{},"$defs":{"a/b":{"type":"object"},"group":{"child":{"type":"object"}}},` +
+			`"oneOf":[{"$ref":"` + ref + `"},{"type":"object","properties":{"x":{"type":"string"}}}]}`
+		if err := schemas.Unmarshal([]byte(body), &refused); err != nil {
+			t.Fatal(err)
+		}
+		_, err := normalizeAnthropicToolInputSchema(&refused)
+		if ref == "#/$defs/group" {
+			// group is an object, so it resolves; it only carries no properties.
+			if err != nil {
+				t.Fatalf("%s: %v", ref, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), ref) {
+			t.Fatalf("%s: an unresolvable reference must be refused, got %v", ref, err)
+		}
+	}
+}
+
+// TestNormalizeAnthropicToolInputSchemaConjoinsRefSiblings pins that keywords next to a
+// branch's $ref apply together with the referenced schema: a branch that adds a
+// required property beside its reference keeps that property and requirement.
+func TestNormalizeAnthropicToolInputSchemaConjoinsRefSiblings(t *testing.T) {
+	var schema schemas.ToolFunctionParameters
+	raw := []byte(`{
+		"type":"object",
+		"properties":{},
+		"$defs":{"base":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}},
+		"allOf":[{"$ref":"#/$defs/base","properties":{"reason":{"type":"string"}},"required":["reason"],"additionalProperties":false}]
+	}`)
+	if err := schemas.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unmarshal test schema: %v", err)
+	}
+	normalized, err := normalizeAnthropicToolInputSchema(&schema)
+	if err != nil {
+		t.Fatalf("normalize schema: %v", err)
+	}
+	if got := normalized.Properties.Keys(); !equalStringSlices(got, []string{"id", "reason"}) {
+		t.Fatalf("properties = %v, want the reference's and its siblings' properties", got)
+	}
+	if got := normalized.Required; !equalStringSlices(got, []string{"id", "reason"}) {
+		t.Fatalf("required = %v, want both the reference's and the sibling requirement", got)
+	}
+	if normalized.AdditionalProperties == nil || normalized.AdditionalProperties.AdditionalPropertiesBool == nil || *normalized.AdditionalProperties.AdditionalPropertiesBool {
+		t.Fatalf("additionalProperties = %+v, want the sibling false kept", normalized.AdditionalProperties)
+	}
+}

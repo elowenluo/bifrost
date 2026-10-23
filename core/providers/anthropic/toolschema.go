@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"net/url"
 	"reflect"
 	"strings"
 
@@ -110,28 +111,56 @@ func expandAnthropicSchemaBranch(schema *schemas.OrderedMap, defs, definitions *
 	if schema == nil {
 		return []anthropicSchemaBranch{{properties: schemas.NewOrderedMap()}}, nil
 	}
-	resolved, err := resolveAnthropicSchemaRootRef(schema, defs, definitions, seen, depth)
-	if err != nil {
-		return nil, err
+	if refValue, ok := schema.Get("$ref"); ok {
+		if ref, ok := refValue.(string); ok {
+			if seen == nil {
+				seen = make(map[string]bool)
+			}
+			// A reference already on this chain is a cycle; it stops at the schema
+			// that carries it, whose own keywords are read below.
+			if !seen[ref] {
+				seen[ref] = true
+				target, err := resolveAnthropicSchemaRef(ref, defs, definitions)
+				if err != nil {
+					return nil, err
+				}
+				branches, err := expandAnthropicSchemaBranch(target, defs, definitions, seen, depth+1)
+				if err != nil {
+					return nil, err
+				}
+				// Keywords next to $ref apply together with the referenced schema, so
+				// they are conjoined with it instead of being dropped.
+				siblings := anthropicSchemaRefSiblings(schema)
+				if siblings == nil {
+					return branches, nil
+				}
+				siblingBranches, err := expandAnthropicSchemaBranch(siblings, defs, definitions, cloneAnthropicSeenRefs(seen), depth+1)
+				if err != nil {
+					return nil, err
+				}
+				return combineAnthropicSchemaBranches(branches, siblingBranches)
+			}
+		}
 	}
 	base := anthropicSchemaBranch{properties: schemas.NewOrderedMap()}
-	if properties, ok := resolved.Get("properties"); ok {
+	if properties, ok := schema.Get("properties"); ok {
 		if object := anthropicOrderedMap(properties); object != nil {
 			base.properties = object
 		}
 	}
-	if required, ok := resolved.Get("required"); ok {
+	if required, ok := schema.Get("required"); ok {
 		base.required = anthropicStringSlice(required)
 	}
-	if additional, ok := resolved.Get("additionalProperties"); ok {
+	if additional, ok := schema.Get("additionalProperties"); ok {
 		if value, ok := additional.(bool); ok && !value {
 			base.additionalPropertiesFalse = true
 		}
 	}
 
 	branches := []anthropicSchemaBranch{base}
+	var err error
 	for _, keyword := range []string{"oneOf", "anyOf"} {
-		value, ok := resolved.Get(keyword)
+		value, ok := schema.Get(keyword)
 		if !ok {
 			continue
 		}
@@ -155,7 +184,7 @@ func expandAnthropicSchemaBranch(schema *schemas.OrderedMap, defs, definitions *
 			return nil, err
 		}
 	}
-	if value, ok := resolved.Get("allOf"); ok {
+	if value, ok := schema.Get("allOf"); ok {
 		for _, member := range anthropicOrderedMapSlice(value) {
 			memberBranches, err := expandAnthropicSchemaBranch(member, defs, definitions, cloneAnthropicSeenRefs(seen), depth+1)
 			if err != nil {
@@ -194,49 +223,63 @@ func cloneAnthropicSeenRefs(seen map[string]bool) map[string]bool {
 	return cloned
 }
 
-// resolveAnthropicSchemaRootRef follows a local $defs or definitions reference
-// used as a composition branch. Cycles stop at the last resolvable schema.
-func resolveAnthropicSchemaRootRef(schema *schemas.OrderedMap, defs, definitions *schemas.OrderedMap, seen map[string]bool, depth int) (*schemas.OrderedMap, error) {
-	if depth > maxAnthropicSchemaExpansionDepth {
-		return nil, anthropicSchemaComplexityError("reference depth exceeds %d", maxAnthropicSchemaExpansionDepth)
-	}
-	refValue, ok := schema.Get("$ref")
+// resolveAnthropicSchemaRef resolves a local $defs or definitions reference used as
+// a composition branch. The reference is a URI fragment holding a JSON Pointer, so it
+// is percent-decoded before it is split into tokens, and each token's ~1 and ~0
+// escapes are undone after that (RFC 6901 sections 4 and 6). A reference that names
+// no schema object is refused: flattening a branch it cannot read would silently drop
+// that branch's properties and requirements.
+func resolveAnthropicSchemaRef(ref string, defs, definitions *schemas.OrderedMap) (*schemas.OrderedMap, error) {
+	fragment, ok := strings.CutPrefix(ref, "#")
 	if !ok {
-		return schema, nil
+		return nil, anthropicUnresolvedSchemaRefError(ref)
 	}
-	ref, ok := refValue.(string)
-	if !ok {
-		return schema, nil
+	pointer, err := url.PathUnescape(fragment)
+	if err != nil {
+		return nil, anthropicUnresolvedSchemaRefError(ref)
 	}
-	if seen == nil {
-		seen = make(map[string]bool)
-	}
-	if seen[ref] {
-		return schema, nil
-	}
-	seen[ref] = true
-
-	var collection *schemas.OrderedMap
-	var name string
+	var current *schemas.OrderedMap
 	switch {
-	case strings.HasPrefix(ref, "#/$defs/"):
-		collection = defs
-		name = strings.TrimPrefix(ref, "#/$defs/")
-	case strings.HasPrefix(ref, "#/definitions/"):
-		collection = definitions
-		name = strings.TrimPrefix(ref, "#/definitions/")
+	case strings.HasPrefix(pointer, "/$defs/"):
+		current, pointer = defs, strings.TrimPrefix(pointer, "/$defs/")
+	case strings.HasPrefix(pointer, "/definitions/"):
+		current, pointer = definitions, strings.TrimPrefix(pointer, "/definitions/")
 	default:
-		return schema, nil
+		return nil, anthropicUnresolvedSchemaRefError(ref)
 	}
-	value, ok := collection.Get(name)
-	if !ok {
-		return schema, nil
+	for _, token := range strings.Split(pointer, "/") {
+		if current == nil {
+			return nil, anthropicUnresolvedSchemaRefError(ref)
+		}
+		value, ok := current.Get(strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~"))
+		if !ok {
+			return nil, anthropicUnresolvedSchemaRefError(ref)
+		}
+		current = anthropicOrderedMap(value)
 	}
-	resolved := anthropicOrderedMap(value)
-	if resolved == nil {
-		return schema, nil
+	if current == nil {
+		return nil, anthropicUnresolvedSchemaRefError(ref)
 	}
-	return resolveAnthropicSchemaRootRef(resolved, defs, definitions, seen, depth+1)
+	return current, nil
+}
+
+func anthropicUnresolvedSchemaRefError(ref string) error {
+	return providerUtils.InvalidRequestErrorf("anthropic tool input schema reference %q cannot be resolved", ref)
+}
+
+// anthropicSchemaRefSiblings returns the constraint keywords that sit next to a $ref,
+// or nil when there are none.
+func anthropicSchemaRefSiblings(schema *schemas.OrderedMap) *schemas.OrderedMap {
+	var siblings *schemas.OrderedMap
+	for _, keyword := range []string{"properties", "required", "additionalProperties", "oneOf", "anyOf", "allOf"} {
+		if value, ok := schema.Get(keyword); ok {
+			if siblings == nil {
+				siblings = schemas.NewOrderedMap()
+			}
+			siblings.Set(keyword, value)
+		}
+	}
+	return siblings
 }
 
 // combineAnthropicSchemaBranches computes the combinations imposed by two
