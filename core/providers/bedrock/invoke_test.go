@@ -1717,7 +1717,7 @@ func TestToBedrockInvokeMessagesStreamResponse_ToolSearchNotToolUse(t *testing.T
 		require.NoError(t, err)
 		stopBedrock, ok := stopEvent.(*BedrockStreamEvent)
 		require.True(t, ok, "expected a BedrockStreamEvent, got %T", stopEvent)
-		require.Len(t, stopBedrock.InvokeModelRawChunks, 1)
+		require.NotEmpty(t, stopBedrock.InvokeModelRawChunks)
 		stopRaw := stopBedrock.InvokeModelRawChunks[0]
 
 		require.Equal(t, "content_block_stop", gjson.GetBytes(stopRaw, "type").String())
@@ -1739,6 +1739,114 @@ func TestToBedrockInvokeMessagesStreamResponse_ToolSearchNotToolUse(t *testing.T
 		require.Len(t, bedrockEvent.InvokeModelRawChunks, 1)
 		assert.Equal(t, int64(2), gjson.GetBytes(bedrockEvent.InvokeModelRawChunks[0], "index").Int())
 	})
+}
+
+// TestToBedrockInvokeMessagesStreamResponse_ToolSearchReplayPair assembles the
+// streamed content blocks the way a client building assistant history does and checks
+// they match the unary rendering: the server_tool_use with its query, then the paired
+// tool_search_tool_result with the discovered references. The stream used to emit only
+// the server_tool_use, so a replayed search lost its discovery state.
+func TestToBedrockInvokeMessagesStreamResponse_ToolSearchReplayPair(t *testing.T) {
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	const (
+		model    = "us.anthropic.claude-sonnet-4-6-v1:0"
+		searchID = "srvtoolu_01ABC"
+		callID   = "toolu_01XYZ"
+		found    = "get_weather"
+	)
+	extra := schemas.BifrostResponseExtraFields{ResolvedModelUsed: model}
+	searchItem := func(withResult bool) *schemas.ResponsesMessage {
+		msg := &schemas.ResponsesMessage{
+			ID:   schemas.Ptr(searchID),
+			Type: schemas.Ptr(schemas.ResponsesMessageTypeToolSearchCall),
+			ResponsesToolMessage: &schemas.ResponsesToolMessage{
+				CallID: schemas.Ptr(searchID),
+				Name:   schemas.Ptr("tool_search_tool_regex"),
+			},
+		}
+		if withResult {
+			msg.ResponsesToolMessage.Arguments = schemas.Ptr(`{"pattern":"weather"}`)
+			msg.ResponsesToolMessage.ResponsesToolSearchCall = &schemas.ResponsesToolSearchCall{ToolReferences: []string{found}}
+		}
+		return msg
+	}
+	callItem := &schemas.ResponsesMessage{
+		ID:   schemas.Ptr(callID),
+		Type: schemas.Ptr(schemas.ResponsesMessageTypeFunctionCall),
+		ResponsesToolMessage: &schemas.ResponsesToolMessage{
+			CallID: schemas.Ptr(callID),
+			Name:   schemas.Ptr(found),
+		},
+	}
+	// The shape the Anthropic stream converter produces: added at the server_tool_use
+	// index, done at the tool_search_tool_result index, then the discovered tool's call.
+	events := []*schemas.BifrostResponsesStreamResponse{
+		{Type: schemas.ResponsesStreamResponseTypeOutputItemAdded, ContentIndex: schemas.Ptr(0), Item: searchItem(false), ExtraFields: extra},
+		{Type: schemas.ResponsesStreamResponseTypeOutputItemDone, ContentIndex: schemas.Ptr(1), Item: searchItem(true), ExtraFields: extra},
+		{Type: schemas.ResponsesStreamResponseTypeOutputItemAdded, ContentIndex: schemas.Ptr(2), Item: callItem, ExtraFields: extra},
+		{Type: schemas.ResponsesStreamResponseTypeFunctionCallArgumentsDelta, ContentIndex: schemas.Ptr(2), Delta: schemas.Ptr(`{"city":"Paris"}`), ExtraFields: extra},
+		{Type: schemas.ResponsesStreamResponseTypeOutputItemDone, ContentIndex: schemas.Ptr(2), Item: callItem, ExtraFields: extra},
+	}
+
+	type assembled struct {
+		block  map[string]interface{}
+		input  string
+		closed bool
+	}
+	blocks := map[int64]*assembled{}
+	var order []int64
+	for _, ev := range events {
+		_, out, err := ToBedrockInvokeMessagesStreamResponse(ctx, ev)
+		require.NoError(t, err)
+		bedrockEvent, ok := out.(*BedrockStreamEvent)
+		require.True(t, ok, "expected a BedrockStreamEvent, got %T", out)
+		for _, raw := range bedrockEvent.InvokeModelRawChunks {
+			idx := gjson.GetBytes(raw, "index").Int()
+			switch gjson.GetBytes(raw, "type").String() {
+			case "content_block_start":
+				require.NotContains(t, blocks, idx, "index %d opened twice: %s", idx, string(raw))
+				var block map[string]interface{}
+				require.NoError(t, sonic.Unmarshal([]byte(gjson.GetBytes(raw, "content_block").Raw), &block))
+				blocks[idx] = &assembled{block: block}
+				order = append(order, idx)
+			case "content_block_delta":
+				require.Contains(t, blocks, idx, "delta for unopened index: %s", string(raw))
+				require.False(t, blocks[idx].closed, "delta after stop: %s", string(raw))
+				blocks[idx].input += gjson.GetBytes(raw, "delta.partial_json").String()
+			case "content_block_stop":
+				require.Contains(t, blocks, idx, "stop for unopened index: %s", string(raw))
+				require.False(t, blocks[idx].closed, "index %d closed twice", idx)
+				blocks[idx].closed = true
+			}
+		}
+	}
+
+	require.Len(t, order, 3, "expected server_tool_use + tool_search_tool_result + tool_use blocks")
+	for i, idx := range order {
+		assert.Equal(t, int64(i), idx, "block indices must be allocated in order")
+		assert.True(t, blocks[idx].closed, "block %d never closed", idx)
+	}
+
+	use := blocks[order[0]]
+	assert.Equal(t, "server_tool_use", use.block["type"])
+	assert.Equal(t, searchID, use.block["id"])
+	assert.JSONEq(t, `{"pattern":"weather"}`, use.input, "the streamed server_tool_use lost its query")
+
+	result := blocks[order[1]]
+	resultJSON, err := sonic.Marshal(result.block)
+	require.NoError(t, err)
+	assert.Equal(t, "tool_search_tool_result", gjson.GetBytes(resultJSON, "type").String(), "block: %s", string(resultJSON))
+	assert.Equal(t, searchID, gjson.GetBytes(resultJSON, "tool_use_id").String())
+	assert.Equal(t, "tool_search_tool_search_result", gjson.GetBytes(resultJSON, "content.type").String())
+	refs := gjson.GetBytes(resultJSON, "content.tool_references").Array()
+	require.Len(t, refs, 1, "block: %s", string(resultJSON))
+	assert.Equal(t, "tool_reference", refs[0].Get("type").String())
+	assert.Equal(t, found, refs[0].Get("tool_name").String())
+
+	call := blocks[order[2]]
+	assert.Equal(t, "tool_use", call.block["type"])
+	assert.Equal(t, callID, call.block["id"])
+	assert.JSONEq(t, `{"city":"Paris"}`, call.input)
 }
 
 // TestToBedrockConverseRequest_InvokeToolSearchReplay covers turn 2 of a tool-search

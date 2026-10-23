@@ -1830,12 +1830,10 @@ func toAnthropicInvokeStreamBytes(ctx *schemas.BifrostContext, resp *schemas.Bif
 			// "Never return a tool_result for its srvtoolu_... ID."
 			// (https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool)
 			//
-			// The paired tool_search_tool_result block is deliberately NOT re-emitted
-			// here. The neutral stream collapses Anthropic's two blocks into a single
-			// tool_search_call item, so the caller sees the query block alone; the
-			// non-streaming path emits the full pair. The stop for this block is
-			// realigned onto the index opened here (see bedrockInvokeStreamState), so
-			// dropping the result block does not leave an unclosed block behind.
+			// The neutral stream collapses Anthropic's two blocks into a single
+			// tool_search_call item whose query and references arrive only on
+			// output_item.done, so the paired tool_search_tool_result block is emitted
+			// there (toolSearchInvokeStreamDoneBytes), not here.
 			blockType := "tool_use"
 			if resp.Item.Type != nil && *resp.Item.Type == schemas.ResponsesMessageTypeToolSearchCall {
 				blockType = "server_tool_use"
@@ -1965,7 +1963,12 @@ func toAnthropicInvokeStreamBytes(ctx *schemas.BifrostContext, resp *schemas.Bif
 		}
 		// A tool_search_call's done event carries the tool_search_tool_result index, one
 		// past the server_tool_use its added event opened, so close the opened block.
-		if opened, ok := lookupBedrockInvokeStreamState(ctx).takeBlockIndex(bedrockInvokeStreamItemKey(resp)); ok {
+		opened, ok := lookupBedrockInvokeStreamState(ctx).takeBlockIndex(bedrockInvokeStreamItemKey(resp))
+		if ok && resp.Item != nil && resp.Item.Type != nil &&
+			*resp.Item.Type == schemas.ResponsesMessageTypeToolSearchCall {
+			return toolSearchInvokeStreamDoneBytes(resp.Item, opened, idx)
+		}
+		if ok {
 			idx = opened
 		}
 		event = map[string]interface{}{
@@ -2045,4 +2048,70 @@ func toAnthropicInvokeStreamBytes(ctx *schemas.BifrostContext, resp *schemas.Bif
 		return nil, fmt.Errorf("failed to marshal invoke stream event: %w", err)
 	}
 	return [][]byte{eventBytes}, nil
+}
+
+// toolSearchInvokeStreamDoneBytes completes a streamed tool search the way the unary
+// path (toBedrockInvokeAnthropicResponse) renders it: the server_tool_use opened at
+// serverIdx receives its query and is closed, then the paired tool_search_tool_result
+// carrying the discovered references is emitted whole at resultIdx. Without the result
+// block a client assembling history from the stream replays the search without its
+// discovery state. resultIdx is the done event's own content index, which is the
+// result block's index upstream; it falls back to the next index when the event
+// carries none past the opened block.
+func toolSearchInvokeStreamDoneBytes(item *schemas.ResponsesMessage, serverIdx, resultIdx int) ([][]byte, error) {
+	if resultIdx <= serverIdx {
+		resultIdx = serverIdx + 1
+	}
+	ts := item.ResponsesToolMessage
+	var events []interface{}
+	if ts != nil && ts.Arguments != nil && *ts.Arguments != "" {
+		events = append(events, map[string]interface{}{
+			"type":  "content_block_delta",
+			"index": serverIdx,
+			"delta": map[string]interface{}{
+				"type":         "input_json_delta",
+				"partial_json": *ts.Arguments,
+			},
+		})
+	}
+	refs := []interface{}{}
+	toolUseID := ""
+	if ts != nil {
+		if ts.CallID != nil {
+			toolUseID = *ts.CallID
+		}
+		if ts.ResponsesToolSearchCall != nil {
+			for _, name := range ts.ResponsesToolSearchCall.ToolReferences {
+				refs = append(refs, map[string]interface{}{"type": "tool_reference", "tool_name": name})
+			}
+		}
+	}
+	if toolUseID == "" && item.ID != nil {
+		toolUseID = *item.ID
+	}
+	events = append(events,
+		map[string]interface{}{"type": "content_block_stop", "index": serverIdx},
+		map[string]interface{}{
+			"type":  "content_block_start",
+			"index": resultIdx,
+			"content_block": map[string]interface{}{
+				"type":        "tool_search_tool_result",
+				"tool_use_id": toolUseID,
+				"content": map[string]interface{}{
+					"type":            "tool_search_tool_search_result",
+					"tool_references": refs,
+				},
+			},
+		},
+		map[string]interface{}{"type": "content_block_stop", "index": resultIdx},
+	)
+	chunks := make([][]byte, 0, len(events))
+	for _, event := range events {
+		eventBytes, err := providerUtils.MarshalSorted(event)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal invoke stream event: %w", err)
+		}
+		chunks = append(chunks, eventBytes)
+	}
+	return chunks, nil
 }
