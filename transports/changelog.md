@@ -104,5 +104,6 @@
 - fix: provider key listings and MCP client configs mask a service URL or connection string that carries userinfo (`http://user:pass@host`) instead of showing it in plaintext
 - fix: changing only `use_openai_endpoints` on a provider key in `config.json` is applied instead of keeping the stored key
 - fix: a gzip response that stalls inside its gzip header is cut off by the stream idle timeout instead of holding the provider worker
+- fix: a non-streaming request cancelled just as its result arrives no longer leaves the caller waiting forever (upstream #7313)
 - fix: the Claude Desktop marketplace git endpoints no longer race server shutdown
 - fix: the model pattern editor accepts Go inline regex flags such as `(?i)`
