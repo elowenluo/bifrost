@@ -1699,3 +1699,50 @@ func TestChatStreamRawCaptureIsBoundedByBytes(t *testing.T) {
 		t.Errorf("captured raw response is %d bytes, above the %d byte ceiling; an upstream streaming non-forwarding frames can grow this without bound", capturedBytes, limit)
 	}
 }
+
+// The raw-capture ceiling bounds frames that wait in the queue for a later chunk. A frame
+// that is forwarded as soon as it is read never waits, so it must be captured whatever its
+// size: a large tool-argument or audio delta was dropped from raw capture even though its
+// content reached the client in the same iteration, leaving an incomplete audit payload.
+func TestChatStreamRawCaptureKeepsLargeForwardedFrame(t *testing.T) {
+	big := strings.Repeat("x", (1<<20)+(256<<10)) // past the 1 MiB ceiling on its own
+	bigFrame := `{"id":"chatcmpl-repro","object":"chat.completion.chunk","created":1,"model":"repro-model","choices":[{"index":0,"delta":{"content":"` + big + `"},"finish_reason":null}],"usage":null}`
+	body := "data: " + rawRoleOnlyFrame + "\n\n" +
+		"data: " + bigFrame + "\n\n" +
+		"data: " + rawFinishOnlyFrame + "\n\n" +
+		"data: " + rawUsageOnlyFrame + "\n\n" +
+		"data: [DONE]\n\n"
+
+	server := completeSSEServer(t, body)
+	defer server.Close()
+
+	provider := rawCaptureStreamProvider(server.URL)
+	stream, bifrostErr := provider.ChatCompletionStream(newStreamTestContext(), passthroughPostHook, nil, testKey(), basicChatRequest())
+	if bifrostErr != nil {
+		t.Fatalf("stream setup failed: %v", bifrostErr)
+	}
+	chunks := collectChunks(t, stream)
+
+	// Guard: the content really was forwarded, so a missing frame is a capture gap.
+	var forwarded strings.Builder
+	for _, delta := range collectChatDeltas(chunks) {
+		if delta.Content != nil {
+			forwarded.WriteString(*delta.Content)
+		}
+	}
+	if forwarded.String() != big {
+		t.Fatalf("expected the large content delta to be forwarded (got %d bytes)", forwarded.Len())
+	}
+
+	raw := reconstructRawResponse(t, chunks)
+	for _, w := range []struct{ name, frame string }{
+		{"role-only", rawRoleOnlyFrame},
+		{"large content", bigFrame},
+		{"finish-only", rawFinishOnlyFrame},
+		{"usage-only", rawUsageOnlyFrame},
+	} {
+		if n := strings.Count(raw, w.frame); n != 1 {
+			t.Errorf("%s frame appears %d times in the captured raw response; expected exactly 1", w.name, n)
+		}
+	}
+}

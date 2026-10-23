@@ -1348,20 +1348,33 @@ func HandleOpenAIChatCompletionStreaming(
 		// queue stops accepting frames and says so once. Truncating an audit trail is
 		// unpleasant, but it beats an upstream-driven allocation with no limit, and a
 		// healthy stream never approaches it.
+		//
+		// The ceiling bounds only frames retained across iterations. The frame just read
+		// is always queued, so one that is forwarded in the same iteration (a large
+		// tool-argument or audio delta) drains with the queue and is captured whatever
+		// its size; retainRawFrame applies the ceiling once that iteration is over.
 		var pendingRawFrames []string
 		pendingRawBytes := 0
 		rawCaptureTruncated := false
 		const maxPendingRawBytes = 1 << 20 // 1 MiB
 		queueRawFrame := func(frame string) {
-			if pendingRawBytes+len(frame) > maxPendingRawBytes {
-				if !rawCaptureTruncated {
-					rawCaptureTruncated = true
-					logger.Warn("provider %s streamed over %d bytes of frames that produce no client chunk; raw response capture is truncated for this request", providerName, maxPendingRawBytes)
-				}
-				return
-			}
 			pendingRawFrames = append(pendingRawFrames, frame)
 			pendingRawBytes += len(frame)
+		}
+		// retainRawFrame runs before the next frame is read. A queue still over the
+		// ceiling then holds the previous frame across iterations, so that frame is
+		// dropped; every earlier frame was already within the ceiling.
+		retainRawFrame := func() {
+			if pendingRawBytes <= maxPendingRawBytes || len(pendingRawFrames) == 0 {
+				return
+			}
+			last := len(pendingRawFrames) - 1
+			pendingRawBytes -= len(pendingRawFrames[last])
+			pendingRawFrames = pendingRawFrames[:last]
+			if !rawCaptureTruncated {
+				rawCaptureTruncated = true
+				logger.Warn("provider %s streamed over %d bytes of frames that produce no client chunk; raw response capture is truncated for this request", providerName, maxPendingRawBytes)
+			}
 		}
 		drainPendingRawFrames := func() string {
 			joined := strings.Join(pendingRawFrames, "\n\n")
@@ -1385,6 +1398,9 @@ func HandleOpenAIChatCompletionStreaming(
 			// If context was cancelled/timed out, let defer handle it
 			if ctx.Err() != nil {
 				return
+			}
+			if sendBackRawResponse {
+				retainRawFrame()
 			}
 			data, readErr := sseReader.ReadDataLine()
 			if readErr != nil {
