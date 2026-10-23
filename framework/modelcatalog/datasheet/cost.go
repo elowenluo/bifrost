@@ -358,6 +358,14 @@ func (s *Store) CalculateBatchCostDetailsForUsage(usage *schemas.BifrostLLMUsage
 		// tier off, mirroring CalculateCostForUsage.
 		tier := tierFromResponse(nil, usage.Speed, usage.InferenceGeo)
 		breakdown := computeBatchTextCost(pricing, usage, tier)
+		// Time-of-day pricing, as in computeCostFromInput: the off-peak multiplier
+		// scales the usage charge (and the effective rates reported with it), never
+		// the flat per-request fee added below.
+		if m, ok := offPeakMultiplier(pricing, lookupScopes.BilledAt); ok {
+			scaleUsageCost(breakdown, m)
+			inputRate = scaledRate(inputRate, m)
+			outputRate = scaledRate(outputRate, m)
+		}
 		cost := 0.0
 		if breakdown != nil {
 			cost = breakdown.TotalCost
@@ -377,6 +385,15 @@ func (s *Store) CalculateBatchCostDetailsForUsage(usage *schemas.BifrostLLMUsage
 	default:
 		return BatchCostDetails{}
 	}
+}
+
+// scaledRate returns rate multiplied by m, or nil for a nil rate.
+func scaledRate(rate *float64, m float64) *float64 {
+	if rate == nil {
+		return nil
+	}
+	scaled := *rate * m
+	return &scaled
 }
 
 func cloneFloat64Pointer(value *float64) *float64 {

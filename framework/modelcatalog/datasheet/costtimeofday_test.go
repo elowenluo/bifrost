@@ -601,3 +601,31 @@ func TestOffPeak_RoutingAndCacheCalls(t *testing.T) {
 	assert.InDelta(t, 0.01+1000*0.00000002, s.CalculateCacheEmbeddingCost(cache, peak), 1e-15, "cache lookup at peak")
 	assert.InDelta(t, 0.01+1000*0.00000002/2, s.CalculateCacheEmbeddingCost(cache, off), 1e-15, "cache lookup off-peak")
 }
+
+// TestOffPeak_BatchSettlement: batch settlement and repricing go through
+// CalculateBatchCostDetailsForUsage, which must apply the same off-peak multiplier
+// as every other usage charge (and report the discounted effective rates), while
+// leaving the flat per-request fee undiscounted.
+func TestOffPeak_BatchSettlement(t *testing.T) {
+	pricing := deepSeekPricing()
+	pricing.InputCostPerTokenBatches = bifrost.Ptr(0.0000002)
+	pricing.OutputCostPerTokenBatches = bifrost.Ptr(0.0000006)
+	pricing.CostPerRequest = bifrost.Ptr(0.03)
+	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
+		makeKey("deepseek-v4-flash", "deepseek", "chat"): pricing,
+	})
+	usage := &schemas.BifrostLLMUsage{PromptTokens: 1000, CompletionTokens: 1000, TotalTokens: 2000}
+	usageCost := 1000*0.0000002 + 1000*0.0000006
+
+	peak := s.CalculateBatchCostDetailsForUsage(usage, schemas.DeepSeek, "deepseek-v4-flash", schemas.ChatCompletionRequest,
+		&LookupScopes{BilledAt: utc(t, "2026-08-17T02:00:00Z")})
+	off := s.CalculateBatchCostDetailsForUsage(usage, schemas.DeepSeek, "deepseek-v4-flash", schemas.ChatCompletionRequest,
+		&LookupScopes{BilledAt: utc(t, "2026-08-17T05:00:00Z")})
+	require.True(t, peak.Priced)
+	require.True(t, off.Priced)
+	assert.InDelta(t, 0.03+usageCost, peak.Cost, 1e-15, "batch at peak")
+	assert.InDelta(t, 0.03+usageCost/2, off.Cost, 1e-15, "batch off-peak halves usage, not the per-request fee")
+	require.NotNil(t, off.InputCostPerTokenBatches)
+	assert.InDelta(t, 0.0000001, *off.InputCostPerTokenBatches, 1e-18, "reported off-peak input rate")
+	assert.InDelta(t, 0.0000006, *peak.OutputCostPerTokenBatches, 1e-18, "peak rate is unchanged")
+}
