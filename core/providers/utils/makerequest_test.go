@@ -453,9 +453,13 @@ func TestMakeRequestWithContext_CancelClosesSocket(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		// Cancel only once the upstream holds the connection, so the cancel
-		// lands in the header wait rather than on a queued connect.
-		upstream.awaitAccept(2 * time.Second)
+		// Cancel only once the upstream has received the request, so the cancel
+		// lands in the header wait rather than on a connect or an acquisition
+		// that has not sent anything yet.
+		select {
+		case <-upstream.requestCh:
+		case <-time.After(2 * time.Second):
+		}
 		cancel()
 	}()
 
