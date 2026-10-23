@@ -121,7 +121,7 @@ func (t *contextTransport) RoundTrip(hc *fasthttp.HostClient, req *fasthttp.Requ
 
 	customSkipBody := resp.SkipBody
 
-	cc, err := acquireWithContext(ctx, hc.AcquireConn, req.ConnectionClose(), hc.ReleaseConn)
+	cc, err := acquireWithContext(ctx, hc.AcquireConn, req.ConnectionClose(), hc.CloseConn)
 	if err != nil {
 		return false, err
 	}
@@ -270,9 +270,9 @@ func (t *contextTransport) RoundTrip(hc *fasthttp.HostClient, req *fasthttp.Requ
 // once a connection is in hand, so with every MaxConns slot busy or a dial stalled
 // a cancelled request kept waiting for up to the default 300s. The context's
 // remaining deadline is passed as reqTimeout, and a cancellation returns at once;
-// a connection the acquisition yields after the caller gave up is released back
-// to the pool.
-func acquireWithContext[C any](ctx context.Context, acquire func(timeout time.Duration, connectionClose bool) (C, error), connectionClose bool, release func(C)) (C, error) {
+// a connection the acquisition yields after the caller gave up is closed, as the
+// cancellation watcher would have closed it, so the upstream sees the hang-up.
+func acquireWithContext[C any](ctx context.Context, acquire func(timeout time.Duration, connectionClose bool) (C, error), connectionClose bool, discard func(C)) (C, error) {
 	var zero C
 	var timeout time.Duration
 	if deadline, ok := ctx.Deadline(); ok {
@@ -298,7 +298,7 @@ func acquireWithContext[C any](ctx context.Context, acquire func(timeout time.Du
 	case <-ctx.Done():
 		go func() {
 			if r := <-done; r.err == nil {
-				release(r.cc)
+				discard(r.cc)
 			}
 		}()
 		return zero, ctx.Err()
