@@ -1,5 +1,6 @@
 ## ✨ Features
 
+- **Named ElevenLabs Channels** - Register native ElevenLabs custom channels and inspect supported base providers through the admin API (TXE-5087)
 - **Virtual Key Assignees and Expanded Search** - The virtual key list resolves `assigned_user` for every row via a single batch lookup, and VK search matches team, customer and user names in addition to key fields, so keys can be found by who owns them (#7225, #7226)
 - **User Attribution in Prometheus Metrics** - The telemetry plugin's metrics export includes user id and user name labels, so per-user usage and error rates can be graphed and alerted on directly (#7267)
 - **Prompt Cache Breakpoints Capability** - A `SupportsPromptCacheBreakpoints` model cap with a name-based fallback for OpenRouter gates `prompt_cache_breakpoint` forwarding, so OpenRouter's non-Claude models stop rejecting requests that carry it (#7261, #7262)
@@ -7,6 +8,7 @@
 
 ## 🐞 Fixed
 
+- **Provider Configuration Ownership** - Key status updates preserve existing snapshots, and provider reads use database contexts bounded by the handler lifetime (TXE-5087)
 - **Resource ID Path Injection** - Caller-supplied resource IDs (batch, file, video, container, response IDs, cached content names) were interpolated into outbound URL paths unvalidated; a crafted ID with `../`, `?`, `#`, percent-encoded bytes or control characters could redirect the request to an unintended upstream endpoint. A central `EscapeResourceID` helper validates and escapes every such ID (#7307, #7310)
 - **Bedrock S3 SSRF** - A caller-supplied `s3://` file ID or `s3_bucket` param could control the upstream host, since S3 virtual-hosted URLs are built as `https://{bucket}.{s3host}/{key}`; a bucket like `127.0.0.1:PORT#` opened a SigV4-signed TLS connection to a caller-chosen host. Bucket names are now validated with a DNS-compatible regex (#7315)
 - **Caller-Forged Billing Idempotency** - The billing-idempotency key was `(RequestID, AttemptNumber)`, and `RequestID` may come from the caller's `x-request-id` header, so two unrelated requests sharing a deliberately chosen ID collided and the second was silently never charged. An internally minted `BillingNonce` is mixed into the key, making it unforgeable (#7303)
