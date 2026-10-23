@@ -4345,3 +4345,49 @@ func TestApplyAssignees(t *testing.T) {
 		}
 	})
 }
+
+// TestReconcileVKModelConfig_OnlyWildcardTierAdoptsVKRateLimit pins that a new
+// provider-specific VK model config never takes over the VK's own (config.json)
+// rate limit. Upstream #7291 adopts that row instead of creating a duplicate; doing
+// it for a provider tier would overwrite a key-wide 10/min limit with the provider's
+// 100/min and move it onto that one provider, lifting it for every other provider.
+// Only the provider-independent "*" tier stands in for the VK's limits.
+func TestReconcileVKModelConfig_OnlyWildcardTierAdoptsVKRateLimit(t *testing.T) {
+	SetLogger(&mockLogger{})
+	ctx := context.Background()
+	store := setupPricingOverrideHandlerStore(t)
+	db := store.DB()
+	handler := &GovernanceHandler{configStore: store, governanceManager: pricingOverrideTestGovernanceManager{}}
+
+	keyWide := configstoreTables.TableRateLimit{ID: "rl-vk", RequestMaxLimit: schemas.Ptr(int64(10)), RequestResetDuration: schemas.Ptr("1m"),
+		TokenLastReset: time.Now(), RequestLastReset: time.Now()}
+	require.NoError(t, store.CreateRateLimit(ctx, &keyWide))
+	vk := configstoreTables.TableVirtualKey{ID: "vk-adopt", Name: "vk-adopt", Value: *schemas.NewSecretVar("sk-bf-adopt"), IsActive: schemas.Ptr(true), RateLimitID: schemas.Ptr("rl-vk")}
+	require.NoError(t, db.Create(&vk).Error)
+
+	openai := "openai"
+	providerTier := vkModelConfigDesired{provider: &openai, rateLimitProvided: true,
+		rateLimit: &configstoreTables.TableRateLimit{RequestMaxLimit: schemas.Ptr(int64(100)), RequestResetDuration: schemas.Ptr("1m")}}
+	require.NoError(t, handler.reconcileVKModelConfig(ctx, db, &vk, providerTier, nil))
+
+	var stored configstoreTables.TableRateLimit
+	require.NoError(t, db.First(&stored, "id = ?", "rl-vk").Error)
+	require.Equal(t, int64(10), *stored.RequestMaxLimit, "the key-wide limit keeps its own value")
+	var vkRow configstoreTables.TableVirtualKey
+	require.NoError(t, db.First(&vkRow, "id = ?", "vk-adopt").Error)
+	require.NotNil(t, vkRow.RateLimitID)
+	require.Equal(t, "rl-vk", *vkRow.RateLimitID, "the VK keeps its key-wide limit")
+	var providerMC configstoreTables.TableModelConfig
+	require.NoError(t, db.First(&providerMC, "scope = ? AND scope_id = ? AND provider = ?", configstoreTables.ModelConfigScopeVirtualKey, "vk-adopt", openai).Error)
+	require.NotNil(t, providerMC.RateLimitID)
+	require.NotEqual(t, "rl-vk", *providerMC.RateLimitID, "the provider tier gets a limit of its own")
+
+	// The wildcard tier still adopts the VK's row rather than creating a duplicate.
+	wildcard := vkModelConfigDesired{rateLimitProvided: true,
+		rateLimit: &configstoreTables.TableRateLimit{RequestMaxLimit: schemas.Ptr(int64(20)), RequestResetDuration: schemas.Ptr("1m")}}
+	require.NoError(t, handler.reconcileVKModelConfig(ctx, db, &vk, wildcard, nil))
+	var wildcardMC configstoreTables.TableModelConfig
+	require.NoError(t, db.First(&wildcardMC, "scope = ? AND scope_id = ? AND provider IS NULL AND model_name = ?", configstoreTables.ModelConfigScopeVirtualKey, "vk-adopt", configstoreTables.ModelConfigAllModels).Error)
+	require.NotNil(t, wildcardMC.RateLimitID)
+	require.Equal(t, "rl-vk", *wildcardMC.RateLimitID, "the wildcard tier adopts the VK's own row")
+}

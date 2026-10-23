@@ -935,6 +935,9 @@ func (h *GovernanceHandler) reconcileVKModelConfig(ctx context.Context, tx *gorm
 		return err
 	}
 	isNew := len(existingList) == 0
+	// Only the provider-independent wildcard config stands in for the VK's own limits;
+	// a provider- or model-specific config adopting them would narrow a key-wide limit.
+	adoptsVKLimits := isNew && d.provider == nil && modelName == configstoreTables.ModelConfigAllModels
 
 	var mc configstoreTables.TableModelConfig
 	if isNew {
@@ -981,7 +984,7 @@ func (h *GovernanceHandler) reconcileVKModelConfig(ctx context.Context, tx *gorm
 			mc.RateLimit = &rl
 		default:
 			// Adopt the VK's existing rate limit (config.json flow) instead of creating a duplicate.
-			if isNew && vk.RateLimitID != nil {
+			if adoptsVKLimits && vk.RateLimitID != nil {
 				rl := configstoreTables.TableRateLimit{}
 				if err := tx.First(&rl, "id = ?", *vk.RateLimitID).Error; err != nil {
 					if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1062,7 +1065,7 @@ func (h *GovernanceHandler) reconcileVKModelConfig(ctx context.Context, tx *gorm
 			return err
 		}
 		// Adopt standalone VK budgets (config.json flow) into this MC so UpdateBudget sees the correct owner.
-		if len(vk.Budgets) > 0 && d.provider == nil {
+		if adoptsVKLimits && len(vk.Budgets) > 0 {
 			ids := make([]string, len(vk.Budgets))
 			for i, b := range vk.Budgets {
 				ids[i] = b.ID
