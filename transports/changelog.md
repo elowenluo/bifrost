@@ -27,3 +27,9 @@
 ## 🍴 Fork changes (txehq/bifrost)
 
 - chore: v2.2.3 is upstream `transports/v2.2.3` (411d62b28) merged onto the fork's v2.2.1, keeping the fork's Go module paths, custom providers (ModelArk, Volcengine), native Anthropic Messages and xAI passthrough, separate streaming and unary clients, the legacy realtime session endpoints and Bifrost-minted realtime secrets, and release guards. Core, framework and plugins are built from the workspace and are not tagged separately
+- fix: xAI's native Anthropic Messages route strips Claude Code's `safeguards` and `diagnostics` fields and its per-request `x-anthropic-billing-header` system line before the request leaves for xAI, as upstream #7393, #7243 and #7431 do for every converted non-Anthropic request; the billing line changes on every request and would otherwise defeat xAI's prompt cache. The Anthropic route still forwards them
+- fix: a decision answered by emulation (upstream #7361) is billed as the text call it is, from the model's chat or responses pricing row with its cache rates; it previously found no `decisions` row and cost nothing. A decision answer Bifrost rejects, from Typesafe or from emulation, still charges the usage the provider billed
+- fix: decision emulation on a custom provider wrapping Bedrock Mantle sends Mantle's `auto` tool choice
+- fix: a stream paused for approval that overflows its replay cap delivers only approved content before the overflow error
+- note: MCP HTTP and SSE connections honour `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` again (upstream #7437). Through a proxy, an IP-literal link-local, unspecified or metadata destination is refused before the proxy is contacted; a hostname is resolved by the proxy, so the proxy's own egress policy governs it
+- note: the release pipeline gains upstream's `test-memory` allocation gate; its break-glass job uses the `memory-regression-override` environment
