@@ -3161,9 +3161,12 @@ func hoistToolResultImages(req *BedrockConverseRequest) {
 				}
 				kept = append(kept, block)
 			}
-			// An empty toolResult is rejected, so keep a stable placeholder behind.
-			if len(kept) == 0 && len(images) > moved {
-				kept = append(kept, BedrockContentBlock{Text: new(toolResultImagePlaceholder)})
+			// An empty toolResult is rejected, so keep a stable placeholder behind. A
+			// cachePoint is not content (stripCachePointsFromBedrockRequest may remove it
+			// next), so the placeholder goes ahead of any marker that remains.
+			hasContent := slices.ContainsFunc(kept, func(b BedrockContentBlock) bool { return b.CachePoint == nil })
+			if !hasContent && len(images) > moved {
+				kept = slices.Insert(kept, 0, BedrockContentBlock{Text: new(toolResultImagePlaceholder)})
 			}
 			toolResult.Content = kept
 		}

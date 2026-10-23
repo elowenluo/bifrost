@@ -111,6 +111,27 @@ func TestHoistToolResultImages(t *testing.T) {
 	}
 }
 
+// TestHoistToolResultImagesThenStripCachePoints runs the two passes in the order both
+// converters apply them, for a model that takes neither nested tool-result images nor
+// cache points. A cachePoint left beside the hoisted image is not content: counting it
+// as such skipped the placeholder, and the strip pass then left toolResult.content
+// empty, which Bedrock rejects.
+func TestHoistToolResultImagesThenStripCachePoints(t *testing.T) {
+	placeholder := "text:" + toolResultImagePlaceholder
+	req := &BedrockConverseRequest{Messages: []BedrockMessage{{
+		Role:    BedrockMessageRoleUser,
+		Content: []BedrockContentBlock{toolResultBlock("a", toolResultImageBlock("red"), BedrockContentBlock{CachePoint: cachePoint()})},
+	}}}
+
+	hoistToolResultImages(req)
+	assert.Equal(t, []string{"toolResult(a)[" + placeholder + ", cachePoint]", "image:red"},
+		describeBedrockBlocks(req.Messages[0].Content), "after hoisting")
+
+	stripCachePointsFromBedrockRequest(req)
+	assert.Equal(t, []string{"toolResult(a)[" + placeholder + "]", "image:red"},
+		describeBedrockBlocks(req.Messages[0].Content), "after stripping cache points")
+}
+
 func toolResultImageChatRequest(model string) *schemas.BifrostChatRequest {
 	return &schemas.BifrostChatRequest{
 		Provider: schemas.Bedrock,
