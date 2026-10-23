@@ -185,6 +185,13 @@ func (h *WSRealtimeHandler) handleUpgrade(ctx *fasthttp.RequestCtx) {
 	if routedModel != "" {
 		model = routedModel
 	}
+	// Capture governance/routing values before preReqCtx is cancelled: those set by
+	// the transport middleware (TransportInterceptorMiddleware copies BifrostContext
+	// user values to fasthttp UserValue slots after HTTPTransportPreHook runs) and
+	// those the pre-request hooks just set on preReqCtx (key restrictions, selected-key
+	// metadata, routing attribution). The fasthttp RequestCtx is recycled after the
+	// handler returns, and the WebSocket session outlives it.
+	middlewareContextValues := snapshotRealtimeMiddlewareValuesWithContext(ctx, preReqCtx)
 	preReqCancel()
 
 	provider := h.client.GetProviderByKey(providerKey)
@@ -201,13 +208,6 @@ func (h *WSRealtimeHandler) handleUpgrade(ctx *fasthttp.RequestCtx) {
 		}
 		return
 	}
-
-	// Capture governance/routing values set by the transport middleware.
-	// TransportInterceptorMiddleware copies BifrostContext user values to individual
-	// fasthttp UserValue slots after HTTPTransportPreHook runs. We snapshot them now
-	// because the fasthttp RequestCtx is recycled after the handler returns — the
-	// WebSocket session outlives it.
-	middlewareContextValues := snapshotRealtimeMiddlewareValues(ctx)
 
 	upgrader := h.websocketUpgrader(rtProvider.RealtimeWebSocketSubprotocol())
 	err = upgrader.Upgrade(ctx, func(conn *ws.Conn) {
@@ -257,6 +257,17 @@ func (h *WSRealtimeHandler) handleTranscriptionUpgrade(
 		defer conn.Close()
 		clientConn := newRealtimeClientConn(conn)
 
+		// Admit the connection before waiting for its bootstrap: a client can hold the
+		// socket for the whole bootstrap window without sending a model, so it must
+		// count against MaxConnections and be reachable by CloseAll from the start.
+		session, sessionErr := h.sessions.Create(conn)
+		if sessionErr != nil {
+			clientConn.writeRealtimeError(newRealtimeWireBifrostError(429, "rate_limit_exceeded", sessionErr.Error()))
+			preReqCancel()
+			return
+		}
+		defer h.sessions.Remove(conn)
+
 		frames, rawModel, bootstrapErr := bufferRealtimeTranscriptionBootstrap(clientConn)
 		if bootstrapErr != nil {
 			clientConn.writeRealtimeError(newRealtimeWireBifrostError(400, "invalid_request_error", bootstrapErr.Error()))
@@ -287,12 +298,6 @@ func (h *WSRealtimeHandler) handleTranscriptionUpgrade(
 			clientConn.writeRealtimeError(newRealtimeWireBifrostError(400, "invalid_request_error", "provider does not support realtime: "+string(providerKey)))
 			return
 		}
-		session, sessionErr := h.sessions.Create(conn)
-		if sessionErr != nil {
-			clientConn.writeRealtimeError(newRealtimeWireBifrostError(429, "rate_limit_exceeded", sessionErr.Error()))
-			return
-		}
-		defer h.sessions.Remove(conn)
 		h.runRealtimeSession(clientConn, session, auth, path, providerKey, model, "transcription", frames, middlewareValues)
 	})
 	if err != nil {
