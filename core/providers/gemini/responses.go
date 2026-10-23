@@ -4423,6 +4423,10 @@ func convertResponsesMessagesToGeminiContents(messages []schemas.ResponsesMessag
 	// hoisted into systemInstruction; a system turn that arrives after the conversation has
 	// started is inlined in place instead -- see inlineGeminiSystemReminder.
 	seenNonSystemMessage := false
+	// Reminders that arrived inside a function response group, held until the group is
+	// flushed: Gemini needs every function response of a parallel call in one content, so a
+	// reminder between two of them cannot be emitted in place without splitting the group.
+	var deferredReminders []Content
 
 	for i, msg := range messages {
 		isSystemMessage := msg.Role != nil &&
@@ -4483,7 +4487,9 @@ func convertResponsesMessagesToGeminiContents(messages []schemas.ResponsesMessag
 			if err != nil {
 				return nil, nil, err
 			}
-			if inlined != nil {
+			if inlined != nil && geminiFunctionOutputFollows(messages, i) {
+				deferredReminders = append(deferredReminders, *inlined)
+			} else if inlined != nil {
 				// Flush first: the reminder is a user turn of its own and must not be filed
 				// behind function responses that precede it.
 				if len(pendingFunctionResponseParts) > 0 {
@@ -4538,6 +4544,10 @@ func convertResponsesMessagesToGeminiContents(messages []schemas.ResponsesMessag
 				Role:  "user", // Function responses use "user" role in Gemini
 			})
 			pendingFunctionResponseParts = nil
+		}
+		if !isFunctionOutput && len(deferredReminders) > 0 {
+			contents = append(contents, deferredReminders...)
+			deferredReminders = nil
 		}
 
 		// Handle regular messages
@@ -4740,6 +4750,8 @@ func convertResponsesMessagesToGeminiContents(messages []schemas.ResponsesMessag
 							Role:  "user",
 						})
 						pendingFunctionResponseParts = nil
+						contents = append(contents, deferredReminders...)
+						deferredReminders = nil
 					}
 
 					continue // Skip normal content handling
@@ -4775,8 +4787,24 @@ func convertResponsesMessagesToGeminiContents(messages []schemas.ResponsesMessag
 			contents = append(contents, content)
 		}
 	}
+	// A group that was never flushed still releases the reminders held for it.
+	contents = append(contents, deferredReminders...)
 
 	return contents, systemInstruction, nil
+}
+
+// geminiFunctionOutputFollows reports whether the first message after index i that is not a
+// system/developer turn is a function_call_output, i.e. whether a reminder at i sits inside a
+// function response group.
+func geminiFunctionOutputFollows(messages []schemas.ResponsesMessage, i int) bool {
+	for _, next := range messages[i+1:] {
+		if next.Role != nil &&
+			(*next.Role == schemas.ResponsesInputMessageRoleSystem || *next.Role == schemas.ResponsesInputMessageRoleDeveloper) {
+			continue
+		}
+		return next.Type != nil && *next.Type == schemas.ResponsesMessageTypeFunctionCallOutput && next.ResponsesToolMessage != nil
+	}
+	return false
 }
 
 // convertContentBlockToGeminiPart converts a content block to Gemini part, re-attaching any

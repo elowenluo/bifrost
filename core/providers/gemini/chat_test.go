@@ -394,3 +394,119 @@ func TestToGeminiChatCompletionRequest_MidConversationSystemInlined(t *testing.T
 	}
 	assert.Equal(t, 2, inline, "both trailing reminders must be inlined in place, none hoisted")
 }
+
+// TestToGeminiRequest_ReminderInsideParallelResponses covers a mid-conversation reminder that
+// lands between the tool results of a parallel call (calls A and B, A's result, a reminder,
+// B's result). Inlining it in place flushed A's response, inserted the text turn, then emitted
+// B's response on its own; Gemini needs the parallel function responses together, so the
+// conversation became an invalid request. The reminder must follow the whole group, on both the
+// Chat Completions and the Responses path.
+func TestToGeminiRequest_ReminderInsideParallelResponses(t *testing.T) {
+	const reminder = "Remember the plan."
+	// describe renders contents as role:[part kinds] so the expected layout reads at a glance.
+	describe := func(contents []gemini.Content) []string {
+		var out []string
+		for _, c := range contents {
+			var kinds []string
+			for _, p := range c.Parts {
+				switch {
+				case p.FunctionCall != nil:
+					kinds = append(kinds, "call:"+p.FunctionCall.ID)
+				case p.FunctionResponse != nil:
+					kinds = append(kinds, "response:"+p.FunctionResponse.ID)
+				case strings.Contains(p.Text, reminder):
+					kinds = append(kinds, "reminder")
+				case p.Text != "":
+					kinds = append(kinds, "text")
+				}
+			}
+			out = append(out, c.Role+":["+strings.Join(kinds, ",")+"]")
+		}
+		return out
+	}
+
+	t.Run("chat", func(t *testing.T) {
+		text := func(role schemas.ChatMessageRole, s string) schemas.ChatMessage {
+			return schemas.ChatMessage{Role: role, Content: &schemas.ChatMessageContent{ContentStr: schemas.Ptr(s)}}
+		}
+		call := func(id, name string) schemas.ChatAssistantMessageToolCall {
+			return schemas.ChatAssistantMessageToolCall{
+				ID:       schemas.Ptr(id),
+				Type:     schemas.Ptr("function"),
+				Function: schemas.ChatAssistantMessageToolCallFunction{Name: schemas.Ptr(name), Arguments: "{}"},
+			}
+		}
+		result := func(id string) schemas.ChatMessage {
+			return schemas.ChatMessage{
+				Role:            schemas.ChatMessageRoleTool,
+				ChatToolMessage: &schemas.ChatToolMessage{ToolCallID: schemas.Ptr(id)},
+				Content:         &schemas.ChatMessageContent{ContentStr: schemas.Ptr(`{"ok":true}`)},
+			}
+		}
+		assistant := schemas.ChatMessage{
+			Role:                 schemas.ChatMessageRoleAssistant,
+			ChatAssistantMessage: &schemas.ChatAssistantMessage{ToolCalls: []schemas.ChatAssistantMessageToolCall{call("a", "get_a"), call("b", "get_b")}},
+		}
+		convert := func(msgs ...schemas.ChatMessage) []string {
+			req, err := gemini.ToGeminiChatCompletionRequest(&schemas.BifrostContext{}, &schemas.BifrostChatRequest{
+				Provider: schemas.Gemini, Model: "gemini-2.5-flash", Input: msgs,
+			})
+			require.NoError(t, err)
+			return describe(req.Contents)
+		}
+		user := text(schemas.ChatMessageRoleUser, "go")
+		sys := text(schemas.ChatMessageRoleSystem, reminder)
+
+		assert.Equal(t,
+			[]string{"user:[text]", "model:[call:a,call:b]", "user:[response:a,response:b]", "user:[reminder]"},
+			convert(user, assistant, result("a"), sys, result("b")),
+			"a reminder between parallel responses must follow the group")
+		assert.Equal(t,
+			[]string{"user:[text]", "model:[call:a,call:b]", "user:[response:a,response:b]", "user:[reminder]", "user:[text]"},
+			convert(user, assistant, sys, result("a"), result("b"), text(schemas.ChatMessageRoleUser, "next")),
+			"a reminder ahead of the responses must follow the group")
+		assert.Equal(t,
+			[]string{"user:[text]", "model:[call:a,call:b]", "user:[response:a,response:b]", "user:[reminder]", "user:[text]"},
+			convert(user, assistant, result("a"), result("b"), sys, text(schemas.ChatMessageRoleUser, "next")),
+			"a reminder after the group stays in place")
+	})
+
+	t.Run("responses", func(t *testing.T) {
+		msg := func(role schemas.ResponsesMessageRoleType, s string) schemas.ResponsesMessage {
+			return schemas.ResponsesMessage{
+				Type:    schemas.Ptr(schemas.ResponsesMessageTypeMessage),
+				Role:    schemas.Ptr(role),
+				Content: &schemas.ResponsesMessageContent{ContentStr: schemas.Ptr(s)},
+			}
+		}
+		call := func(id, name string) schemas.ResponsesMessage {
+			return schemas.ResponsesMessage{
+				Type:                 schemas.Ptr(schemas.ResponsesMessageTypeFunctionCall),
+				ResponsesToolMessage: &schemas.ResponsesToolMessage{CallID: schemas.Ptr(id), Name: schemas.Ptr(name), Arguments: schemas.Ptr("{}")},
+			}
+		}
+		output := func(id string) schemas.ResponsesMessage {
+			return schemas.ResponsesMessage{
+				Type: schemas.Ptr(schemas.ResponsesMessageTypeFunctionCallOutput),
+				ResponsesToolMessage: &schemas.ResponsesToolMessage{
+					CallID: schemas.Ptr(id),
+					Output: &schemas.ResponsesToolMessageOutputStruct{ResponsesToolCallOutputStr: schemas.Ptr(`{"ok":true}`)},
+				},
+			}
+		}
+		convert := func(msgs ...schemas.ResponsesMessage) []string {
+			req, err := gemini.ToGeminiResponsesRequest(&schemas.BifrostContext{}, &schemas.BifrostResponsesRequest{
+				Provider: schemas.Gemini, Model: "gemini-2.5-flash", Input: msgs,
+			})
+			require.NoError(t, err)
+			return describe(req.Contents)
+		}
+		user := msg(schemas.ResponsesInputMessageRoleUser, "go")
+		sys := msg(schemas.ResponsesInputMessageRoleSystem, reminder)
+
+		got := convert(user, call("a", "get_a"), call("b", "get_b"), output("a"), sys, output("b"))
+		require.NotEmpty(t, got)
+		assert.Equal(t, []string{"user:[response:a,response:b]", "user:[reminder]"}, got[len(got)-2:],
+			"a reminder between parallel responses must follow the group: %v", got)
+	})
+}
