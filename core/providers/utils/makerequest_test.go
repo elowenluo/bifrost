@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1126,8 +1127,18 @@ func TestContextTransport_CancelWhileWaitingForAConnection(t *testing.T) {
 		t.Fatalf("error = %+v, want a RequestCancelled error", bifrostErr)
 	}
 
+	// Freeing the busy slot lets the abandoned acquisition complete; it must discard
+	// the connection itself and leave no goroutine behind.
+	before := runtime.NumGoroutine()
 	cancelBusy()
 	<-busyDone
 	fasthttp.ReleaseRequest(busyReq)
 	fasthttp.ReleaseResponse(busyResp)
+	settle := time.Now().Add(3 * time.Second)
+	for runtime.NumGoroutine() >= before && time.Now().Before(settle) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if runtime.NumGoroutine() >= before {
+		t.Fatalf("goroutines = %d after the slot freed, want fewer than %d: the abandoned acquisition is still running", runtime.NumGoroutine(), before)
+	}
 }

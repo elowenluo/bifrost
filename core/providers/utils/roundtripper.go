@@ -283,24 +283,46 @@ func acquireWithContext[C any](ctx context.Context, acquire func(timeout time.Du
 	if ctx.Done() == nil {
 		return acquire(timeout, connectionClose)
 	}
+	// One goroutine does the acquisition and, if the caller has gone by the time a
+	// connection arrives, discards it itself, so a cancelled request leaves nothing
+	// else behind. That goroutine cannot be interrupted: fasthttp offers no way to
+	// abandon AcquireConn, and polling it in short reqTimeout slices would also cut
+	// the dial short, since reqTimeout doubles as the dial timeout. It ends when
+	// MaxConnWaitTimeout or the dial timeout does, as the acquisition would have.
 	type result struct {
 		cc  C
 		err error
 	}
+	var mu sync.Mutex
+	abandoned := false
 	done := make(chan result, 1)
 	go func() {
 		cc, err := acquire(timeout, connectionClose)
+		mu.Lock()
+		defer mu.Unlock()
+		if abandoned {
+			if err == nil {
+				discard(cc)
+			}
+			return
+		}
 		done <- result{cc, err}
 	}()
 	select {
 	case r := <-done:
 		return r.cc, r.err
 	case <-ctx.Done():
-		go func() {
-			if r := <-done; r.err == nil {
+		mu.Lock()
+		abandoned = true
+		mu.Unlock()
+		// The acquisition may have finished just before the flag was set.
+		select {
+		case r := <-done:
+			if r.err == nil {
 				discard(r.cc)
 			}
-		}()
+		default:
+		}
 		return zero, ctx.Err()
 	}
 }
