@@ -96,3 +96,13 @@
 - [#7144](https://github.com/maximhq/bifrost/issues/7144) - Chat Completions streaming raw_response omits usage-only and finish-only SSE frames
 - [#7155](https://github.com/maximhq/bifrost/issues/7155) - Bedrock-native invoke ingress silently drops Anthropic tool search (`tool_search_tool_*` / `defer_loading`), served eagerly over Converse
 - [#7169](https://github.com/maximhq/bifrost/issues/7169) - MCP tool schema property order changes between tool syncs, breaking prompt caching
+
+## 🍴 Fork changes (txehq/bifrost)
+
+- chore: v2.2.0 is upstream `transports/v2.2.0` (ed79592fc) merged onto the fork's v2.1.3, keeping the fork's Go module paths, custom providers (ModelArk, Volcengine), native Anthropic Messages passthrough, separate streaming and unary clients, and release guards. Core, framework and plugins are built from the workspace and are not tagged separately
+- fix: a realtime transcription session stays on the model it was admitted for across `session.update` and `transcription_session.update`, the GA `audio.input.transcription` and legacy `input_audio_transcription` shapes, over WebSocket and WebRTC; malformed shapes, `session.model` and a non-transcription `session.type` are refused
+- fix: provider key listings and MCP client configs mask a service URL or connection string that carries userinfo (`http://user:pass@host`) instead of showing it in plaintext
+- fix: changing only `use_openai_endpoints` on a provider key in `config.json` is applied instead of keeping the stored key
+- fix: a gzip response that stalls inside its gzip header is cut off by the stream idle timeout instead of holding the provider worker
+- fix: the Claude Desktop marketplace git endpoints no longer race server shutdown
+- fix: the model pattern editor accepts Go inline regex flags such as `(?i)`
