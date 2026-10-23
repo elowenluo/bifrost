@@ -53,3 +53,67 @@ func TestMCPToolLogFiltersMatchMultiValueAttribution(t *testing.T) {
 	require.Equal(t, []string{"mcp-scalar"}, ids(MCPToolLogSearchFilters{TeamIDs: []string{"t-scalar"}}), "scalar team_id still matches")
 	require.Empty(t, ids(MCPToolLogSearchFilters{TeamIDs: []string{"t9"}}))
 }
+
+// TestMultiValueAttributionFiltersSQLite: the same array-only attribution must
+// match on SQLite, for MCP log search and log search alike. A malformed array
+// column must not fail the query.
+func TestMultiValueAttributionFiltersSQLite(t *testing.T) {
+	store := newTestSQLiteStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	scalarTeam := "t-scalar"
+	require.NoError(t, store.BatchCreateMCPToolLogsIfNotExists(ctx, []*MCPToolLog{
+		{
+			ID: "mcp-multi", Timestamp: now, CreatedAt: now, ToolName: "search", ServerLabel: "srv", Status: "success",
+			TeamIDsParsed: []string{"t1", "t2"}, CustomerIDsParsed: []string{"c1"}, BusinessUnitIDsParsed: []string{"bu1"},
+		},
+		{
+			ID: "mcp-scalar", Timestamp: now, CreatedAt: now, ToolName: "search", ServerLabel: "srv", Status: "success",
+			TeamID: &scalarTeam,
+		},
+	}))
+	require.NoError(t, store.db.Exec("UPDATE mcp_tool_logs SET team_ids = 'not json' WHERE id = 'mcp-scalar'").Error)
+
+	mcpIDs := func(filters MCPToolLogSearchFilters) []string {
+		t.Helper()
+		res, err := store.SearchMCPToolLogs(ctx, filters, PaginationOptions{Limit: 10, SortBy: "timestamp", Order: "desc"})
+		require.NoError(t, err)
+		out := make([]string, 0, len(res.Logs))
+		for _, l := range res.Logs {
+			out = append(out, l.ID)
+		}
+		return out
+	}
+	require.Equal(t, []string{"mcp-multi"}, mcpIDs(MCPToolLogSearchFilters{TeamIDs: []string{"t2"}}), "team in team_ids")
+	require.Equal(t, []string{"mcp-multi"}, mcpIDs(MCPToolLogSearchFilters{CustomerIDs: []string{"c1"}}), "customer in customer_ids")
+	require.Equal(t, []string{"mcp-multi"}, mcpIDs(MCPToolLogSearchFilters{BusinessUnitIDs: []string{"bu1"}}), "business unit in business_unit_ids")
+	require.Equal(t, []string{"mcp-scalar"}, mcpIDs(MCPToolLogSearchFilters{TeamIDs: []string{"t-scalar"}}), "scalar team_id still matches")
+	require.Empty(t, mcpIDs(MCPToolLogSearchFilters{TeamIDs: []string{"t9"}}))
+
+	require.NoError(t, store.BatchCreateIfNotExists(ctx, []*Log{
+		{
+			ID: "log-multi", Timestamp: now, CreatedAt: now, Object: "chat.completion", Provider: "openai", Model: "gpt-4o", Status: "success",
+			TeamIDsParsed: []string{"t1", "t2"}, CustomerIDsParsed: []string{"c1"}, BusinessUnitIDsParsed: []string{"bu1"},
+		},
+		{
+			ID: "log-scalar", Timestamp: now, CreatedAt: now, Object: "chat.completion", Provider: "openai", Model: "gpt-4o", Status: "success",
+			TeamID: &scalarTeam,
+		},
+	}))
+	logIDs := func(filters SearchFilters) []string {
+		t.Helper()
+		res, err := store.SearchLogs(ctx, filters, PaginationOptions{Limit: 10, SortBy: "timestamp", Order: "desc"})
+		require.NoError(t, err)
+		out := make([]string, 0, len(res.Logs))
+		for _, l := range res.Logs {
+			out = append(out, l.ID)
+		}
+		return out
+	}
+	require.Equal(t, []string{"log-multi"}, logIDs(SearchFilters{TeamIDs: []string{"t2"}}), "log team in team_ids")
+	require.Equal(t, []string{"log-multi"}, logIDs(SearchFilters{CustomerIDs: []string{"c1"}}), "log customer in customer_ids")
+	require.Equal(t, []string{"log-multi"}, logIDs(SearchFilters{BusinessUnitIDs: []string{"bu1"}}), "log business unit in business_unit_ids")
+	require.Equal(t, []string{"log-scalar"}, logIDs(SearchFilters{TeamIDs: []string{"t-scalar"}}), "log scalar team_id still matches")
+	require.Empty(t, logIDs(SearchFilters{TeamIDs: []string{"t9"}}))
+}

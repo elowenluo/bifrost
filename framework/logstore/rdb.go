@@ -331,20 +331,10 @@ func (s *RDBLogStore) applyFilters(baseQuery *gorm.DB, filters SearchFilters) *g
 		baseQuery = baseQuery.Where("routing_rule_id IN ?", filters.RoutingRuleIDs)
 	}
 	if len(filters.TeamIDs) > 0 {
-		if s.db.Dialector.Name() == "postgres" {
-			sql, args := multiValueDimensionFilterSQL("team_id", "team_ids", filters.TeamIDs)
-			baseQuery = baseQuery.Where(sql, args...)
-		} else {
-			baseQuery = baseQuery.Where("team_id IN ?", filters.TeamIDs)
-		}
+		baseQuery = s.whereMultiValueDimension(baseQuery, "team_id", "team_ids", filters.TeamIDs)
 	}
 	if len(filters.CustomerIDs) > 0 {
-		if s.db.Dialector.Name() == "postgres" {
-			sql, args := multiValueDimensionFilterSQL("customer_id", "customer_ids", filters.CustomerIDs)
-			baseQuery = baseQuery.Where(sql, args...)
-		} else {
-			baseQuery = baseQuery.Where("customer_id IN ?", filters.CustomerIDs)
-		}
+		baseQuery = s.whereMultiValueDimension(baseQuery, "customer_id", "customer_ids", filters.CustomerIDs)
 	}
 	if len(filters.UserIDs) > 0 {
 		baseQuery = baseQuery.Where("user_id IN ?", filters.UserIDs)
@@ -355,12 +345,7 @@ func (s *RDBLogStore) applyFilters(baseQuery *gorm.DB, filters SearchFilters) *g
 		baseQuery = baseQuery.Where("project_id IN ?", filters.ProjectIDs)
 	}
 	if len(filters.BusinessUnitIDs) > 0 {
-		if s.db.Dialector.Name() == "postgres" {
-			sql, args := multiValueDimensionFilterSQL("business_unit_id", "business_unit_ids", filters.BusinessUnitIDs)
-			baseQuery = baseQuery.Where(sql, args...)
-		} else {
-			baseQuery = baseQuery.Where("business_unit_id IN ?", filters.BusinessUnitIDs)
-		}
+		baseQuery = s.whereMultiValueDimension(baseQuery, "business_unit_id", "business_unit_ids", filters.BusinessUnitIDs)
 	}
 	if len(filters.UserAgents) > 0 {
 		baseQuery = baseQuery.Where("user_agent IN ?", filters.UserAgents)
@@ -4593,12 +4578,24 @@ func (s *RDBLogStore) DeleteLogs(ctx context.Context, ids []string) error {
 // ============================================================================
 
 // whereMultiValueDimension filters a dimension that has both a scalar id column
-// and a JSON-array column: on Postgres a row matches through either, elsewhere
-// through the scalar column only, exactly as applyFilters does for logs.
+// and a JSON-array column: a row matches through either, on every dialect with
+// a JSON-array predicate (Postgres, SQLite, ClickHouse). Others match through
+// the scalar column only. Shared by applyFilters and applyMCPFilters.
 func (s *RDBLogStore) whereMultiValueDimension(q *gorm.DB, scalarCol, arrayCol string, ids []string) *gorm.DB {
-	if s.db.Dialector.Name() == "postgres" {
+	switch s.db.Dialector.Name() {
+	case "postgres":
 		sql, args := multiValueDimensionFilterSQL(scalarCol, arrayCol, ids)
 		return q.Where(sql, args...)
+	case "sqlite":
+		// The CASE rewrites NULL/malformed/non-array values to '[]' so json_each
+		// cannot raise "malformed JSON" (see sqliteDimensionFanoutFrom).
+		return q.Where(fmt.Sprintf("(%[1]s IN ? OR EXISTS (SELECT 1 FROM json_each(CASE WHEN %[2]s IS NOT NULL AND json_valid(%[2]s) AND json_type(%[2]s) = 'array' THEN %[2]s ELSE '[]' END) AS mv WHERE mv.value IN ?))",
+			scalarCol, arrayCol), ids, ids)
+	case "clickhouse":
+		// The array column is Nullable(String) JSON text; JSONExtract yields []
+		// for NULL-coalesced, malformed or non-array input.
+		return q.Where(fmt.Sprintf("(%[1]s IN ? OR arrayExists(x -> x IN ?, JSONExtract(ifNull(%[2]s, ''), 'Array(String)')))",
+			scalarCol, arrayCol), ids, ids)
 	}
 	return q.Where(scalarCol+" IN ?", ids)
 }
