@@ -339,7 +339,8 @@ func (s *Store) buildState(provider schemas.ModelProvider, keys []schemas.Key) *
 				if key.BlacklistedModels.IsBlocked(m) {
 					continue
 				}
-				if !allowed.Contains(m) {
+				// Literal dedup: a regex entry from another key must not swallow an exact name.
+				if !slices.ContainsFunc(allowed, func(s string) bool { return strings.EqualFold(s, m) }) {
 					allowed = append(allowed, m)
 				}
 			}
